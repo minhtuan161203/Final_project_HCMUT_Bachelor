@@ -54,6 +54,7 @@
 /* USER CODE BEGIN Includes */
 #include "define.h"
 #include "fpga.h"
+#include "pwm.h"
 #include "measurement.h"
 #include <stdint.h>
 /* USER CODE END Includes */
@@ -71,6 +72,18 @@ SRAM_HandleTypeDef hsram2;
 /* Private variables ---------------------------------------------------------*/
 fpga_meas_raw_t g_fpga;
 Parameterhandle_t param;
+
+float debug_dutyU = 0.0f;
+float debug_dutyV = 0.0f;
+float debug_dutyW = 0.0f;
+
+float target_freq_global = 0.0f;
+float sweep_amplitude = 0.1f;       
+float sweep_step = 0.00005f;   
+int8_t sweep_direction = 1;
+
+
+fpga_meas_raw_t out;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -128,20 +141,21 @@ int main(void)
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
 	param.u16Offset_Ia = OFFSET;
-  param.u16Offset_Ib = OFFSET;
+  param.u16Offset_Ib = OFFSET;  // Add offset for FPGA read value
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	//FPGA_ReadAllRaw(&g_fpga);
-	Measurement_UpdateFromFPGA(&param);
+	
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
 
   }
+	
   /* USER CODE END 3 */
 
 }
@@ -595,7 +609,38 @@ static void MX_FSMC_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	FPGA_ReadAllRaw(&out);
+	Measurement_UpdateFromFPGA(&param);
+	SwitchOnPWM();
+	target_freq_global = 0.9f;
+	
+	if (sweep_direction == 1) // Ðang trong pha tang
+        {
+            sweep_amplitude += sweep_step;
+            if (sweep_amplitude >= 0.8f) 
+            {
+                sweep_amplitude = 0.8f;
+                sweep_direction = -1; // Ð?o chi?u sang gi?m
+            }
+        }
+        else // Ðang trong pha gi?m
+        {
+            sweep_amplitude -= sweep_step;
+            if (sweep_amplitude <= 0.1f) 
+            {
+                sweep_amplitude = 0.1f;
+                sweep_direction = 1;  // Ð?o chi?u sang tang
+            }
+        }
+	sweep_amplitude = 0.3;
+	PWM_Phases_t result = Control_V_over_F(target_freq_global, 0.0000625f, sweep_amplitude);
+	debug_dutyU = result.U;
+  debug_dutyV = result.V;
+  debug_dutyW = result.W;
+	
+}
 /* USER CODE END 4 */
 
 /**

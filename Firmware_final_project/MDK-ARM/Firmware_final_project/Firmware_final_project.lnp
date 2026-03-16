@@ -38,6 +38,7 @@
 "firmware_final_project\usbd_cdc.o"
 "firmware_final_project\measurement.o"
 "firmware_final_project\fpga.o"
+"firmware_final_project\pwm.o"
 --strict --scatter "Firmware_final_project\Firmware_final_project.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

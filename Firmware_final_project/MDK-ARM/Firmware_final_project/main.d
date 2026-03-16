@@ -41,6 +41,7 @@ firmware_final_project\main.o: ../Middlewares/ST/STM32_USB_Device_Library/Core/I
 firmware_final_project\main.o: ../Inc/usbd_conf.h
 firmware_final_project\main.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdlib.h
 firmware_final_project\main.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\string.h
-firmware_final_project\main.o: .\Library\define.h
-firmware_final_project\main.o: .\Library\fpga.h
-firmware_final_project\main.o: .\Library\measurement.h
+firmware_final_project\main.o: ./Library/define.h
+firmware_final_project\main.o: ./Library/fpga.h
+firmware_final_project\main.o: ./Library/pwm.h
+firmware_final_project\main.o: ./Library/measurement.h

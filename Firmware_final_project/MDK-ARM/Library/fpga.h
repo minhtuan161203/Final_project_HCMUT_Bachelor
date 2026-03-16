@@ -14,6 +14,7 @@ typedef struct
   uint16_t fpga_error_raw;
 } fpga_meas_raw_t;
 
-void FPGA_ReadAllRaw(fpga_meas_raw_t *out);
+extern void FPGA_ReadAllRaw(fpga_meas_raw_t *out);
+
 
 #endif
