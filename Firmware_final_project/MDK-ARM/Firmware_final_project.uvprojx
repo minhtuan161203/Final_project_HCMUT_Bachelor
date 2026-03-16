@@ -600,26 +600,6 @@
               <FilePath>.\Library\define.h</FilePath>
             </File>
             <File>
-              <FileName>fpga.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Library\fpga.h</FilePath>
-            </File>
-            <File>
-              <FileName>measurement.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\Library\measurement.c</FilePath>
-            </File>
-            <File>
-              <FileName>measurement.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Library\measurement.h</FilePath>
-            </File>
-            <File>
-              <FileName>fpga.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\Library\fpga.c</FilePath>
-            </File>
-            <File>
               <FileName>pwm.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Library\pwm.c</FilePath>
@@ -628,6 +608,31 @@
               <FileName>pwm.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\Library\pwm.h</FilePath>
+            </File>
+            <File>
+              <FileName>Parameter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\Parameter.c</FilePath>
+            </File>
+            <File>
+              <FileName>Parameter.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Library\Parameter.h</FilePath>
+            </File>
+            <File>
+              <FileName>vector_transfs.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\vector_transfs.c</FilePath>
+            </File>
+            <File>
+              <FileName>vector_transfs.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Library\vector_transfs.h</FilePath>
+            </File>
+            <File>
+              <FileName>PIcontrol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\PIcontrol.c</FilePath>
             </File>
           </Files>
         </Group>

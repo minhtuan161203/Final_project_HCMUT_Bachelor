@@ -53,10 +53,9 @@
 
 /* USER CODE BEGIN Includes */
 #include "define.h"
-#include "fpga.h"
 #include "pwm.h"
-#include "measurement.h"
 #include <stdint.h>
+#include "Parameter.h"
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
@@ -70,20 +69,18 @@ SRAM_HandleTypeDef hsram2;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
-fpga_meas_raw_t g_fpga;
-Parameterhandle_t param;
 
-float debug_dutyU = 0.0f;
-float debug_dutyV = 0.0f;
-float debug_dutyW = 0.0f;
-
+// Two variables of V/f control open-loop
 float target_freq_global = 0.0f;
-float sweep_amplitude = 0.1f;       
-float sweep_step = 0.00005f;   
-int8_t sweep_direction = 1;
+float target_vol_global = 0.0f;
+ 
+// Hardcode motor parameter
+float MotorParameter[32];
 
+uint8_t system_on = 0;	
+// Init Parameter Variable
+Parameterhandle_t Parameter;
 
-fpga_meas_raw_t out;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -122,7 +119,9 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+	
+	
+	
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -140,8 +139,15 @@ int main(void)
   MX_USB_DEVICE_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
-	param.u16Offset_Ia = OFFSET;
-  param.u16Offset_Ib = OFFSET;  // Add offset for FPGA read value
+	
+	// Init paramter and enable after ADC init
+	
+	Init_Parameter(&Parameter);
+	HAL_GPIO_WritePin(oEnableReadADC_GPIO_Port, oEnableReadADC_Pin, GPIO_PIN_SET); //==> required for current reading value
+	
+	// Enable FPGA read encoder value
+	*(__IO uint16_t*)(REG_ENCODER_ID) = TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
+	// TAMAGAWA_SERIAL_ABS_SINGLE_TURN is 17bit encoder!
 
   /* USER CODE END 2 */
 
@@ -608,37 +614,24 @@ static void MX_FSMC_Init(void)
 
 }
 
-/* USER CODE BEGIN 4 */
+/* USER CODE BEGIN 4 */	
+
+// Loop EXT_Interupt from FPGA
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	FPGA_ReadAllRaw(&out);
-	Measurement_UpdateFromFPGA(&param);
-	SwitchOnPWM();
-	target_freq_global = 0.9f;
+	MotorParameter[MOTOR_ENCODER_ID]= TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
+	GetParameter(&Parameter, MotorParameter);
 	
-	if (sweep_direction == 1) // Ðang trong pha tang
-        {
-            sweep_amplitude += sweep_step;
-            if (sweep_amplitude >= 0.8f) 
-            {
-                sweep_amplitude = 0.8f;
-                sweep_direction = -1; // Ð?o chi?u sang gi?m
-            }
-        }
-        else // Ðang trong pha gi?m
-        {
-            sweep_amplitude -= sweep_step;
-            if (sweep_amplitude <= 0.1f) 
-            {
-                sweep_amplitude = 0.1f;
-                sweep_direction = 1;  // Ð?o chi?u sang tang
-            }
-        }
-	sweep_amplitude = 0.3;
-	PWM_Phases_t result = Control_V_over_F(target_freq_global, 0.0000625f, sweep_amplitude);
-	debug_dutyU = result.U;
-  debug_dutyV = result.V;
-  debug_dutyW = result.W;
+	if (system_on == 1){
+		SwitchOnPWM();
+//		target_freq_global = 20;
+//		target_vol_global = 0.3;//10% to 90% of DC bus voltage (48V)
+		PWM_Phases_t result = Control_V_over_F(target_freq_global, target_vol_global);
+	}
+	else
+	{
+		SwitchOffPWM();
+	}
 	
 }
 /* USER CODE END 4 */

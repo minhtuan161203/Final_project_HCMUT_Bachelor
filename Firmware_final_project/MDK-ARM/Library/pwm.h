@@ -15,7 +15,7 @@ typedef struct {
 void SwitchOnPWM(void);
 void SwitchOffPWM(void);
 void GeneratePWM(float DutyCycle_U, float DutyCycle_V, float DutyCycle_W);
-PWM_Phases_t Control_V_over_F(float TargetFreq, float SamplingTime, float TargetVol);
+PWM_Phases_t Control_V_over_F(float TargetFreq, float TargetVol);
 #ifdef __cplusplus
 }
 #endif	/*__cplusplus*/

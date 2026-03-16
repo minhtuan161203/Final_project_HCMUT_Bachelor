@@ -51,11 +51,12 @@ void GeneratePWM(float DutyCycle_U, float DutyCycle_V, float DutyCycle_W)
 /**
  * @brief V/f Control: Generates 3-phase sine waves based on target frequency.
  * @param TargetFreq: Desired frequency (Hz)
- * @param SamplingTime: The loop time (e.g., 0.0001 for 10kHz)
+ * @param TargetVol: Desire Voltage
  */
-PWM_Phases_t Control_V_over_F(float TargetFreq, float SamplingTime, float TargetVol)
+PWM_Phases_t Control_V_over_F(float TargetFreq,  float TargetVol)
 {
     float amplitude;
+		float SamplingTime = 0.0000625f;
 		PWM_Phases_t output;
 
     // 1. Calculate Voltage Amplitude (V = k*f + offset)
@@ -68,7 +69,7 @@ PWM_Phases_t Control_V_over_F(float TargetFreq, float SamplingTime, float Target
 
     // 2. Accumulate Phase Angle (Theta = Integral of frequency)
     // Angle increases by (2*PI * f * dt) every loop
-    current_phase += 2.0f * PI * 100 * SamplingTime;
+    current_phase += 2.0f * PI * TargetFreq * SamplingTime;
 
     // Keep the angle between 0 and 2*PI
     if (current_phase > 2.0f * PI) {
@@ -76,7 +77,7 @@ PWM_Phases_t Control_V_over_F(float TargetFreq, float SamplingTime, float Target
     }
 
     // 3. Generate 3-phase Sine Waves (120-degree shifts)
-    // We add 0.5f because PWM duty cycle must be positive (0.0 to 1.0)
+    // Add 0.5f because PWM duty cycle must be positive (0.0 to 1.0)
     output.U = 0.5f + (amplitude / 2.0f) * sinf(current_phase);
     output.V = 0.5f + (amplitude / 2.0f) * sinf(current_phase - (2.0f * PI / 3.0f));
     output.W = 0.5f + (amplitude / 2.0f) * sinf(current_phase + (2.0f * PI / 3.0f));
