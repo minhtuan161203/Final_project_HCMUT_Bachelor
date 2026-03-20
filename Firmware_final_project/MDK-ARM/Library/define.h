@@ -80,7 +80,7 @@
 #define FLASH_USER_END_ADDR								(PAGE_ADDRESS_MOTOR_PARAMETER + 0x000007FF)
 
 /*Driver sensor scale*/
-#define OVER_VOLTAGE_THRESHOLD_VOLT_UNIT							50 //Volts
+#define OVER_VOLTAGE_THRESHOLD_VOLT_UNIT							55 //Volts
 #define UNDER_VOLTAGE_THRESHOLD_VOLT_UNIT							36 //Volts
 #define OVER_TEMPERATURE_THRESHOLD_DEGREE_UNIT				80 //degree celcious
 #define OVER_TEMPERATURE_DEADBAND_DEGREE_UNIT					75 //degree celcious

@@ -9,9 +9,17 @@ extern TIM_HandleTypeDef htim8;
 #define NOMINAL_FREQ    50.0f    // Rated motor frequency (Hz)
 #define NOMINAL_V       0.90f    // Max duty cycle limit (0.0 to 1.0)
 #define V_OFFSET        0.05f    // Voltage boost for low-speed torque
+#define VF_SAMPLING_TIME_S (1.0f / CURRENT_LOOP_FREQUENCY)
+#define TWO_PI_F  (2.0f * PI)
+#define SQRT3_BY_2_F 0.86602540378f
 
 // --- Global State Variables ---
 static float current_phase = 0.0f; 
+
+void ResetControl_V_over_F(void)
+{
+    current_phase = 0.0f;
+}
 
 void SwitchOnPWM(void)
 {
@@ -49,40 +57,60 @@ void GeneratePWM(float DutyCycle_U, float DutyCycle_V, float DutyCycle_W)
 }
 
 /**
- * @brief V/f Control: Generates 3-phase sine waves based on target frequency.
- * @param TargetFreq: Desired frequency (Hz)
- * @param TargetVol: Desire Voltage
+ * @brief Open-loop 3-phase generator used by the higher-level V/F mode.
+ * @param TargetFreq: Electrical output frequency in Hz.
+ * @param TargetVol: Normalized voltage / modulation command (0.0 to 0.90).
  */
 PWM_Phases_t Control_V_over_F(float TargetFreq,  float TargetVol)
 {
-    float amplitude;
-		float SamplingTime = 0.0000625f;
-		PWM_Phases_t output;
+    float limited_frequency = TargetFreq;
+    float modulation = TargetVol;
+    float sin_theta;
+    float cos_theta;
+    PWM_Phases_t output;
 
-    // 1. Calculate Voltage Amplitude (V = k*f + offset)
-    if (TargetFreq <= 0.1f) {
-        amplitude = 0.0f;
-    } else {
-        amplitude = TargetVol;
-        if (amplitude > NOMINAL_V) amplitude = NOMINAL_V;
+    if (limited_frequency > NOMINAL_FREQ) {
+        limited_frequency = NOMINAL_FREQ;
+    } else if (limited_frequency < -NOMINAL_FREQ) {
+        limited_frequency = -NOMINAL_FREQ;
     }
 
-    // 2. Accumulate Phase Angle (Theta = Integral of frequency)
-    // Angle increases by (2*PI * f * dt) every loop
-    current_phase += 2.0f * PI * TargetFreq * SamplingTime;
-
-    // Keep the angle between 0 and 2*PI
-    if (current_phase > 2.0f * PI) {
-        current_phase -= 2.0f * PI;
+    if (modulation < 0.0f) {
+        modulation = 0.0f;
+    } else if (modulation > NOMINAL_V) {
+        modulation = NOMINAL_V;
     }
 
-    // 3. Generate 3-phase Sine Waves (120-degree shifts)
-    // Add 0.5f because PWM duty cycle must be positive (0.0 to 1.0)
-    output.U = 0.5f + (amplitude / 2.0f) * sinf(current_phase);
-    output.V = 0.5f + (amplitude / 2.0f) * sinf(current_phase - (2.0f * PI / 3.0f));
-    output.W = 0.5f + (amplitude / 2.0f) * sinf(current_phase + (2.0f * PI / 3.0f));
+    if ((fabsf(limited_frequency) <= 0.1f) || (modulation <= 0.001f)) {
+        output.U = 0.5f;
+        output.V = 0.5f;
+        output.W = 0.5f;
+        GeneratePWM(output.U, output.V, output.W);
+        return output;
+    }
 
-    // 4. Update the Hardware
+    /* FPGA interrupt drives this function at 16 kHz, so phase is integrated
+       from the measured ISR period instead of a magic literal. */
+    current_phase += TWO_PI_F * limited_frequency * VF_SAMPLING_TIME_S;
+
+    if (current_phase >= TWO_PI_F) {
+        current_phase -= TWO_PI_F;
+    } else if (current_phase < 0.0f) {
+        current_phase += TWO_PI_F;
+    }
+
+    /* One sinf/cosf pair is cheaper than three independent sinf() calls
+       inside the ISR and keeps the phase relationship exact. */
+    sin_theta = sinf(current_phase);
+    cos_theta = cosf(current_phase);
+
+    output.U = 0.5f + 0.5f * modulation * sin_theta;
+    output.V = 0.5f + 0.5f * modulation *
+        ((-0.5f * sin_theta) - (SQRT3_BY_2_F * cos_theta));
+    output.W = 0.5f + 0.5f * modulation *
+        ((-0.5f * sin_theta) + (SQRT3_BY_2_F * cos_theta));
+
     GeneratePWM(output.U, output.V, output.W);
-		return output;
+    return output;
 }
+

@@ -53,8 +53,14 @@
 
 /* USER CODE BEGIN Includes */
 #include "define.h"
+#include "PIDcontrol.h"
+#include "StateMachine.h"
+#include "USBComunication.h"
+#include "vector_transfs.h"
+#include <math.h>
 #include "pwm.h"
 #include <stdint.h>
+#include <string.h>
 #include "Parameter.h"
 /* USER CODE END Includes */
 
@@ -70,16 +76,38 @@ SRAM_HandleTypeDef hsram2;
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
 
-// Two variables of V/f control open-loop
-float target_freq_global = 0.0f;
-float target_vol_global = 0.0f;
- 
-// Hardcode motor parameter
+float DriverParameter[16];
 float MotorParameter[32];
+uint16_t FaultCode = NO_ERROR;
 
-uint8_t system_on = 0;	
-// Init Parameter Variable
+uint8_t system_on = 0;
+volatile float gTargetSpeedRpm = 0.0f;
+volatile uint8_t gRunMode = RUN_MODE_FOC;
+volatile float gVfFrequencyHz = 0.0f;
+volatile float gVfVoltageV = 0.0f;
+float gIdRefA = 0.0f;
+float gIqRefA = 0.0f;
+volatile uint16_t gRawCurrentU = 0u;
+volatile uint16_t gRawCurrentV = 0u;
+volatile uint16_t gRawVdc = 0u;
+volatile uint16_t gRawTemp = 0u;
+volatile uint16_t gDebugFaultSnapshot = 0u;
+
 Parameterhandle_t Parameter;
+CurrentSensor_t Current_Sensor;
+StateMachine_t StateMachine;
+USB_Comunication_t USB_Comm;
+tFRClarke gClarke = FR_CLARKE_DEFAULTS;
+tFPark gPark = F_PARK_DEFAULTS;
+tIPark gInvPark = I_PARK_DEFAULTS;
+tIFClarke gInvClarke = IF_CLARKE_DEFAULTS;
+tPI gIdPi = PI_DEFAULTS;
+tPI gIqPi = PI_DEFAULTS;
+tPI gSpeedPi = PI_DEFAULTS;
+static uint8_t gPwmEnabled = 0u;
+static uint8_t gSpeedLoopDivider = 0u;
+
+volatile uint8_t data_received_global;
 
 /* USER CODE END PV */
 
@@ -95,10 +123,389 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
+static float ClampFloat(float value, float lower, float upper);
+static float WrapAngle(float angle);
+static void SetPwmEnabled(uint8_t enable);
+static void ResetControlLoops(void);
+static void LoadDefaultParameters(void);
+static void ReadFastProtectionFeedback(void);
+static void UpdateMeasuredSpeedAndTheta(void);
+static float GetOpenLoopVoltageLimit(void);
+static void RunOpenLoopVf(void);
+static void ReportFault(uint16_t fault);
+static void RunFocLoop(void);
 
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
+static float ClampFloat(float value, float lower, float upper)
+{
+	if (value > upper)
+	{
+		return upper;
+	}
+	if (value < lower)
+	{
+		return lower;
+	}
+	return value;
+}
+
+static float WrapAngle(float angle)
+{
+	while (angle >= (2.0f * PI))
+	{
+		angle -= (2.0f * PI);
+	}
+	while (angle < 0.0f)
+	{
+		angle += (2.0f * PI);
+	}
+	return angle;
+}
+
+static void SetPwmEnabled(uint8_t enable)
+{
+	if ((enable != 0u) && (gPwmEnabled == 0u))
+	{
+		SwitchOnPWM();
+		gPwmEnabled = 1u;
+	}
+	else if ((enable == 0u) && (gPwmEnabled != 0u))
+	{
+		SwitchOffPWM();
+		gPwmEnabled = 0u;
+	}
+}
+
+static void ResetControlLoops(void)
+{
+	gIdPi.m_rst(&gIdPi);
+	gIqPi.m_rst(&gIqPi);
+	gSpeedPi.m_rst(&gSpeedPi);
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gSpeedLoopDivider = 0u;
+	ResetControl_V_over_F();
+	GeneratePWM(0.5f, 0.5f, 0.5f);
+}
+
+void UpdateDriverParameter(float *driver_parameter)
+{
+	float max_speed;
+	float speed_limit;
+
+	if (driver_parameter == 0)
+	{
+		return;
+	}
+
+	if (driver_parameter[SPEED_P_GAIN] <= 0.0f)
+	{
+		driver_parameter[SPEED_P_GAIN] = 0.02f;
+	}
+	if (driver_parameter[SPEED_I_GAIN] <= 0.0f)
+	{
+		driver_parameter[SPEED_I_GAIN] = 5.0f;
+	}
+	if (driver_parameter[MAXIMUM_SPEED] <= 0.0f)
+	{
+		driver_parameter[MAXIMUM_SPEED] = 1500.0f;
+	}
+
+	max_speed = driver_parameter[MAXIMUM_SPEED];
+	speed_limit = ((MotorParameter[MOTOR_RATED_CURRENT_RMS] > 0.0f) ?
+		MotorParameter[MOTOR_RATED_CURRENT_RMS] : DIRVER_OVER_CURRENT_THRESHOLD_AMPERE_UNIT);
+
+	gSpeedPi.fDtSec = 1.0f / SPEED_LOOP_FREQUENCY;
+	gSpeedPi.fKp = driver_parameter[SPEED_P_GAIN];
+	gSpeedPi.fKi = driver_parameter[SPEED_I_GAIN];
+	gSpeedPi.fUpOutLim = speed_limit;
+	gSpeedPi.fLowOutLim = -speed_limit;
+
+	gTargetSpeedRpm = ClampFloat(gTargetSpeedRpm, -max_speed, max_speed);
+}
+
+void UpdateMotorParameter(float *motor_parameter)
+{
+	float rated_current;
+	float current_kp;
+	float current_ki;
+
+	if (motor_parameter == 0)
+	{
+		return;
+	}
+
+	if (motor_parameter[MOTOR_ENCODER_ID] <= 0.0f)
+	{
+		motor_parameter[MOTOR_ENCODER_ID] = (float)TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
+	}
+	if (motor_parameter[MOTOR_ENCODER_RESOLUTION] <= 0.0f)
+	{
+		motor_parameter[MOTOR_ENCODER_RESOLUTION] = (float)MOTOR_ENC_RES;
+	}
+	if (motor_parameter[MOTOR_NUMBER_POLE_PAIRS] <= 0.0f)
+	{
+		motor_parameter[MOTOR_NUMBER_POLE_PAIRS] = (float)INITIAL_MOTOR_POLE_PAIRS;
+	}
+	if (motor_parameter[MOTOR_RATED_CURRENT_RMS] <= 0.0f)
+	{
+		motor_parameter[MOTOR_RATED_CURRENT_RMS] = 2.0f;
+	}
+	if (motor_parameter[MOTOR_CURRENT_P_GAIN] <= 0.0f)
+	{
+		motor_parameter[MOTOR_CURRENT_P_GAIN] = 1.0f;
+	}
+	if (motor_parameter[MOTOR_CURRENT_I_GAIN] <= 0.0f)
+	{
+		motor_parameter[MOTOR_CURRENT_I_GAIN] = 150.0f;
+	}
+
+	rated_current = motor_parameter[MOTOR_RATED_CURRENT_RMS];
+	current_kp = motor_parameter[MOTOR_CURRENT_P_GAIN];
+	current_ki = motor_parameter[MOTOR_CURRENT_I_GAIN];
+
+	Parameter.EncRes = (uint32_t)motor_parameter[MOTOR_ENCODER_RESOLUTION];
+	Parameter.u8PolePair = (uint8_t)motor_parameter[MOTOR_NUMBER_POLE_PAIRS];
+	Current_Sensor.OverCurrentThreshold = ClampFloat(
+		rated_current,
+		0.5f,
+		DIRVER_OVER_CURRENT_THRESHOLD_AMPERE_UNIT);
+
+	gIdPi.fDtSec = 1.0f / CURRENT_LOOP_FREQUENCY;
+	gIdPi.fKp = current_kp;
+	gIdPi.fKi = current_ki;
+	gIdPi.fUpOutLim = 0.0f;
+	gIdPi.fLowOutLim = 0.0f;
+
+	gIqPi.fDtSec = 1.0f / CURRENT_LOOP_FREQUENCY;
+	gIqPi.fKp = current_kp;
+	gIqPi.fKi = current_ki;
+	gIqPi.fUpOutLim = 0.0f;
+	gIqPi.fLowOutLim = 0.0f;
+
+	*(__IO uint16_t*)(REG_ENCODER_ID) = (uint16_t)motor_parameter[MOTOR_ENCODER_ID];
+	UpdateDriverParameter(DriverParameter);
+}
+
+static void LoadDefaultParameters(void)
+{
+	memset(DriverParameter, 0, sizeof(DriverParameter));
+	memset(MotorParameter, 0, sizeof(MotorParameter));
+
+	DriverParameter[CONTROL_MODE] = (float)SPEED_CONTROL_MODE;
+	DriverParameter[SPEED_P_GAIN] = 0.02f;
+	DriverParameter[SPEED_I_GAIN] = 5.0f;
+	DriverParameter[MAXIMUM_SPEED] = 1500.0f;
+	DriverParameter[SPEED_UNIT] = 0.0f;
+
+	MotorParameter[MOTOR_RATED_CURRENT_RMS] = 2.0f;
+	MotorParameter[MOTOR_PEAK_CURRENT_RMS] = 4.0f;
+	MotorParameter[MOTOR_ENCODER_ID] = (float)TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
+	MotorParameter[MOTOR_ENCODER_RESOLUTION] = (float)MOTOR_ENC_RES;
+	MotorParameter[MOTOR_MAXIMUM_VOLTAGE] = 48.0f;
+	MotorParameter[MOTOR_NUMBER_POLE_PAIRS] = (float)INITIAL_MOTOR_POLE_PAIRS;
+	MotorParameter[MOTOR_CURRENT_P_GAIN] = 1.0f;
+	MotorParameter[MOTOR_CURRENT_I_GAIN] = 150.0f;
+	MotorParameter[MOTOR_CURRENT_CTRL_DIRECTION] = 0.0f;
+
+	UpdateMotorParameter(MotorParameter);
+	UpdateDriverParameter(DriverParameter);
+}
+
+static void ReadFastProtectionFeedback(void)
+{
+	gRawVdc = *(__IO uint16_t*)(REG_DC_BUS_VOLTAGE);
+	gRawCurrentU = *(__IO uint16_t*)(REG_CURRENT_PHASE_U);
+	gRawCurrentV = *(__IO uint16_t*)(REG_CURRENT_PHASE_V);
+	gRawTemp = *(__IO uint16_t*)(REG_TEMPARATURE_SENSOR);
+
+	Parameter.fVdc = (float)((int32_t)gRawVdc - OFFSET) / Resolution16bits * INPUT_RANGE_VDC;
+	Parameter.fIabc[0] = -(float)((int32_t)gRawCurrentU - (int32_t)Parameter.u16Offset_Ia) / Resolution16bits * INPUT_RANGE_I;
+	Parameter.fIabc[1] = -(float)((int32_t)gRawCurrentV - (int32_t)Parameter.u16Offset_Ib) / Resolution16bits * INPUT_RANGE_I;
+	Parameter.fIabc[2] = -Parameter.fIabc[0] - Parameter.fIabc[1];
+	Parameter.fTemparature = (float)((int32_t)gRawTemp - OFFSET) / Resolution16bits * INPUT_RANGE_TEMPARATURE;
+}
+
+static void UpdateMeasuredSpeedAndTheta(void)
+{
+	float encoder_resolution;
+	float electrical_angle;
+
+	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
+		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
+
+	Parameter.fActSpeed = ((float)Parameter.DeltaPos * CURRENT_LOOP_FREQUENCY * 60.0f) / encoder_resolution;
+	electrical_angle = (Parameter.fPosition / encoder_resolution) * (2.0f * PI) * (float)Parameter.u8PolePair;
+	Parameter.fTheta = WrapAngle(electrical_angle);
+}
+
+static float GetOpenLoopVoltageLimit(void)
+{
+	float voltage_limit = Parameter.fVdc * 0.7f;
+	float motor_voltage_limit = MotorParameter[MOTOR_MAXIMUM_VOLTAGE];
+
+	if ((motor_voltage_limit > 0.0f) && (motor_voltage_limit < voltage_limit))
+	{
+		voltage_limit = motor_voltage_limit;
+	}
+	if (voltage_limit < 6.0f)
+	{
+		voltage_limit = 6.0f;
+	}
+	if (voltage_limit > 40.0f)
+	{
+		voltage_limit = 40.0f;
+	}
+	return voltage_limit;
+}
+
+static void RunOpenLoopVf(void)
+{
+	float requested_frequency = ClampFloat(gVfFrequencyHz, 0.0f, 50.0f);
+	float requested_voltage = ClampFloat(gVfVoltageV, 0.0f, GetOpenLoopVoltageLimit());
+	float modulation = 0.0f;
+	float pole_pairs = (Parameter.u8PolePair > 0u) ? (float)Parameter.u8PolePair : 1.0f;
+	float sin_theta;
+	float cos_theta;
+	PWM_Phases_t vf_output;
+
+	if (Parameter.fVdc > 1.0f)
+	{
+		modulation = requested_voltage / Parameter.fVdc;
+	}
+	modulation = ClampFloat(modulation, 0.0f, 0.85f);
+
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gTargetSpeedRpm = (requested_frequency * 60.0f) / pole_pairs;
+	vf_output = Control_V_over_F(requested_frequency, modulation);
+
+	Parameter.fVabc[0] = (vf_output.U - 0.5f) * Parameter.fVdc;
+	Parameter.fVabc[1] = (vf_output.V - 0.5f) * Parameter.fVdc;
+	Parameter.fVabc[2] = (vf_output.W - 0.5f) * Parameter.fVdc;
+
+	sin_theta = sinf(Parameter.fTheta);
+	cos_theta = cosf(Parameter.fTheta);
+
+	gClarke.fA = Parameter.fIabc[0];
+	gClarke.fB = Parameter.fIabc[1];
+	gClarke.m_ab2albe(&gClarke);
+
+	gPark.fAl = gClarke.fAl;
+	gPark.fBe = gClarke.fBe;
+	gPark.fSinAng = sin_theta;
+	gPark.fCosAng = cos_theta;
+	gPark.m_albe2dq(&gPark);
+	Parameter.fIdq[0] = gPark.fD;
+	Parameter.fIdq[1] = gPark.fQ;
+
+	gClarke.fA = Parameter.fVabc[0];
+	gClarke.fB = Parameter.fVabc[1];
+	gClarke.m_ab2albe(&gClarke);
+
+	gPark.fAl = gClarke.fAl;
+	gPark.fBe = gClarke.fBe;
+	gPark.fSinAng = sin_theta;
+	gPark.fCosAng = cos_theta;
+	gPark.m_albe2dq(&gPark);
+	Parameter.fVdq[0] = gPark.fD;
+	Parameter.fVdq[1] = gPark.fQ;
+}
+
+static void ReportFault(uint16_t fault)
+{
+	FaultCode |= fault;
+	gDebugFaultSnapshot = FaultCode;
+	USB_Comm.SendError = true;
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	STM_FaultProcessing(&StateMachine, fault, 0xFFFFFFFFu);
+	ResetControlLoops();
+	SetPwmEnabled(0u);
+	system_on = 0u;
+}
+static void RunFocLoop(void)
+{
+	float sin_theta;
+	float cos_theta;
+	float voltage_limit;
+	float inv_vbus;
+	float duty_u;
+	float duty_v;
+	float duty_w;
+
+	if (Parameter.fVdc < 1.0f)
+	{
+		GeneratePWM(0.5f, 0.5f, 0.5f);
+		return;
+	}
+
+	sin_theta = sinf(Parameter.fTheta);
+	cos_theta = cosf(Parameter.fTheta);
+
+	gClarke.fA = Parameter.fIabc[0];
+	gClarke.fB = Parameter.fIabc[1];
+	gClarke.m_ab2albe(&gClarke);
+
+	gPark.fAl = gClarke.fAl;
+	gPark.fBe = gClarke.fBe;
+	gPark.fSinAng = sin_theta;
+	gPark.fCosAng = cos_theta;
+	gPark.m_albe2dq(&gPark);
+
+	Parameter.fIdq[0] = gPark.fD;
+	Parameter.fIdq[1] = gPark.fQ;
+
+	gSpeedLoopDivider++;
+	if (gSpeedLoopDivider >= 2u)
+	{
+		gSpeedLoopDivider = 0u;
+		gSpeedPi.fIn = gTargetSpeedRpm - Parameter.fActSpeed;
+		gSpeedPi.m_calc(&gSpeedPi);
+		gIqRefA = ClampFloat(gSpeedPi.fOut, gSpeedPi.fLowOutLim, gSpeedPi.fUpOutLim);
+	}
+
+	voltage_limit = Parameter.fVdc * 0.45f;
+	gIdPi.fUpOutLim = voltage_limit;
+	gIdPi.fLowOutLim = -voltage_limit;
+	gIqPi.fUpOutLim = voltage_limit;
+	gIqPi.fLowOutLim = -voltage_limit;
+
+	gIdPi.fIn = gIdRefA - gPark.fD;
+	gIqPi.fIn = gIqRefA - gPark.fQ;
+	gIdPi.m_calc(&gIdPi);
+	gIqPi.m_calc(&gIqPi);
+
+	Parameter.fVdq[0] = gIdPi.fOut;
+	Parameter.fVdq[1] = gIqPi.fOut;
+
+	gInvPark.fD = gIdPi.fOut;
+	gInvPark.fQ = gIqPi.fOut;
+	gInvPark.fSinAng = sin_theta;
+	gInvPark.fCosAng = cos_theta;
+	gInvPark.m_dq2albe(&gInvPark);
+
+	gInvClarke.fAl = gInvPark.fAl;
+	gInvClarke.fBe = gInvPark.fBe;
+	gInvClarke.m_albe2abc(&gInvClarke);
+
+	Parameter.fVabc[0] = gInvClarke.fA;
+	Parameter.fVabc[1] = gInvClarke.fB;
+	Parameter.fVabc[2] = gInvClarke.fC;
+
+	inv_vbus = 1.0f / Parameter.fVdc;
+	duty_u = 0.5f + (Parameter.fVabc[0] * inv_vbus);
+	duty_v = 0.5f + (Parameter.fVabc[1] * inv_vbus);
+	duty_w = 0.5f + (Parameter.fVabc[2] * inv_vbus);
+
+	GeneratePWM(
+		ClampFloat(duty_u, 0.05f, 0.95f),
+		ClampFloat(duty_v, 0.05f, 0.95f),
+		ClampFloat(duty_w, 0.05f, 0.95f));
+}
 
 /* USER CODE END 0 */
 
@@ -143,9 +550,13 @@ int main(void)
 	// Init paramter and enable after ADC init
 	
 	Init_Parameter(&Parameter);
+	Reset_CurrentSensor(&Current_Sensor);
+	STM_Init(&StateMachine);
+	memset(&USB_Comm, 0, sizeof(USB_Comm));
+	LoadDefaultParameters();
 	HAL_GPIO_WritePin(oEnableReadADC_GPIO_Port, oEnableReadADC_Pin, GPIO_PIN_SET); //==> required for current reading value
 	
-	// Enable FPGA read encoder value
+	// Enable FPGA read encoder value -- Can replace by others Encoder Types
 	*(__IO uint16_t*)(REG_ENCODER_ID) = TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
 	// TAMAGAWA_SERIAL_ABS_SINGLE_TURN is 17bit encoder!
 
@@ -155,6 +566,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	USB_ProcessData(&USB_Comm);
+	USB_TransmitData(&USB_Comm);
 	
   /* USER CODE END WHILE */
 
@@ -619,20 +1032,90 @@ static void MX_FSMC_Init(void)
 // Loop EXT_Interupt from FPGA
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	MotorParameter[MOTOR_ENCODER_ID]= TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
+	uint16_t fault = NO_ERROR;
+
+	if (GPIO_Pin != iMeasureIsr_Pin)
+	{
+		return;
+	}
+
+	ReadFastProtectionFeedback();
+
+	fault = CheckVbusFault(&Parameter);
+	fault |= CheckTempFault(&Parameter);
+
+	if ((Current_Sensor.CalibFinish != 0) && (StateMachine.bState == RUN))
+	{
+		fault |= CheckCurrentPhaseFault(&Current_Sensor, Parameter.fIabc[0], Parameter.fIabc[1], Parameter.fIabc[2]);
+	}
+
+	if (fault != NO_ERROR)
+	{
+		ReportFault(fault);
+		return;
+	}
+
 	GetParameter(&Parameter, MotorParameter);
-	
-	if (system_on == 1){
-		SwitchOnPWM();
-//		target_freq_global = 20;
-//		target_vol_global = 0.3;//10% to 90% of DC bus voltage (48V)
-		PWM_Phases_t result = Control_V_over_F(target_freq_global, target_vol_global);
+
+	if ((StateMachine.bState == FAULT_NOW) || (StateMachine.bState == FAULT_OVER))
+	{
+		SetPwmEnabled(0u);
+		system_on = 0u;
+		return;
+	}
+
+	if (StateMachine.bState == OFFSET_CALIB)
+	{
+		if (Current_Sensor.CalibCounter == 0)
+		{
+			Parameter.u16Offset_Ia = OFFSET;
+			Parameter.u16Offset_Ib = OFFSET;
+		}
+
+		SetPwmEnabled(1u);
+		GeneratePWM(0.5f, 0.5f, 0.5f);
+		CalibrateCurrentSensor(&Current_Sensor, &Parameter);
+
+		if (Current_Sensor.CalibFinish != 0)
+		{
+			ResetControlLoops();
+			STM_NextState(&StateMachine, START);
+		}
+
+		system_on = 0u;
+		return;
+	}
+
+	if ((StateMachine.bState == IDLE) || (StateMachine.bState == STOP))
+	{
+		ResetControlLoops();
+		SetPwmEnabled(0u);
+		if (StateMachine.bState == STOP)
+		{
+			STM_NextState(&StateMachine, IDLE);
+		}
+		system_on = 0u;
+		return;
+	}
+
+	if (StateMachine.bState == START)
+	{
+		ResetControlLoops();
+		SetPwmEnabled(1u);
+		STM_NextState(&StateMachine, RUN);
+	}
+
+	SetPwmEnabled(1u);
+	UpdateMeasuredSpeedAndTheta();
+	if (gRunMode == RUN_MODE_OPEN_LOOP_VF)
+	{
+		RunOpenLoopVf();
 	}
 	else
 	{
-		SwitchOffPWM();
+		RunFocLoop();
 	}
-	
+	system_on = 1u;
 }
 /* USER CODE END 4 */
 
@@ -678,3 +1161,6 @@ void assert_failed(uint8_t* file, uint32_t line)
   */
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+
+
+

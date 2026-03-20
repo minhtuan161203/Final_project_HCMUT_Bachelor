@@ -620,6 +620,36 @@
               <FilePath>.\Library\Parameter.h</FilePath>
             </File>
             <File>
+              <FileName>PIDcontrol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\PIDcontrol.c</FilePath>
+            </File>
+            <File>
+              <FileName>PIDcontrol.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Library\PIDcontrol.h</FilePath>
+            </File>
+            <File>
+              <FileName>StateMachine.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\StateMachine.c</FilePath>
+            </File>
+            <File>
+              <FileName>StateMachine.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Library\StateMachine.h</FilePath>
+            </File>
+            <File>
+              <FileName>USBComunication.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\USBComunication.c</FilePath>
+            </File>
+            <File>
+              <FileName>USBComunication.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Library\USBComunication.h</FilePath>
+            </File>
+            <File>
               <FileName>vector_transfs.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Library\vector_transfs.c</FilePath>
@@ -628,11 +658,6 @@
               <FileName>vector_transfs.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\Library\vector_transfs.h</FilePath>
-            </File>
-            <File>
-              <FileName>PIcontrol.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\PIcontrol.c</FilePath>
             </File>
           </Files>
         </Group>

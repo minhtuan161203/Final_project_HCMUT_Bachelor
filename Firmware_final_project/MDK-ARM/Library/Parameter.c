@@ -284,8 +284,6 @@ uint16_t CheckTempFault(Parameterhandle_t *pHandle)
 		fault = ERROR_OVER_TEMPERATURE;
 	else if(pHandle->fTemparature < OVER_TEMPERATURE_DEADBAND_DEGREE_UNIT)
 		fault = NO_ERROR;
-	else
-		fault = FaultCode;
 	return fault;
 }
 

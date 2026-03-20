@@ -3,6 +3,10 @@
   "WorkspaceRootPath": "C:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\GUI\\Final_Project\\",
   "Documents": [
     {
+      "AbsoluteMoniker": "D:0:0:{385D5198-AB8C-4660-AEBF-502B1DC650BA}|Final_Project.csproj|c:\\users\\admin\\desktop\\final_project\\gui\\final_project\\form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{385D5198-AB8C-4660-AEBF-502B1DC650BA}|Final_Project.csproj|solutionrelative:form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
       "AbsoluteMoniker": "D:0:0:{385D5198-AB8C-4660-AEBF-502B1DC650BA}|Final_Project.csproj|c:\\users\\admin\\desktop\\final_project\\gui\\final_project\\form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}|Form",
       "RelativeMoniker": "D:0:0:{385D5198-AB8C-4660-AEBF-502B1DC650BA}|Final_Project.csproj|solutionrelative:form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}|Form"
     }
@@ -19,6 +23,19 @@
             {
               "$type": "Document",
               "DocumentIndex": 0,
+              "Title": "Form1.cs",
+              "DocumentMoniker": "C:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\GUI\\Final_Project\\Form1.cs",
+              "RelativeDocumentMoniker": "Form1.cs",
+              "ToolTip": "C:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\GUI\\Final_Project\\Form1.cs",
+              "RelativeToolTip": "Form1.cs",
+              "ViewState": "AgIAABkAAAAAAAAAAAASwCcAAAAqAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-16T10:16:58.109Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
               "Title": "Form1.cs [Design]",
               "DocumentMoniker": "C:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\GUI\\Final_Project\\Form1.cs",
               "RelativeDocumentMoniker": "Form1.cs",

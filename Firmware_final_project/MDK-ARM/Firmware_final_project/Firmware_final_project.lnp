@@ -38,8 +38,10 @@
 "firmware_final_project\usbd_cdc.o"
 "firmware_final_project\pwm.o"
 "firmware_final_project\parameter.o"
+"firmware_final_project\pidcontrol.o"
+"firmware_final_project\statemachine.o"
+"firmware_final_project\usbcomunication.o"
 "firmware_final_project\vector_transfs.o"
-"firmware_final_project\picontrol.o"
 --strict --scatter "Firmware_final_project\Firmware_final_project.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

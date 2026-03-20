@@ -46,3 +46,5 @@ firmware_final_project\usbd_cdc_if.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f
 firmware_final_project\usbd_cdc_if.o: ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_core.h
 firmware_final_project\usbd_cdc_if.o: ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ioreq.h
 firmware_final_project\usbd_cdc_if.o: ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ctlreq.h
+firmware_final_project\usbd_cdc_if.o: ./Library/USBComunication.h
+firmware_final_project\usbd_cdc_if.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdbool.h
