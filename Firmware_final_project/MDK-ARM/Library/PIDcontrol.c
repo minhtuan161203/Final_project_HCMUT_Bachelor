@@ -81,19 +81,30 @@ void tP_rst(tP* ptP)
 void tPI_calc(tPI* ptPI)
 {
 	float fPreOut;
-	
+	float fIin;
+	float fIout;
+
 	ptPI->fPout = ptPI->fIn * ptPI->fKp;
-	
-	ptPI->fIout = ptPI->fIprevOut + 0.5f*ptPI->fDtSec*(
-			ptPI->fPout*ptPI->fKi + ptPI->fIprevIn);
-	ptPI->fIprevIn = ptPI->fPout;
-	ptPI->fIprevOut = ptPI->fIout;
-	
-	fPreOut = ptPI->fPout + ptPI->fIout;
-	
-	if(fPreOut > ptPI->fUpOutLim) fPreOut = ptPI->fUpOutLim;
-	if(fPreOut < ptPI->fLowOutLim) fPreOut = ptPI->fLowOutLim;
-	
+
+	fIin = ptPI->fIn * ptPI->fKi;
+	fIout = ptPI->fIprevOut + 0.5f * ptPI->fDtSec * (fIin + ptPI->fIprevIn);
+	ptPI->fIprevIn = fIin;
+
+	fPreOut = ptPI->fPout + fIout;
+
+	if(fPreOut > ptPI->fUpOutLim)
+	{
+		fPreOut = ptPI->fUpOutLim;
+		fIout = fPreOut - ptPI->fPout;
+	}
+	if(fPreOut < ptPI->fLowOutLim)
+	{
+		fPreOut = ptPI->fLowOutLim;
+		fIout = fPreOut - ptPI->fPout;
+	}
+
+	ptPI->fIout = fIout;
+	ptPI->fIprevOut = fIout;
 	ptPI->fOut = fPreOut;
 }
 
@@ -158,23 +169,34 @@ void tPD_rst(tPD* ptPD)
 void tPID_calc(tPID* ptPID)
 {
 	float fPreOut;
-	
+	float fIin;
+	float fIout;
+
 	ptPID->fPout = ptPID->fIn * ptPID->fKp;
-	
-	ptPID->fIout = ptPID->fIprevOut + 0.5f*ptPID->fDtSec*(
-			ptPID->fPout*ptPID->fKi + ptPID->fIprevIn);
-	ptPID->fIprevIn = ptPID->fPout;
-	ptPID->fIprevOut = ptPID->fIout;
-	
+
+	fIin = ptPID->fIn * ptPID->fKi;
+	fIout = ptPID->fIprevOut + 0.5f * ptPID->fDtSec * (fIin + ptPID->fIprevIn);
+	ptPID->fIprevIn = fIin;
+
 	ptPID->fDout = (ptPID->fPout*ptPID->fKd - ptPID->fDprevIn)/ptPID->fDtSec;
 	ptPID->fDprevIn = ptPID->fPout;
 	ptPID->fDprevOut = ptPID->fDout;
-	
-	fPreOut = ptPID->fPout + ptPID->fIout + ptPID->fDout;
-	
-	if(fPreOut > ptPID->fUpOutLim) fPreOut = ptPID->fUpOutLim;
-	if(fPreOut < ptPID->fLowOutLim) fPreOut = ptPID->fLowOutLim;
-	
+
+	fPreOut = ptPID->fPout + fIout + ptPID->fDout;
+
+	if(fPreOut > ptPID->fUpOutLim)
+	{
+		fPreOut = ptPID->fUpOutLim;
+		fIout = fPreOut - ptPID->fPout - ptPID->fDout;
+	}
+	if(fPreOut < ptPID->fLowOutLim)
+	{
+		fPreOut = ptPID->fLowOutLim;
+		fIout = fPreOut - ptPID->fPout - ptPID->fDout;
+	}
+
+	ptPID->fIout = fIout;
+	ptPID->fIprevOut = fIout;
 	ptPID->fOut = fPreOut;
 }
 

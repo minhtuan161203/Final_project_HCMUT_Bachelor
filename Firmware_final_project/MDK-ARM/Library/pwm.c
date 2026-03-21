@@ -46,6 +46,9 @@ void SwitchOffPWM(void)
 void GeneratePWM(float DutyCycle_U, float DutyCycle_V, float DutyCycle_W)
 {
     // Safety Clamping
+    if(DutyCycle_U < 0.0f) DutyCycle_U = 0.0f;
+    if(DutyCycle_V < 0.0f) DutyCycle_V = 0.0f;
+    if(DutyCycle_W < 0.0f) DutyCycle_W = 0.0f;
     if(DutyCycle_U > 0.90f) DutyCycle_U = 0.90f;
     if(DutyCycle_V > 0.90f) DutyCycle_V = 0.90f;
     if(DutyCycle_W > 0.90f) DutyCycle_W = 0.90f;

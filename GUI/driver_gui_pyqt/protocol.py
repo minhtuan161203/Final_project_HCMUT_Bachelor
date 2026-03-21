@@ -15,6 +15,12 @@ ACK_ERROR = 0xFF
 HEADER_SIZE = 2
 CRC_SIZE = 1
 REG_SIZE = 1
+CURRENT_LOOP_FREQUENCY_HZ = 16000.0
+TRACE_SAMPLES_PER_CHUNK = 10
+TRACE_CHANNELS_PER_SAMPLE = 4
+CURRENT_TUNING_SAMPLES_PER_CHUNK = 20
+CURRENT_TUNING_TOTAL_SAMPLES = 600
+TRACE_TOTAL_SAMPLES = 1000
 
 
 class Command(IntEnum):
@@ -72,6 +78,9 @@ class Command(IntEnum):
     CMD_CONTINUE_AUTO_TUNING_STATE = 0x54
     CMD_START_OPEN_LOOP_VF = 0x55
     CMD_STOP_OPEN_LOOP_VF = 0x56
+    CMD_APPLY_ID_SQUARE_TUNING = 0x57
+    CMD_START_ID_SQUARE_TUNING = 0x58
+    CMD_STOP_ID_SQUARE_TUNING = 0x59
 
 
 class UpdateCode(IntEnum):
@@ -212,6 +221,19 @@ class ErrorSnapshot:
     phase_u: float
     phase_v: float
     phase_w: float
+
+
+@dataclass(slots=True)
+class TraceChunk:
+    chunk_index: int
+    channels: tuple[list[float], list[float], list[float], list[float]]
+
+
+@dataclass(slots=True)
+class CurrentTuningChunk:
+    chunk_index: int
+    reference: list[float]
+    feedback: list[float]
 
 
 def calc_crc(u_code: int, u_size: int, buffer: bytes) -> int:
@@ -369,6 +391,51 @@ def parse_error_payload(payload: bytes) -> ErrorSnapshot:
         phase_u=phase_u,
         phase_v=phase_v,
         phase_w=phase_w,
+    )
+
+
+def parse_trace_payload(payload: bytes) -> TraceChunk:
+    expected_size = 2 + TRACE_SAMPLES_PER_CHUNK * TRACE_CHANNELS_PER_SAMPLE * 4
+    if len(payload) < expected_size:
+        raise ValueError(f"Trace payload too short: {len(payload)}")
+
+    chunk_index = struct.unpack_from("<H", payload, 0)[0]
+    offset = 2
+    channels = ([], [], [], [])
+    for _ in range(TRACE_SAMPLES_PER_CHUNK):
+        values = struct.unpack_from("<4f", payload, offset)
+        offset += 16
+        for channel_index, value in enumerate(values):
+            channels[channel_index].append(value)
+
+    return TraceChunk(
+        chunk_index=chunk_index,
+        channels=channels,
+    )
+
+
+def parse_current_tuning_payload(payload: bytes) -> CurrentTuningChunk:
+    expected_size = 2 + 1 + CURRENT_TUNING_SAMPLES_PER_CHUNK * 2 * 4
+    if len(payload) < expected_size:
+        raise ValueError(f"Current tuning payload too short: {len(payload)}")
+
+    chunk_size = struct.unpack_from("<H", payload, 0)[0]
+    if chunk_size < CURRENT_TUNING_SAMPLES_PER_CHUNK * 2 * 4:
+        raise ValueError(f"Unexpected current tuning chunk size: {chunk_size}")
+
+    chunk_index = payload[2]
+    offset = 3
+    reference: list[float] = []
+    feedback: list[float] = []
+    for _ in range(CURRENT_TUNING_SAMPLES_PER_CHUNK):
+        reference.append(struct.unpack_from("<f", payload, offset)[0])
+        feedback.append(struct.unpack_from("<f", payload, offset + 4)[0])
+        offset += 8
+
+    return CurrentTuningChunk(
+        chunk_index=chunk_index,
+        reference=reference,
+        feedback=feedback,
     )
 
 

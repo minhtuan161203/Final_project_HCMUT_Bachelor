@@ -92,6 +92,10 @@ volatile uint16_t gRawCurrentV = 0u;
 volatile uint16_t gRawVdc = 0u;
 volatile uint16_t gRawTemp = 0u;
 volatile uint16_t gDebugFaultSnapshot = 0u;
+float gTracePosError = 0.0f;
+float RecordTable1[TRACE_DATA_LENGTH * 4u];
+TraceData Trace_Data;
+IdSquareTuning_t IdSquareTuning;
 
 Parameterhandle_t Parameter;
 CurrentSensor_t Current_Sensor;
@@ -130,14 +134,25 @@ static void ResetControlLoops(void);
 static void LoadDefaultParameters(void);
 static void ReadFastProtectionFeedback(void);
 static void UpdateMeasuredSpeedAndTheta(void);
+static void LimitDqVoltageVector(float *vd, float *vq, float limit);
 static float GetOpenLoopVoltageLimit(void);
 static void RunOpenLoopVf(void);
 static void ReportFault(uint16_t fault);
 static void RunFocLoop(void);
+static float CalcIdSquareTuningVoltageLimit(void);
+static float CalcIdSquareTuningReference(void);
+static float *ResolveTraceChannelPointer(uint8_t channel_code);
+static void UpdateTraceCapture(void);
 
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
+#define ID_SQUARE_TUNING_MAX_RATED_CURRENT_RATIO 0.20f
+#define ID_SQUARE_TUNING_MAX_OC_RATIO 0.20f
+#define ID_SQUARE_TUNING_MAX_VOLTAGE_RATIO 0.20f
+#define ID_SQUARE_TUNING_MAX_FREQUENCY_HZ 50.0f
+#define ID_SQUARE_TUNING_MIN_VOLTAGE_LIMIT_V 1.0f
+
 static float ClampFloat(float value, float lower, float upper)
 {
 	if (value > upper)
@@ -188,6 +203,154 @@ static void ResetControlLoops(void)
 	gSpeedLoopDivider = 0u;
 	ResetControl_V_over_F();
 	GeneratePWM(0.5f, 0.5f, 0.5f);
+}
+
+static void LimitDqVoltageVector(float *vd, float *vq, float limit)
+{
+	float magnitude_sq;
+	float limit_sq;
+	float scale;
+
+	if ((vd == 0) || (vq == 0) || (limit <= 0.0f))
+	{
+		return;
+	}
+
+	magnitude_sq = (*vd * *vd) + (*vq * *vq);
+	limit_sq = limit * limit;
+	if (magnitude_sq <= limit_sq)
+	{
+		return;
+	}
+
+	scale = limit / sqrtf(magnitude_sq);
+	*vd *= scale;
+	*vq *= scale;
+}
+
+static float CalcIdSquareTuningVoltageLimit(void)
+{
+	float voltage_limit = 0.5f * Parameter.fVdc * ID_SQUARE_TUNING_MAX_VOLTAGE_RATIO;
+	float motor_voltage_limit = MotorParameter[MOTOR_MAXIMUM_VOLTAGE] * ID_SQUARE_TUNING_MAX_VOLTAGE_RATIO;
+
+	if ((motor_voltage_limit > 0.0f) && ((voltage_limit <= 0.0f) || (motor_voltage_limit < voltage_limit)))
+	{
+		voltage_limit = motor_voltage_limit;
+	}
+	if (voltage_limit < ID_SQUARE_TUNING_MIN_VOLTAGE_LIMIT_V)
+	{
+		voltage_limit = ID_SQUARE_TUNING_MIN_VOLTAGE_LIMIT_V;
+	}
+
+	return voltage_limit;
+}
+
+static float CalcIdSquareTuningReference(void)
+{
+	float rated_limit = MotorParameter[MOTOR_RATED_CURRENT_RMS] * ID_SQUARE_TUNING_MAX_RATED_CURRENT_RATIO;
+	float oc_limit = Current_Sensor.OverCurrentThreshold * ID_SQUARE_TUNING_MAX_OC_RATIO;
+	float amplitude_limit = rated_limit;
+
+	if ((oc_limit > 0.0f) && ((amplitude_limit <= 0.0f) || (oc_limit < amplitude_limit)))
+	{
+		amplitude_limit = oc_limit;
+	}
+	if (amplitude_limit < 0.1f)
+	{
+		amplitude_limit = 0.1f;
+	}
+
+	IdSquareTuning.fAmplitudeApplied = ClampFloat(
+		fabsf(IdSquareTuning.fAmplitudeCmd),
+		0.0f,
+		amplitude_limit);
+	IdSquareTuning.fFrequencyApplied = ClampFloat(
+		IdSquareTuning.fFrequencyCmd,
+		0.5f,
+		ID_SQUARE_TUNING_MAX_FREQUENCY_HZ);
+
+	if ((IdSquareTuning.Enable == 0u) || (IdSquareTuning.fAmplitudeApplied < 0.0001f))
+	{
+		IdSquareTuning.fPhase = 0.0f;
+		return 0.0f;
+	}
+
+	IdSquareTuning.fPhase += IdSquareTuning.fFrequencyApplied / CURRENT_LOOP_FREQUENCY;
+	if (IdSquareTuning.fPhase >= 1.0f)
+	{
+		IdSquareTuning.fPhase -= 1.0f;
+	}
+
+	return (IdSquareTuning.fPhase < 0.5f) ? IdSquareTuning.fAmplitudeApplied : -IdSquareTuning.fAmplitudeApplied;
+}
+
+static float *ResolveTraceChannelPointer(uint8_t channel_code)
+{
+	switch (channel_code)
+	{
+		case 1u:
+			return (float *)&gTargetSpeedRpm;
+		case 2u:
+			return &Parameter.fActSpeed;
+		case 3u:
+			return &gIqRefA;
+		case 4u:
+			return &Parameter.fIdq[1];
+		case 5u:
+			return &Parameter.fIabc[0];
+		case 6u:
+			return &Parameter.fIabc[1];
+		case 7u:
+			return &Parameter.fIabc[2];
+		case 8u:
+			return &Parameter.fVdc;
+		case 9u:
+			return &Parameter.fTemparature;
+		case 10u:
+			return &gTracePosError;
+		case 11u:
+			return &Parameter.fIdq[0];
+		case 12u:
+			return &gIdRefA;
+		case 13u:
+			return &Parameter.fVdq[0];
+		case 14u:
+			return &Parameter.fVdq[1];
+		default:
+			return 0;
+	}
+}
+
+static void UpdateTraceCapture(void)
+{
+	uint16_t index;
+
+	if ((Trace_Data.Enable == 0u) || (Trace_Data.Finish != 0u))
+	{
+		return;
+	}
+
+	if (Trace_Data.u8CntSample > 0u)
+	{
+		Trace_Data.u8CntSample--;
+		return;
+	}
+
+	Trace_Data.u8CntSample = Trace_Data.u8MaxCntSample;
+	if (Trace_Data.Counter >= TRACE_DATA_LENGTH)
+	{
+		Trace_Data.Counter = 0u;
+		Trace_Data.u16Cnt2 = 0u;
+		Trace_Data.Finish = 1u;
+		return;
+	}
+
+	index = (uint16_t)(Trace_Data.Counter * 4u);
+	RecordTable1[index + 0u] = (Trace_Data.Data1 != 0) ? *Trace_Data.Data1 : 0.0f;
+	RecordTable1[index + 1u] = (Trace_Data.Data2 != 0) ? *Trace_Data.Data2 : 0.0f;
+	RecordTable1[index + 2u] = (Trace_Data.Data3 != 0) ? *Trace_Data.Data3 : 0.0f;
+	RecordTable1[index + 3u] = (Trace_Data.Data4 != 0) ? *Trace_Data.Data4 : 0.0f;
+	Trace_Data.Counter++;
 }
 
 void UpdateDriverParameter(float *driver_parameter)
@@ -268,6 +431,7 @@ void UpdateMotorParameter(float *motor_parameter)
 
 	Parameter.EncRes = (uint32_t)motor_parameter[MOTOR_ENCODER_RESOLUTION];
 	Parameter.u8PolePair = (uint8_t)motor_parameter[MOTOR_NUMBER_POLE_PAIRS];
+	Parameter.Offset_Enc = (int32_t)motor_parameter[MOTOR_HALL_OFFSET];
 	Current_Sensor.OverCurrentThreshold = ClampFloat(
 		rated_current,
 		0.5f,
@@ -332,12 +496,14 @@ static void UpdateMeasuredSpeedAndTheta(void)
 {
 	float encoder_resolution;
 	float electrical_angle;
+	float position_with_offset;
 
 	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
 		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
 
 	Parameter.fActSpeed = ((float)Parameter.DeltaPos * CURRENT_LOOP_FREQUENCY * 60.0f) / encoder_resolution;
-	electrical_angle = (Parameter.fPosition / encoder_resolution) * (2.0f * PI) * (float)Parameter.u8PolePair;
+	position_with_offset = Parameter.fPosition + (float)Parameter.Offset_Enc;
+	electrical_angle = (position_with_offset / encoder_resolution) * (2.0f * PI) * (float)Parameter.u8PolePair;
 	Parameter.fTheta = WrapAngle(electrical_angle);
 }
 
@@ -422,6 +588,9 @@ static void ReportFault(uint16_t fault)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	STM_FaultProcessing(&StateMachine, fault, 0xFFFFFFFFu);
 	ResetControlLoops();
 	SetPwmEnabled(0u);
@@ -459,16 +628,29 @@ static void RunFocLoop(void)
 	Parameter.fIdq[0] = gPark.fD;
 	Parameter.fIdq[1] = gPark.fQ;
 
-	gSpeedLoopDivider++;
-	if (gSpeedLoopDivider >= 2u)
+	if (IdSquareTuning.Enable != 0u)
 	{
-		gSpeedLoopDivider = 0u;
-		gSpeedPi.fIn = gTargetSpeedRpm - Parameter.fActSpeed;
-		gSpeedPi.m_calc(&gSpeedPi);
-		gIqRefA = ClampFloat(gSpeedPi.fOut, gSpeedPi.fLowOutLim, gSpeedPi.fUpOutLim);
+		gTargetSpeedRpm = 0.0f;
+		gIqRefA = 0.0f;
+		gIdRefA = CalcIdSquareTuningReference();
+		IdSquareTuning.fVoltageLimitApplied = CalcIdSquareTuningVoltageLimit();
+		voltage_limit = IdSquareTuning.fVoltageLimitApplied;
+	}
+	else
+	{
+		IdSquareTuning.fVoltageLimitApplied = 0.0f;
+		gSpeedLoopDivider++;
+		if (gSpeedLoopDivider >= 2u)
+		{
+			gSpeedLoopDivider = 0u;
+			gSpeedPi.fIn = gTargetSpeedRpm - Parameter.fActSpeed;
+			gSpeedPi.m_calc(&gSpeedPi);
+			gIqRefA = ClampFloat(gSpeedPi.fOut, gSpeedPi.fLowOutLim, gSpeedPi.fUpOutLim);
+		}
+
+		voltage_limit = Parameter.fVdc * 0.45f;
 	}
 
-	voltage_limit = Parameter.fVdc * 0.45f;
 	gIdPi.fUpOutLim = voltage_limit;
 	gIdPi.fLowOutLim = -voltage_limit;
 	gIqPi.fUpOutLim = voltage_limit;
@@ -478,6 +660,7 @@ static void RunFocLoop(void)
 	gIqPi.fIn = gIqRefA - gPark.fQ;
 	gIdPi.m_calc(&gIdPi);
 	gIqPi.m_calc(&gIqPi);
+	LimitDqVoltageVector(&gIdPi.fOut, &gIqPi.fOut, voltage_limit);
 
 	Parameter.fVdq[0] = gIdPi.fOut;
 	Parameter.fVdq[1] = gIqPi.fOut;
@@ -1088,6 +1271,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 	if ((StateMachine.bState == IDLE) || (StateMachine.bState == STOP))
 	{
+		IdSquareTuning.Enable = 0u;
+		IdSquareTuning.fPhase = 0.0f;
+		IdSquareTuning.fVoltageLimitApplied = 0.0f;
 		ResetControlLoops();
 		SetPwmEnabled(0u);
 		if (StateMachine.bState == STOP)
@@ -1115,6 +1301,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	{
 		RunFocLoop();
 	}
+	UpdateTraceCapture();
 	system_on = 1u;
 }
 /* USER CODE END 4 */

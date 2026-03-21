@@ -63,6 +63,9 @@ typedef enum
 		CMD_CONTINUE_AUTO_TUNING_STATE = 0x54,
 		CMD_START_OPEN_LOOP_VF = 0x55,
 		CMD_STOP_OPEN_LOOP_VF = 0x56,
+		CMD_APPLY_ID_SQUARE_TUNING = 0x57,
+		CMD_START_ID_SQUARE_TUNING = 0x58,
+		CMD_STOP_ID_SQUARE_TUNING = 0x59,
 }Command_e;
 
 typedef enum
@@ -116,6 +119,17 @@ typedef struct
 	uint8_t u8MaxCntSample;
 	uint8_t u8CntSample;
 }TraceData;
+
+typedef struct
+{
+	uint8_t Enable;
+	float fAmplitudeCmd;
+	float fFrequencyCmd;
+	float fAmplitudeApplied;
+	float fFrequencyApplied;
+	float fPhase;
+	float fVoltageLimitApplied;
+}IdSquareTuning_t;
 
 void UpdateDriverParameter(float *DriverParameter);
 

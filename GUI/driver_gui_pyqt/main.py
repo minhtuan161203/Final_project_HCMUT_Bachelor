@@ -12,17 +12,23 @@ from qt_compat import QtCore, QtGui, QtWidgets, QT_API
 from protocol import (
     ACK_ERROR,
     ACK_NOERROR,
+    CURRENT_LOOP_FREQUENCY_HZ,
+    CURRENT_TUNING_TOTAL_SAMPLES,
     Command,
     DRIVER_PARAMETER_NAMES,
     MOTOR_PARAMETER_NAMES,
     ParsedFrame,
+    TraceChunk,
+    TRACE_TOTAL_SAMPLES,
     UpdateCode,
     FrameStreamParser,
     build_command_frame,
     build_parameter_write_chunks,
+    parse_current_tuning_payload,
     parse_error_payload,
     parse_monitor_payload,
     parse_parameter_chunk,
+    parse_trace_payload,
 )
 from transport import PortDescriptor, SerialWorker, list_serial_ports
 
@@ -31,6 +37,7 @@ KNOWN_DEVICE_VID = 1100
 KNOWN_DEVICE_PID = 22336
 TREND_BUFFER_CAPACITY = 4000
 TREND_REFRESH_INTERVAL_MS = 33
+TRACE_CAPTURE_REFRESH_INTERVAL_MS = 100
 
 TREND_SERIES_META = {
     "phase_u": {"label": "Iu", "unit": "A", "color": "#1f77b4"},
@@ -56,6 +63,57 @@ TREND_EMA_ALPHA = {
     "cmd_speed": None,
     "speed_error": 0.22,
 }
+
+TRACE_CHANNEL_META = {
+    0: {"label": "Unused", "unit": "", "color": "#aaaaaa"},
+    1: {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
+    2: {"label": "Act Speed", "unit": "rpm", "color": "#17becf"},
+    3: {"label": "Iq Ref", "unit": "A", "color": "#ff7f0e"},
+    4: {"label": "Iq", "unit": "A", "color": "#d62728"},
+    5: {"label": "Iu", "unit": "A", "color": "#1f77b4"},
+    6: {"label": "Iv", "unit": "A", "color": "#2ca02c"},
+    7: {"label": "Iw", "unit": "A", "color": "#9467bd"},
+    8: {"label": "Vdc", "unit": "V", "color": "#8c564b"},
+    9: {"label": "Temp", "unit": "C", "color": "#e377c2"},
+    10: {"label": "Pos Err", "unit": "cnt", "color": "#7f7f7f"},
+    11: {"label": "Id", "unit": "A", "color": "#393b79"},
+    12: {"label": "Id Ref", "unit": "A", "color": "#637939"},
+    13: {"label": "Vd", "unit": "V", "color": "#843c39"},
+    14: {"label": "Vq", "unit": "V", "color": "#7b4173"},
+}
+
+TRACE_PRESETS = {
+    "Id Tuning": [12, 11, 13, 14],
+    "Current Loop": [3, 4, 11, 14],
+    "Phase Currents": [3, 5, 6, 7],
+    "Speed Loop": [1, 2, 3, 4],
+    "Voltage Debug": [11, 12, 13, 14],
+}
+
+
+@dataclass(slots=True)
+class ScopeCaptureState:
+    title: str
+    sample_period_s: float
+    total_samples: int
+    series_defs: list[dict[str, str]]
+    series_data: list[list[float]]
+    source_indices: list[int] | None = None
+    active: bool = False
+    received_samples: int = 0
+
+
+def _empty_scope_state(title: str) -> ScopeCaptureState:
+    return ScopeCaptureState(
+        title=title,
+        sample_period_s=1.0 / CURRENT_LOOP_FREQUENCY_HZ,
+        total_samples=0,
+        series_defs=[],
+        series_data=[],
+        source_indices=[],
+        active=False,
+        received_samples=0,
+    )
 
 
 @dataclass(slots=True)
@@ -429,6 +487,171 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         self.plot_view.clear()
 
 
+class ScopeCaptureView(QtWidgets.QWidget):
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._title = "Capture"
+        self._sample_period_s = 1.0 / CURRENT_LOOP_FREQUENCY_HZ
+        self._series_defs: list[dict[str, str]] = []
+        self._series_data: list[list[float]] = []
+        self._plot_rect = QtCore.QRectF()
+        self._hover_index: int | None = None
+        self._auto_scale = True
+        self._frozen_range = (-1.0, 1.0)
+        self._status_text = "Waiting for capture..."
+        self.setMinimumHeight(340)
+        self.setMouseTracking(True)
+
+    def clear(self) -> None:
+        self._series_defs = []
+        self._series_data = []
+        self._hover_index = None
+        self._status_text = "Waiting for capture..."
+        self.update()
+
+    def set_auto_scale(self, enabled: bool) -> None:
+        self._auto_scale = enabled
+        if not enabled:
+            self._frozen_range = self._calculate_y_range()
+        self.update()
+
+    def set_capture(
+        self,
+        title: str,
+        series_defs: list[dict[str, str]],
+        series_data: list[list[float]],
+        sample_period_s: float,
+        status_text: str,
+    ) -> None:
+        self._title = title
+        self._series_defs = list(series_defs)
+        self._series_data = [list(series) for series in series_data]
+        self._sample_period_s = max(1e-6, float(sample_period_s))
+        self._status_text = status_text
+        if self._auto_scale:
+            self._frozen_range = self._calculate_y_range()
+        self.update()
+
+    def _calculate_y_range(self) -> tuple[float, float]:
+        all_values = [value for series in self._series_data for value in series]
+        if not all_values:
+            return (-1.0, 1.0)
+        y_min = min(all_values)
+        y_max = max(all_values)
+        if abs(y_max - y_min) < 0.05:
+            center = 0.5 * (y_max + y_min)
+            return (center - 0.5, center + 0.5)
+        margin = (y_max - y_min) * 0.12
+        return (y_min - margin, y_max + margin)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(8, 8, -8, -8)
+        painter.fillRect(rect, self.palette().base())
+        painter.setPen(self.palette().text().color())
+        painter.drawText(
+            QtCore.QRect(rect.left(), rect.top(), rect.width(), 20),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            self._title,
+        )
+
+        legend_y = rect.top() + 28
+        legend_x = rect.left()
+        for series_def in self._series_defs:
+            painter.fillRect(
+                QtCore.QRect(legend_x, legend_y, 10, 10),
+                QtGui.QColor(series_def["color"]),
+            )
+            painter.drawText(
+                QtCore.QRect(legend_x + 14, legend_y - 3, 120, 18),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                series_def["label"],
+            )
+            legend_x += 124
+
+        plot_rect = QtCore.QRectF(rect.left(), legend_y + 22, rect.width(), rect.height() - 64)
+        self._plot_rect = plot_rect
+        painter.setPen(QtGui.QPen(self.palette().mid().color()))
+        painter.drawRect(plot_rect)
+
+        if not self._series_data or not self._series_data[0]:
+            painter.drawText(plot_rect.toRect(), QtCore.Qt.AlignmentFlag.AlignCenter, self._status_text)
+            return
+
+        y_min, y_max = self._frozen_range
+        y_span = max(y_max - y_min, 0.1)
+        sample_count = len(self._series_data[0])
+        total_ms = (sample_count - 1) * self._sample_period_s * 1000.0
+
+        grid_pen = QtGui.QPen(self.palette().midlight().color())
+        grid_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        painter.setPen(grid_pen)
+        for grid_index in range(1, 5):
+            y = plot_rect.top() + (plot_rect.height() * grid_index / 5.0)
+            painter.drawLine(QtCore.QPointF(plot_rect.left(), y), QtCore.QPointF(plot_rect.right(), y))
+
+        painter.setPen(self.palette().text().color())
+        painter.drawText(QtCore.QRectF(plot_rect.right() - 90, plot_rect.top() + 4, 86, 16), QtCore.Qt.AlignmentFlag.AlignRight, f"{y_max:.3f}")
+        painter.drawText(QtCore.QRectF(plot_rect.right() - 90, plot_rect.bottom() - 18, 86, 16), QtCore.Qt.AlignmentFlag.AlignRight, f"{y_min:.3f}")
+
+        for marker_ratio in (0.0, 0.5, 1.0):
+            x = plot_rect.left() + plot_rect.width() * marker_ratio
+            marker_ms = total_ms * marker_ratio
+            painter.drawLine(QtCore.QPointF(x, plot_rect.bottom()), QtCore.QPointF(x, plot_rect.bottom() + 4))
+            painter.drawText(QtCore.QRectF(x - 28, plot_rect.bottom() + 6, 56, 14), QtCore.Qt.AlignmentFlag.AlignCenter, f"{marker_ms:.1f} ms")
+
+        for series_index, series in enumerate(self._series_data):
+            if len(series) < 2:
+                continue
+            path = QtGui.QPainterPath()
+            for index, value in enumerate(series):
+                ratio = index / max(sample_count - 1, 1)
+                x = plot_rect.left() + plot_rect.width() * ratio
+                y = plot_rect.bottom() - (((value - y_min) / y_span) * plot_rect.height())
+                point = QtCore.QPointF(x, y)
+                if index == 0:
+                    path.moveTo(point)
+                else:
+                    path.lineTo(point)
+            painter.setPen(QtGui.QPen(QtGui.QColor(self._series_defs[series_index]["color"]), 1.8))
+            painter.drawPath(path)
+
+        if self._hover_index is not None and 0 <= self._hover_index < sample_count:
+            ratio = self._hover_index / max(sample_count - 1, 1)
+            x = plot_rect.left() + plot_rect.width() * ratio
+            cursor_pen = QtGui.QPen(QtGui.QColor("#888888"))
+            cursor_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            painter.setPen(cursor_pen)
+            painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if not self._series_data or not self._series_data[0] or not self._plot_rect.contains(event.position()):
+            self._hover_index = None
+            QtWidgets.QToolTip.hideText()
+            self.update()
+            return
+
+        sample_count = len(self._series_data[0])
+        ratio = (event.position().x() - self._plot_rect.left()) / max(self._plot_rect.width(), 1.0)
+        ratio = min(max(ratio, 0.0), 1.0)
+        self._hover_index = min(int(round(ratio * max(sample_count - 1, 0))), sample_count - 1)
+        time_ms = self._hover_index * self._sample_period_s * 1000.0
+        tooltip_lines = [f"t = {time_ms:.3f} ms"]
+        for series_def, series in zip(self._series_defs, self._series_data):
+            tooltip_lines.append(f"{series_def['label']}: {series[self._hover_index]:.4f} {series_def['unit']}")
+        QtWidgets.QToolTip.showText(event.globalPosition().toPoint(), "\n".join(tooltip_lines), self)
+        self.update()
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # noqa: N802
+        self._hover_index = None
+        QtWidgets.QToolTip.hideText()
+        self.update()
+        super().leaveEvent(event)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -449,6 +672,9 @@ class MainWindow(QtWidgets.QMainWindow):
             ema_alpha=TREND_EMA_ALPHA,
         )
         self._trend_panels: list[ScadaTrendPanel] = []
+        self._current_tuning_capture = _empty_scope_state("Current Tuning Response")
+        self._trace_capture = _empty_scope_state("Firmware Trace Scope")
+        self._active_trace_target: str | None = None
 
         self._ack_timer = QtCore.QTimer(self)
         self._ack_timer.setSingleShot(True)
@@ -483,6 +709,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._parameter_window = self._build_parameter_window()
         self._trend_window = self._build_trend_window()
+        self._tuning_window = self._build_tuning_window()
         self._log_window = self._build_log_window()
 
         self.statusBar().showMessage(f"Ready ({QT_API})")
@@ -516,6 +743,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.connection_state_label = QtWidgets.QLabel("Disconnected")
         self.open_parameters_button = QtWidgets.QPushButton("Parameters...")
         self.open_trends_button = QtWidgets.QPushButton("Trends...")
+        self.open_tuning_button = QtWidgets.QPushButton("Tuning / Scope...")
         self.open_log_button = QtWidgets.QPushButton("Log...")
 
         layout.addWidget(QtWidgets.QLabel("Port"), 0, 0)
@@ -531,8 +759,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.device_hint_label, 1, 2, 1, 3)
         layout.addWidget(self.open_parameters_button, 1, 5)
         layout.addWidget(self.open_trends_button, 1, 6)
-        layout.addWidget(self.open_log_button, 1, 7)
-        layout.addWidget(self.connection_state_label, 1, 8)
+        layout.addWidget(self.open_tuning_button, 1, 7)
+        layout.addWidget(self.open_log_button, 1, 8)
+        layout.addWidget(self.connection_state_label, 1, 9)
         return box
 
     def _build_monitor_group(self) -> QtWidgets.QGroupBox:
@@ -648,6 +877,154 @@ class MainWindow(QtWidgets.QMainWindow):
             self.speed_panel,
         ]
         return dialog
+
+    def _build_tuning_window(self) -> QtWidgets.QDialog:
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Current Tuning / Scope")
+        dialog.resize(1280, 900)
+        dialog.setModal(False)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        tabs = QtWidgets.QTabWidget(dialog)
+        tabs.addTab(self._build_current_tuning_tab(), "Current Tuning")
+        tabs.addTab(self._build_trace_scope_tab(), "Trace Scope")
+        layout.addWidget(tabs)
+        return dialog
+
+    def _build_current_tuning_tab(self) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        control_group = QtWidgets.QGroupBox("Id Square-Wave Current Loop Tuning")
+        control_layout = QtWidgets.QGridLayout(control_group)
+        self.ctuning_ref1_spin = QtWidgets.QDoubleSpinBox()
+        self.ctuning_ref1_spin.setRange(0.0, 20.0)
+        self.ctuning_ref1_spin.setDecimals(3)
+        self.ctuning_ref1_spin.setValue(0.5)
+        self.ctuning_ref1_spin.setSuffix(" A")
+        self.ctuning_ref2_spin = QtWidgets.QDoubleSpinBox()
+        self.ctuning_ref2_spin.setRange(0.5, 50.0)
+        self.ctuning_ref2_spin.setDecimals(3)
+        self.ctuning_ref2_spin.setValue(10.0)
+        self.ctuning_ref2_spin.setSuffix(" Hz")
+        self.ctuning_rate_combo = QtWidgets.QComboBox()
+        self.ctuning_rate_combo.addItem("16 kHz", 0)
+        self.ctuning_rate_combo.addItem("8 kHz", 1)
+        self.ctuning_rate_combo.addItem("4 kHz", 3)
+        self.ctuning_rate_combo.addItem("2 kHz", 7)
+        self.ctuning_rate_combo.addItem("1 kHz", 15)
+        self.ctuning_rate_combo.setCurrentIndex(2)
+        self.ctuning_kp_spin = QtWidgets.QDoubleSpinBox()
+        self.ctuning_kp_spin.setRange(0.0, 10000.0)
+        self.ctuning_kp_spin.setDecimals(5)
+        self.ctuning_kp_spin.setSingleStep(0.001)
+        self.ctuning_ki_spin = QtWidgets.QDoubleSpinBox()
+        self.ctuning_ki_spin.setRange(0.0, 10000.0)
+        self.ctuning_ki_spin.setDecimals(5)
+        self.ctuning_ki_spin.setSingleStep(0.001)
+
+        self.apply_ctuning_button = QtWidgets.QPushButton("Apply Id Tune Config")
+        self.start_ctuning_button = QtWidgets.QPushButton("Start Id Tune + Scope")
+        self.stop_ctuning_button = QtWidgets.QPushButton("Stop Id Tune")
+        self.ctuning_status_label = QtWidgets.QLabel("Idle")
+
+        control_layout.addWidget(QtWidgets.QLabel("Id Amplitude"), 0, 0)
+        control_layout.addWidget(self.ctuning_ref1_spin, 0, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Square Frequency"), 0, 2)
+        control_layout.addWidget(self.ctuning_ref2_spin, 0, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Capture Rate"), 1, 0)
+        control_layout.addWidget(self.ctuning_rate_combo, 1, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Current Kp"), 1, 2)
+        control_layout.addWidget(self.ctuning_kp_spin, 1, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Current Ki"), 2, 0)
+        control_layout.addWidget(self.ctuning_ki_spin, 2, 1)
+        self.ctuning_window_label = QtWidgets.QLabel("")
+        control_layout.addWidget(QtWidgets.QLabel("Capture Window"), 2, 2)
+        control_layout.addWidget(self.ctuning_window_label, 2, 3)
+        control_layout.addWidget(self.apply_ctuning_button, 3, 0, 1, 2)
+        control_layout.addWidget(self.start_ctuning_button, 3, 2)
+        control_layout.addWidget(self.stop_ctuning_button, 3, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Status"), 4, 0)
+        control_layout.addWidget(self.ctuning_status_label, 4, 1, 1, 3)
+
+        scope_toolbar = QtWidgets.QHBoxLayout()
+        self.ctuning_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
+        self.ctuning_auto_scale_checkbox.setChecked(True)
+        self.ctuning_clear_button = QtWidgets.QPushButton("Clear Capture")
+        scope_hint = QtWidgets.QLabel(
+            "Lock the rotor mechanically before use. Start from 5-10% rated current, keep the square-wave frequency low, and only increase amplitude after the trace is stable. Use a lower capture rate if you want a longer time window to see more than one pulse. Firmware clamps Id amplitude, limits the current-loop voltage to a safe fraction of Vdc, keeps Iq at zero, and records Id_ref / Id / Vd / Vq from the 16 kHz ISR."
+        )
+        scope_hint.setWordWrap(True)
+        scope_toolbar.addWidget(self.ctuning_auto_scale_checkbox)
+        scope_toolbar.addWidget(self.ctuning_clear_button)
+        scope_toolbar.addWidget(scope_hint, 1)
+
+        self.ctuning_scope_view = ScopeCaptureView()
+        self._update_current_tuning_capture_window_label()
+
+        layout.addWidget(control_group)
+        layout.addLayout(scope_toolbar)
+        layout.addWidget(self.ctuning_scope_view, 1)
+        return widget
+
+    def _build_trace_scope_tab(self) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        control_group = QtWidgets.QGroupBox("Firmware Trace Capture")
+        control_layout = QtWidgets.QGridLayout(control_group)
+
+        self.trace_preset_combo = QtWidgets.QComboBox()
+        self.trace_preset_combo.addItems(list(TRACE_PRESETS.keys()))
+        self.trace_preset_combo.setCurrentText("Current Loop")
+        self.trace_mode_combo = QtWidgets.QComboBox()
+        self.trace_mode_combo.addItem("Single Shot", 0)
+        self.trace_mode_combo.addItem("Continuous", 1)
+        self.trace_rate_combo = QtWidgets.QComboBox()
+        self.trace_rate_combo.addItem("16 kHz (every ISR)", 0)
+        self.trace_rate_combo.addItem("8 kHz", 1)
+        self.trace_rate_combo.addItem("4 kHz", 3)
+        self.trace_rate_combo.addItem("2 kHz", 7)
+        self.trace_rate_combo.addItem("1 kHz", 15)
+
+        self.trace_channel_combos: list[QtWidgets.QComboBox] = []
+        for _ in range(4):
+            combo = QtWidgets.QComboBox()
+            for code, meta in TRACE_CHANNEL_META.items():
+                combo.addItem(f"{code:02d} - {meta['label']}", code)
+            self.trace_channel_combos.append(combo)
+
+        self.trace_start_button = QtWidgets.QPushButton("Start Scope Capture")
+        self.trace_stop_button = QtWidgets.QPushButton("Stop Scope Capture")
+        self.trace_clear_button = QtWidgets.QPushButton("Clear Capture")
+        self.trace_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
+        self.trace_auto_scale_checkbox.setChecked(True)
+        self.trace_status_label = QtWidgets.QLabel("Idle")
+
+        control_layout.addWidget(QtWidgets.QLabel("Preset"), 0, 0)
+        control_layout.addWidget(self.trace_preset_combo, 0, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Mode"), 0, 2)
+        control_layout.addWidget(self.trace_mode_combo, 0, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Sample Rate"), 1, 0)
+        control_layout.addWidget(self.trace_rate_combo, 1, 1)
+        for index, combo in enumerate(self.trace_channel_combos):
+            row = 2 + index // 2
+            col = (index % 2) * 2
+            control_layout.addWidget(QtWidgets.QLabel(f"CH{index + 1}"), row, col)
+            control_layout.addWidget(combo, row, col + 1)
+        control_layout.addWidget(self.trace_start_button, 4, 0)
+        control_layout.addWidget(self.trace_stop_button, 4, 1)
+        control_layout.addWidget(self.trace_clear_button, 4, 2)
+        control_layout.addWidget(self.trace_auto_scale_checkbox, 4, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
+        control_layout.addWidget(self.trace_status_label, 5, 1, 1, 3)
+
+        self.trace_scope_view = ScopeCaptureView()
+        layout.addWidget(control_group)
+        layout.addWidget(self.trace_scope_view, 1)
+
+        self._apply_trace_preset(self.trace_preset_combo.currentText())
+        return widget
 
     def _build_quick_command_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Quick Commands")
@@ -827,6 +1204,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.open_trends_button.clicked.connect(
             lambda: self._show_auxiliary_window(self._trend_window)
         )
+        self.open_tuning_button.clicked.connect(
+            lambda: self._show_auxiliary_window(self._tuning_window)
+        )
         self.open_log_button.clicked.connect(
             lambda: self._show_auxiliary_window(self._log_window)
         )
@@ -856,6 +1236,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.write_motor_button.clicked.connect(self._write_motor_parameters)
         self.send_raw_button.clicked.connect(self._send_raw_command)
         self.clear_log_button.clicked.connect(self.log_edit.clear)
+        self.apply_ctuning_button.clicked.connect(self._apply_current_tuning_parameters)
+        self.start_ctuning_button.clicked.connect(self._start_current_tuning)
+        self.stop_ctuning_button.clicked.connect(self._stop_current_tuning)
+        self.ctuning_clear_button.clicked.connect(self._clear_current_tuning_capture)
+        self.ctuning_auto_scale_checkbox.toggled.connect(self.ctuning_scope_view.set_auto_scale)
+        self.ctuning_rate_combo.currentIndexChanged.connect(
+            self._update_current_tuning_capture_window_label
+        )
+        self.trace_preset_combo.currentTextChanged.connect(self._apply_trace_preset)
+        self.trace_start_button.clicked.connect(self._start_trace_capture)
+        self.trace_stop_button.clicked.connect(self._stop_trace_capture)
+        self.trace_clear_button.clicked.connect(self._clear_trace_capture)
+        self.trace_auto_scale_checkbox.toggled.connect(self.trace_scope_view.set_auto_scale)
 
         self._worker.frame_received.connect(self._handle_frame)
         self._worker.status_changed.connect(self._handle_connection_status)
@@ -871,6 +1264,156 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_monitor_poll_interval(self) -> None:
         interval_ms = int(self.monitor_rate_combo.currentData() or 250)
         self._monitor_timer.setInterval(interval_ms)
+
+    def _trace_sample_period_s(self) -> float:
+        decimation = int(self.trace_rate_combo.currentData() or 0)
+        return (decimation + 1) / CURRENT_LOOP_FREQUENCY_HZ
+
+    def _current_tuning_sample_period_s(self) -> float:
+        decimation = int(self.ctuning_rate_combo.currentData() or 0)
+        return (decimation + 1) / CURRENT_LOOP_FREQUENCY_HZ
+
+    def _update_current_tuning_capture_window_label(self) -> None:
+        window_ms = TRACE_TOTAL_SAMPLES * self._current_tuning_sample_period_s() * 1000.0
+        self.ctuning_window_label.setText(f"{window_ms:.1f} ms")
+
+    def _apply_trace_preset(self, preset_name: str) -> None:
+        channels = TRACE_PRESETS.get(preset_name)
+        if channels is None:
+            return
+        for combo, channel_code in zip(self.trace_channel_combos, channels):
+            combo.setCurrentIndex(combo.findData(channel_code))
+
+    def _clear_current_tuning_capture(self) -> None:
+        self._current_tuning_capture = _empty_scope_state("Current Tuning Response")
+        self.ctuning_scope_view.clear()
+        self.ctuning_status_label.setText("Idle")
+        if self._active_trace_target == "current_tuning":
+            self._active_trace_target = None
+
+    def _clear_trace_capture(self) -> None:
+        self._trace_capture = _empty_scope_state("Firmware Trace Scope")
+        self.trace_scope_view.clear()
+        self.trace_status_label.setText("Idle")
+        if self._active_trace_target == "trace":
+            self._active_trace_target = None
+
+    def _apply_current_tuning_parameters(self) -> None:
+        payload = struct.pack(
+            "<4f",
+            float(self.ctuning_ref1_spin.value()),
+            float(self.ctuning_ref2_spin.value()),
+            float(self.ctuning_kp_spin.value()),
+            float(self.ctuning_ki_spin.value()),
+        )
+        self._enqueue_command(
+            Command.CMD_APPLY_ID_SQUARE_TUNING,
+            payload,
+            "Apply Id Square Tuning",
+        )
+
+    def _start_current_tuning(self) -> None:
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None and (
+            last_monitor.enable_run or abs(float(last_monitor.act_speed)) > 1.0
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Current Tuning Safety",
+                "Stop the drive and lock the rotor before starting Id tuning. This mode is intended for a stationary rotor with Iq = 0.",
+            )
+            return
+        self._apply_current_tuning_parameters()
+        self._clear_current_tuning_capture()
+        sample_period_s = self._current_tuning_sample_period_s()
+        decimation = int(self.ctuning_rate_combo.currentData() or 0)
+        self._current_tuning_capture = ScopeCaptureState(
+            title="Id Square-Wave Tuning Response",
+            sample_period_s=sample_period_s,
+            total_samples=TRACE_TOTAL_SAMPLES,
+            series_defs=[
+                dict(TRACE_CHANNEL_META[12]),
+                dict(TRACE_CHANNEL_META[11]),
+                dict(TRACE_CHANNEL_META[13]),
+                dict(TRACE_CHANNEL_META[14]),
+            ],
+            series_data=[[], [], [], []],
+            source_indices=[0, 1, 2, 3],
+            active=True,
+            received_samples=0,
+        )
+        self._active_trace_target = "current_tuning"
+        window_ms = TRACE_TOTAL_SAMPLES * sample_period_s * 1000.0
+        self.ctuning_status_label.setText(
+            f"Arming trace and starting Id square-wave tuning ({window_ms:.1f} ms window)..."
+        )
+        trace_payload = bytes([1, 0, 12, 11, 13, 14, decimation])
+        self._enqueue_command(Command.CMD_APPLY_TRACE, trace_payload, "Start Id Tuning Trace")
+        self._enqueue_command(
+            Command.CMD_START_ID_SQUARE_TUNING,
+            b"",
+            "Start Id Square-Wave Tuning",
+        )
+
+    def _stop_current_tuning(self) -> None:
+        self._enqueue_command(
+            Command.CMD_STOP_ID_SQUARE_TUNING,
+            b"",
+            "Stop Id Square-Wave Tuning",
+        )
+        self._enqueue_command(Command.CMD_APPLY_TRACE, bytes([0, 0, 0, 0, 0, 0, 0]), "Stop Id Tuning Trace")
+        self._current_tuning_capture.active = False
+        self.ctuning_status_label.setText("Stopped")
+        if self._active_trace_target == "current_tuning":
+            self._active_trace_target = None
+
+    def _start_trace_capture(self) -> None:
+        channel_codes = [int(combo.currentData()) for combo in self.trace_channel_combos]
+        payload = bytes(
+            [
+                1,
+                int(self.trace_mode_combo.currentData()),
+                channel_codes[0],
+                channel_codes[1],
+                channel_codes[2],
+                channel_codes[3],
+                int(self.trace_rate_combo.currentData()),
+            ]
+        )
+
+        source_indices = [index for index, channel_code in enumerate(channel_codes) if channel_code != 0]
+        series_defs = [dict(TRACE_CHANNEL_META[channel_codes[index]]) for index in source_indices]
+        if not series_defs:
+            QtWidgets.QMessageBox.warning(self, "Invalid Trace Setup", "Select at least one trace channel.")
+            return
+
+        self._clear_trace_capture()
+        self._trace_capture = ScopeCaptureState(
+            title="Firmware Trace Scope",
+            sample_period_s=self._trace_sample_period_s(),
+            total_samples=TRACE_TOTAL_SAMPLES,
+            series_defs=series_defs,
+            series_data=[[] for _ in series_defs],
+            source_indices=source_indices,
+            active=True,
+            received_samples=0,
+        )
+        self._active_trace_target = "trace"
+        duration_ms = self._trace_capture.total_samples * self._trace_capture.sample_period_s * 1000.0
+        self.trace_status_label.setText(
+            f"Capturing {self.trace_capture_rate_text()} for ~{duration_ms:.1f} ms"
+        )
+        self._enqueue_command(Command.CMD_APPLY_TRACE, payload, "Start Firmware Trace")
+
+    def trace_capture_rate_text(self) -> str:
+        return self.trace_rate_combo.currentText()
+
+    def _stop_trace_capture(self) -> None:
+        self._enqueue_command(Command.CMD_APPLY_TRACE, bytes([0, 0, 0, 0, 0, 0, 0]), "Stop Firmware Trace")
+        self._trace_capture.active = False
+        self.trace_status_label.setText("Stopped")
+        if self._active_trace_target == "trace":
+            self._active_trace_target = None
 
     def _refresh_ports(self) -> None:
         self._port_descriptors = list_serial_ports()
@@ -916,6 +1459,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.connection_state_label.setText(f"Connected: {port_name}")
             self.statusBar().showMessage(f"Connected to {port_name}")
             self._clear_trend_history()
+            self._clear_current_tuning_capture()
+            self._clear_trace_capture()
             self._try_send_next()
         else:
             self.connection_state_label.setText("Disconnected")
@@ -926,11 +1471,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self._latest_monitor_snapshot = None
             self._ack_timer.stop()
             self._clear_trend_history()
+            self._clear_current_tuning_capture()
+            self._clear_trace_capture()
 
     def _handle_worker_log(self, message: str) -> None:
         if message.startswith("TX 02 16 01 1C"):
             return
         if message.startswith("RX 02 16 2A 35"):
+            return
+        if message.startswith("RX 02 16 A3 34"):
+            return
+        if message.startswith("RX 02 16 A4 30"):
             return
         if message.startswith("TX ") and self._last_sent and self._last_sent.quiet:
             return
@@ -1130,6 +1681,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_error_snapshot(snapshot)
             return
 
+        if subcommand == UpdateCode.CMD_CTUNNING_DATA:
+            try:
+                chunk = parse_current_tuning_payload(body)
+            except ValueError as exc:
+                self._append_log(f"Current tuning parse error: {exc}")
+                return
+            self._handle_current_tuning_chunk(chunk)
+            return
+
+        if subcommand == UpdateCode.CMD_TRACE_DATA:
+            try:
+                chunk = parse_trace_payload(body)
+            except ValueError as exc:
+                self._append_log(f"Trace parse error: {exc}")
+                return
+            self._handle_trace_chunk(chunk)
+            return
+
         if subcommand == UpdateCode.CMD_READ_DRIVER_DATA:
             entries = parse_parameter_chunk(body)
             self._update_parameter_table(self.driver_table, entries)
@@ -1159,6 +1728,96 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trend_buffer.clear()
         for panel in self._trend_panels:
             panel.clear()
+
+    def _update_scope_view(
+        self,
+        view: ScopeCaptureView,
+        capture: ScopeCaptureState,
+        status_prefix: str,
+    ) -> None:
+        expected = capture.total_samples or max((len(series) for series in capture.series_data), default=0)
+        status_text = f"{status_prefix}: {capture.received_samples}/{expected} samples"
+        if capture.series_defs and capture.series_data:
+            view.set_capture(
+                capture.title,
+                capture.series_defs,
+                capture.series_data,
+                capture.sample_period_s,
+                status_text,
+            )
+
+    def _handle_current_tuning_chunk(self, chunk) -> None:
+        if not self._current_tuning_capture.series_defs:
+            self._current_tuning_capture = ScopeCaptureState(
+                title="Current Tuning Response",
+                sample_period_s=1.0 / CURRENT_LOOP_FREQUENCY_HZ,
+                total_samples=CURRENT_TUNING_TOTAL_SAMPLES,
+                series_defs=[
+                    {"label": "Reference", "unit": "A", "color": "#ff7f0e"},
+                    {"label": "Feedback", "unit": "A", "color": "#1f77b4"},
+                ],
+                series_data=[[], []],
+                source_indices=[0, 1],
+                active=True,
+                received_samples=0,
+            )
+
+        if chunk.chunk_index == 0:
+            self._current_tuning_capture.series_data = [[], []]
+            self._current_tuning_capture.received_samples = 0
+
+        self._current_tuning_capture.series_data[0].extend(chunk.reference)
+        self._current_tuning_capture.series_data[1].extend(chunk.feedback)
+        self._current_tuning_capture.received_samples = len(self._current_tuning_capture.series_data[0])
+        self._current_tuning_capture.active = self._current_tuning_capture.received_samples < self._current_tuning_capture.total_samples
+        if self._current_tuning_capture.active:
+            self.ctuning_status_label.setText(
+                f"Received {self._current_tuning_capture.received_samples}/{self._current_tuning_capture.total_samples} samples"
+            )
+        else:
+            self.ctuning_status_label.setText("Capture complete")
+        self._update_scope_view(self.ctuning_scope_view, self._current_tuning_capture, "Current tuning")
+
+    def _handle_trace_chunk(self, chunk: TraceChunk) -> None:
+        capture_kind = self._active_trace_target
+        if capture_kind == "current_tuning":
+            capture = self._current_tuning_capture
+            view = self.ctuning_scope_view
+            status_label = self.ctuning_status_label
+        else:
+            capture = self._trace_capture
+            view = self.trace_scope_view
+            status_label = self.trace_status_label
+
+        if not capture.series_defs:
+            status_label.setText("Trace chunk received without an active trace setup")
+            return
+
+        source_indices = capture.source_indices or list(range(len(capture.series_defs)))
+        active_series_count = len(source_indices)
+        if chunk.chunk_index == 0:
+            capture.series_data = [[] for _ in range(active_series_count)]
+            capture.received_samples = 0
+
+        for series_index, source_index in enumerate(source_indices):
+            capture.series_data[series_index].extend(chunk.channels[source_index])
+        capture.received_samples = len(capture.series_data[0])
+        capture.active = capture.received_samples < capture.total_samples
+
+        continuous_mode = False
+        if capture_kind == "trace":
+            continuous_mode = int(self.trace_mode_combo.currentData()) == 1
+
+        if capture.active or continuous_mode:
+            status_label.setText(
+                f"Received {capture.received_samples}/{capture.total_samples} samples"
+            )
+        else:
+            status_label.setText("Capture complete")
+            if capture_kind == "current_tuning":
+                self._active_trace_target = None
+        prefix = "Id tuning" if capture_kind == "current_tuning" else "Trace"
+        self._update_scope_view(view, capture, prefix)
 
     def _append_snapshot_to_trend_buffer(self, snapshot) -> None:
         self._trend_buffer.append_sample(

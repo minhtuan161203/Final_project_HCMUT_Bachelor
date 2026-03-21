@@ -3,19 +3,19 @@
         {
             "name": "Firmware_final_project",
             "includePath": [
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Inc",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Drivers\\STM32F4xx_HAL_Driver\\Inc",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Drivers\\STM32F4xx_HAL_Driver\\Inc\\Legacy",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Inc",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Inc",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Drivers\\CMSIS\\Device\\ST\\STM32F4xx\\Include",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Drivers\\CMSIS\\Include",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\MDK-ARM\\Library",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\MDK-ARM",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Src",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Drivers\\STM32F4xx_HAL_Driver\\Src",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Src",
-                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Src"
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Inc",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Drivers\\STM32F4xx_HAL_Driver\\Inc",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Drivers\\STM32F4xx_HAL_Driver\\Inc\\Legacy",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Inc",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Inc",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Drivers\\CMSIS\\Device\\ST\\STM32F4xx\\Include",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Drivers\\CMSIS\\Include",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\MDK-ARM\\Library",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\MDK-ARM",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Src",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Drivers\\STM32F4xx_HAL_Driver\\Src",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Src",
+                "c:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\Firmware_final_project\\Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Src"
             ],
             "defines": [
                 "USE_HAL_DRIVER",

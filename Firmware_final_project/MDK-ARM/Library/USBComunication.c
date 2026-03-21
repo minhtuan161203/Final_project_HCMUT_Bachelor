@@ -47,6 +47,12 @@ extern volatile uint8_t gRunMode;
 extern volatile float gVfFrequencyHz;
 extern volatile float gVfVoltageV;
 extern uint16_t FaultCode;
+extern float gTracePosError;
+extern float RecordTable1[TRACE_DATA_LENGTH * 4u];
+extern TraceData Trace_Data;
+extern IdSquareTuning_t IdSquareTuning;
+
+static void USB_StartServoSequence(void);
 
 static uint8_t USB_RingPush(uint8_t byte)
 {
@@ -270,8 +276,61 @@ static void USB_SendErrorPacket(USB_Comunication_t *USB_Comunicate)
 	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fIabc[2], sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 
-	SendData(MTR_CODE_ERROR, offset, USB_Comunicate->TransmitData);
+SendData(MTR_CODE_ERROR, offset, USB_Comunicate->TransmitData);
 	USB_Comunicate->SendError = false;
+}
+
+static void USB_SendTraceChunk(USB_Comunication_t *USB_Comunicate)
+{
+	if (Trace_Data.Finish == 0u)
+	{
+		return;
+	}
+
+	if (Trace_Data.u16Cnt2 < (TRACE_DATA_LENGTH / 10u))
+	{
+		uint16_t sample_index;
+		uint8_t offset = 0u;
+
+		memcpy(&USB_Comunicate->TransmitData[offset], &Trace_Data.u16Cnt2, sizeof(uint16_t));
+		offset = (uint8_t)(offset + sizeof(uint16_t));
+
+		for (sample_index = (uint16_t)(Trace_Data.u16Cnt2 * 10u);
+			sample_index < (uint16_t)((Trace_Data.u16Cnt2 + 1u) * 10u);
+			sample_index++)
+		{
+			uint16_t record_index = (uint16_t)(sample_index * 4u);
+			memcpy(&USB_Comunicate->TransmitData[offset], &RecordTable1[record_index + 0u], sizeof(float));
+			offset = (uint8_t)(offset + sizeof(float));
+			memcpy(&USB_Comunicate->TransmitData[offset], &RecordTable1[record_index + 1u], sizeof(float));
+			offset = (uint8_t)(offset + sizeof(float));
+			memcpy(&USB_Comunicate->TransmitData[offset], &RecordTable1[record_index + 2u], sizeof(float));
+			offset = (uint8_t)(offset + sizeof(float));
+			memcpy(&USB_Comunicate->TransmitData[offset], &RecordTable1[record_index + 3u], sizeof(float));
+			offset = (uint8_t)(offset + sizeof(float));
+		}
+
+		SendData(CMD_TRACE_DATA, offset, USB_Comunicate->TransmitData);
+		Trace_Data.u16Cnt2++;
+		return;
+	}
+
+	Trace_Data.u16Cnt2 = 0u;
+	Trace_Data.Finish = 0u;
+	if (Trace_Data.Mode == 0u)
+	{
+		Trace_Data.Enable = 0u;
+		USB_Comunicate->ReadTraceData = 0u;
+		if (USB_Comunicate->PriorityFlag == 1u)
+		{
+			USB_Comunicate->PriorityFlag = 0u;
+		}
+	}
+	else
+	{
+		Trace_Data.Counter = 0u;
+		Trace_Data.u8CntSample = Trace_Data.u8MaxCntSample;
+	}
 }
 
 static void USB_SendParameterChunk(UpdateDataCmd_e code, const float *source, USB_Comunication_t *USB_Comunicate)
@@ -349,6 +408,153 @@ static void USB_HandleWriteParameterPairs(float *target, const uint8_t *payload,
 	}
 }
 
+static float *USB_ResolveTraceChannelPointer(uint8_t channel_code)
+{
+	switch (channel_code)
+	{
+		case 1u:
+			return (float *)&gTargetSpeedRpm;
+		case 2u:
+			return &Parameter.fActSpeed;
+		case 3u:
+			return &gIqRefA;
+		case 4u:
+			return &Parameter.fIdq[1];
+		case 5u:
+			return &Parameter.fIabc[0];
+		case 6u:
+			return &Parameter.fIabc[1];
+		case 7u:
+			return &Parameter.fIabc[2];
+		case 8u:
+			return &Parameter.fVdc;
+		case 9u:
+			return &Parameter.fTemparature;
+		case 10u:
+			return &gTracePosError;
+		case 11u:
+			return &Parameter.fIdq[0];
+		case 12u:
+			return &gIdRefA;
+		case 13u:
+			return &Parameter.fVdq[0];
+		case 14u:
+			return &Parameter.fVdq[1];
+		default:
+			return 0;
+	}
+}
+
+static void USB_ResetTraceCaptureState(void)
+{
+	Trace_Data.Counter = 0u;
+	Trace_Data.u16Cnt2 = 0u;
+	Trace_Data.Finish = 0u;
+	Trace_Data.u8CntSample = Trace_Data.u8MaxCntSample;
+}
+
+static void USB_HandleTraceSetup(USB_Comunication_t *USB_Comunicate, const uint8_t *payload, uint8_t payload_length)
+{
+	if (payload_length < 7u)
+	{
+		return;
+	}
+
+	if (payload[0] == 0u)
+	{
+		Trace_Data.Enable = 0u;
+		Trace_Data.Mode = 0u;
+		Trace_Data.Finish = 0u;
+		Trace_Data.Counter = 0u;
+		Trace_Data.u16Cnt2 = 0u;
+		Trace_Data.u8CntSample = 0u;
+		Trace_Data.u8MaxCntSample = 0u;
+		Trace_Data.Data1 = 0;
+		Trace_Data.Data2 = 0;
+		Trace_Data.Data3 = 0;
+		Trace_Data.Data4 = 0;
+		USB_Comunicate->ReadTraceData = 0u;
+		if (USB_Comunicate->PriorityFlag == 1u)
+		{
+			USB_Comunicate->PriorityFlag = 0u;
+		}
+		return;
+	}
+
+	Trace_Data.Enable = 1u;
+	Trace_Data.Mode = payload[1];
+	Trace_Data.u8MaxCntSample = payload[6];
+	Trace_Data.Data1 = USB_ResolveTraceChannelPointer(payload[2]);
+	Trace_Data.Data2 = USB_ResolveTraceChannelPointer(payload[3]);
+	Trace_Data.Data3 = USB_ResolveTraceChannelPointer(payload[4]);
+	Trace_Data.Data4 = USB_ResolveTraceChannelPointer(payload[5]);
+	USB_ResetTraceCaptureState();
+	USB_Comunicate->ReadTraceData = 1u;
+	USB_Comunicate->PriorityFlag = 1u;
+}
+
+static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t payload_length)
+{
+	float amplitude = 0.0f;
+	float frequency = 10.0f;
+	float current_kp;
+	float current_ki;
+
+	if (payload_length < 16u)
+	{
+		return;
+	}
+
+	memcpy(&amplitude, &payload[0], sizeof(float));
+	memcpy(&frequency, &payload[4], sizeof(float));
+	memcpy(&current_kp, &payload[8], sizeof(float));
+	memcpy(&current_ki, &payload[12], sizeof(float));
+
+	IdSquareTuning.fAmplitudeCmd = amplitude;
+	IdSquareTuning.fFrequencyCmd = frequency;
+	IdSquareTuning.fPhase = 0.0f;
+
+	MotorParameter[MOTOR_CURRENT_P_GAIN] = current_kp;
+	MotorParameter[MOTOR_CURRENT_I_GAIN] = current_ki;
+	UpdateMotorParameter(MotorParameter);
+}
+
+static void USB_HandleIdSquareTuningStart(void)
+{
+	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
+	{
+		IdSquareTuning.Enable = 0u;
+		IdSquareTuning.fPhase = 0.0f;
+		return;
+	}
+
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	IdSquareTuning.Enable = 1u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	USB_StartServoSequence();
+	if (Trace_Data.Enable != 0u)
+	{
+		USB_ResetTraceCaptureState();
+	}
+}
+
+static void USB_HandleIdSquareTuningStop(void)
+{
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	STM_NextState(&StateMachine, STOP);
+}
+
 static void USB_StartServoSequence(void)
 {
 	Reset_CurrentSensor(&Current_Sensor);
@@ -362,6 +568,9 @@ static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_lengt
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	ResetControl_V_over_F();
 
 	if (payload_length >= sizeof(float))
@@ -440,6 +649,9 @@ static void USB_HandleOpenLoopVfCommand(const uint8_t *payload, uint8_t payload_
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	gRunMode = RUN_MODE_OPEN_LOOP_VF;
 	ResetControl_V_over_F();
 }
@@ -451,6 +663,9 @@ static void USB_HandleFaultAck(void)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	ResetControl_V_over_F();
 	STM_FaultProcessing(&StateMachine, 0u, 0u);
 	STM_NextState(&StateMachine, IDLE);
@@ -461,6 +676,9 @@ static void USB_HandleServoOn(void)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	ResetControl_V_over_F();
 	USB_StartServoSequence();
 }
@@ -471,6 +689,9 @@ static void USB_HandleServoOff(void)
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
 	ResetControl_V_over_F();
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
@@ -483,6 +704,9 @@ static void USB_HandleOpenLoopStop(void)
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
 	ResetControl_V_over_F();
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
@@ -529,6 +753,26 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 		case CMD_STOP_OPEN_LOOP_VF:
 			USB_SendAckPacket(ACK, command, payload, payload_length);
 			USB_HandleOpenLoopStop();
+			break;
+
+		case CMD_APPLY_TRACE:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleTraceSetup(USB_Comunicate, payload, payload_length);
+			break;
+
+		case CMD_APPLY_ID_SQUARE_TUNING:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleIdSquareTuningConfig(payload, payload_length);
+			break;
+
+		case CMD_START_ID_SQUARE_TUNING:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleIdSquareTuningStart();
+			break;
+
+		case CMD_STOP_ID_SQUARE_TUNING:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleIdSquareTuningStop();
 			break;
 
 		case CMD_UPDATE_MONITOR:
@@ -698,6 +942,11 @@ int16_t USB_TransmitData(USB_Comunication_t *USB_Comunicate)
 			USB_Comunicate->TotalLength = 0u;
 			USB_Comunicate->PriorityFlag = 0u;
 		}
+	}
+
+	if ((USB_Comunicate->ReadTraceData == 1u) && (USB_Comunicate->PriorityFlag == 1u))
+	{
+		USB_SendTraceChunk(USB_Comunicate);
 	}
 
 	if (USB_Comunicate->ReadMotionMonitorData == 1u)

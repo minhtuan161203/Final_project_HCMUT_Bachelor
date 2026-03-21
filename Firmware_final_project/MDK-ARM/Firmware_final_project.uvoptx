@@ -178,32 +178,62 @@
         <Ww>
           <count>5</count>
           <WinNumber>1</WinNumber>
-          <ItemText>system_on</ItemText>
+          <ItemText>MotorParameter</ItemText>
         </Ww>
         <Ww>
           <count>6</count>
           <WinNumber>1</WinNumber>
-          <ItemText>MotorParameter</ItemText>
+          <ItemText>StateMachine.bState</ItemText>
         </Ww>
         <Ww>
           <count>7</count>
           <WinNumber>1</WinNumber>
-          <ItemText>StateMachine.bState</ItemText>
+          <ItemText>gRawCurrentU</ItemText>
         </Ww>
         <Ww>
           <count>8</count>
           <WinNumber>1</WinNumber>
-          <ItemText>gRawCurrentU</ItemText>
+          <ItemText>gRawCurrentV</ItemText>
         </Ww>
         <Ww>
           <count>9</count>
           <WinNumber>1</WinNumber>
-          <ItemText>gRawCurrentV</ItemText>
+          <ItemText>gRawVdc</ItemText>
         </Ww>
         <Ww>
           <count>10</count>
           <WinNumber>1</WinNumber>
-          <ItemText>gRawVdc</ItemText>
+          <ItemText>gRunMode</ItemText>
+        </Ww>
+        <Ww>
+          <count>11</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>IdSquareTuning.Enable</ItemText>
+        </Ww>
+        <Ww>
+          <count>12</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>IdSquareTuning.fAmplitudeCmd</ItemText>
+        </Ww>
+        <Ww>
+          <count>13</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>IdSquareTuning.fFrequencyCmd</ItemText>
+        </Ww>
+        <Ww>
+          <count>14</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>IdSquareTuning.fAmplitudeApplied</ItemText>
+        </Ww>
+        <Ww>
+          <count>15</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>IdSquareTuning.fFrequencyApplied</ItemText>
+        </Ww>
+        <Ww>
+          <count>16</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>IdSquareTuning.fVoltageLimitApplied</ItemText>
         </Ww>
       </WatchWindow1>
       <Tracepoint>
