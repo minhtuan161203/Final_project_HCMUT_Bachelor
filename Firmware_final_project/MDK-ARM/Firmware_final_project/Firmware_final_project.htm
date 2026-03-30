@@ -3,7 +3,7 @@
 <title>Static Call Graph - [Firmware_final_project\Firmware_final_project.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image Firmware_final_project\Firmware_final_project.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sun Mar 22 00:32:27 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Mon Mar 30 12:52:43 2026
 <BR><P>
 <H3>Maximum Stack Usage =        712 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -774,8 +774,10 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[146]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_WriteRaw
 </UL>
 
-<P><STRONG><a name="[c3]"></a>CalibrateCurrentSensor</STRONG> (Thumb, 72 bytes, Stack size 0 bytes, parameter.o(i.CalibrateCurrentSensor))
-<BR><BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
+<P><STRONG><a name="[c2]"></a>CalibrateCurrentSensor</STRONG> (Thumb, 158 bytes, Stack size 20 bytes, parameter.o(i.CalibrateCurrentSensor))
+<BR><BR>[Stack]<UL><LI>Max Depth = 20<LI>Call Chain = CalibrateCurrentSensor
+</UL>
+<BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
 <P><STRONG><a name="[bf]"></a>CheckCurrentPhaseFault</STRONG> (Thumb, 54 bytes, Stack size 0 bytes, parameter.o(i.CheckCurrentPhaseFault))
@@ -856,7 +858,7 @@ Global Symbols
 <LI><a href="#[c4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControlLoops
 </UL>
 
-<P><STRONG><a name="[c1]"></a>GetParameter</STRONG> (Thumb, 1224 bytes, Stack size 20 bytes, parameter.o(i.GetParameter))
+<P><STRONG><a name="[c0]"></a>GetParameter</STRONG> (Thumb, 1224 bytes, Stack size 20 bytes, parameter.o(i.GetParameter))
 <BR><BR>[Stack]<UL><LI>Max Depth = 20<LI>Call Chain = GetParameter
 </UL>
 <BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
@@ -893,23 +895,23 @@ Global Symbols
 <LI><a href="#[10c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DevConnect
 </UL>
 
-<P><STRONG><a name="[bb]"></a>HAL_GPIO_EXTI_Callback</STRONG> (Thumb, 292 bytes, Stack size 24 bytes, main.o(i.HAL_GPIO_EXTI_Callback))
+<P><STRONG><a name="[bb]"></a>HAL_GPIO_EXTI_Callback</STRONG> (Thumb, 304 bytes, Stack size 24 bytes, main.o(i.HAL_GPIO_EXTI_Callback))
 <BR><BR>[Stack]<UL><LI>Max Depth = 116<LI>Call Chain = HAL_GPIO_EXTI_Callback &rArr; RunOpenLoopVf &rArr; Control_V_over_F &rArr; __hardfp_sinf &rArr; __mathlib_rredf2
 </UL>
 <BR>[Calls]<UL><LI><a href="#[c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;STM_NextState
-<LI><a href="#[c1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetParameter
+<LI><a href="#[c0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetParameter
 <LI><a href="#[b0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GeneratePWM
 <LI><a href="#[bd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;CheckVbusFault
 <LI><a href="#[be]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;CheckTempFault
 <LI><a href="#[bf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;CheckCurrentPhaseFault
-<LI><a href="#[c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;CalibrateCurrentSensor
+<LI><a href="#[c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;CalibrateCurrentSensor
 <LI><a href="#[c8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateTraceCapture
 <LI><a href="#[c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredSpeedAndTheta
-<LI><a href="#[c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
+<LI><a href="#[c1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
 <LI><a href="#[c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunOpenLoopVf
 <LI><a href="#[c7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 <LI><a href="#[c4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControlLoops
-<LI><a href="#[c0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
+<LI><a href="#[c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
 <LI><a href="#[bc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReadFastProtectionFeedback
 </UL>
 <BR>[Called By]<UL><LI><a href="#[b3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_IRQHandler
@@ -1453,7 +1455,7 @@ Global Symbols
 <LI><a href="#[170]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
 
-<P><STRONG><a name="[181]"></a>Reset_CurrentSensor</STRONG> (Thumb, 14 bytes, Stack size 0 bytes, parameter.o(i.Reset_CurrentSensor))
+<P><STRONG><a name="[181]"></a>Reset_CurrentSensor</STRONG> (Thumb, 16 bytes, Stack size 0 bytes, parameter.o(i.Reset_CurrentSensor))
 <BR><BR>[Called By]<UL><LI><a href="#[8d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
 <LI><a href="#[174]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_StartServoSequence
 </UL>
@@ -1461,7 +1463,7 @@ Global Symbols
 <P><STRONG><a name="[140]"></a>STM_FaultProcessing</STRONG> (Thumb, 40 bytes, Stack size 0 bytes, statemachine.o(i.STM_FaultProcessing))
 <BR><BR>[Calls]<UL><LI><a href="#[c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;STM_NextState
 </UL>
-<BR>[Called By]<UL><LI><a href="#[c0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
+<BR>[Called By]<UL><LI><a href="#[c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
 <LI><a href="#[177]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandleFaultAck
 </UL>
 
@@ -1499,7 +1501,7 @@ Global Symbols
 <BR>[Calls]<UL><LI><a href="#[11c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_TIMEx_PWMN_Stop
 <LI><a href="#[12a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_TIM_PWM_Stop
 </UL>
-<BR>[Called By]<UL><LI><a href="#[c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
+<BR>[Called By]<UL><LI><a href="#[c1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
 </UL>
 
 <P><STRONG><a name="[147]"></a>SwitchOnPWM</STRONG> (Thumb, 54 bytes, Stack size 8 bytes, pwm.o(i.SwitchOnPWM))
@@ -1508,7 +1510,7 @@ Global Symbols
 <BR>[Calls]<UL><LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_TIMEx_PWMN_Start
 <LI><a href="#[128]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_TIM_PWM_Start
 </UL>
-<BR>[Called By]<UL><LI><a href="#[c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
+<BR>[Called By]<UL><LI><a href="#[c1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
 </UL>
 
 <P><STRONG><a name="[2c]"></a>SysTick_Handler</STRONG> (Thumb, 14 bytes, Stack size 8 bytes, stm32f4xx_it.o(i.SysTick_Handler))
@@ -2368,11 +2370,11 @@ Local Symbols
 <BR><BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[c0]"></a>ReportFault</STRONG> (Thumb, 76 bytes, Stack size 16 bytes, main.o(i.ReportFault))
+<P><STRONG><a name="[c3]"></a>ReportFault</STRONG> (Thumb, 76 bytes, Stack size 16 bytes, main.o(i.ReportFault))
 <BR><BR>[Stack]<UL><LI>Max Depth = 48<LI>Call Chain = ReportFault &rArr; SetPwmEnabled &rArr; SwitchOnPWM &rArr; HAL_TIMEx_PWMN_Start &rArr; TIM_CCxNChannelCmd
 </UL>
 <BR>[Calls]<UL><LI><a href="#[140]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;STM_FaultProcessing
-<LI><a href="#[c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
+<LI><a href="#[c1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SetPwmEnabled
 <LI><a href="#[c4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControlLoops
 </UL>
 <BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
@@ -2385,7 +2387,7 @@ Local Symbols
 <LI><a href="#[b0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GeneratePWM
 </UL>
 <BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
-<LI><a href="#[c0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
+<LI><a href="#[c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
 </UL>
 
 <P><STRONG><a name="[c7]"></a>RunFocLoop</STRONG> (Thumb, 694 bytes, Stack size 56 bytes, main.o(i.RunFocLoop))
@@ -2412,14 +2414,14 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[c2]"></a>SetPwmEnabled</STRONG> (Thumb, 34 bytes, Stack size 8 bytes, main.o(i.SetPwmEnabled))
+<P><STRONG><a name="[c1]"></a>SetPwmEnabled</STRONG> (Thumb, 34 bytes, Stack size 8 bytes, main.o(i.SetPwmEnabled))
 <BR><BR>[Stack]<UL><LI>Max Depth = 32<LI>Call Chain = SetPwmEnabled &rArr; SwitchOnPWM &rArr; HAL_TIMEx_PWMN_Start &rArr; TIM_CCxNChannelCmd
 </UL>
 <BR>[Calls]<UL><LI><a href="#[147]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SwitchOnPWM
 <LI><a href="#[148]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SwitchOffPWM
 </UL>
 <BR>[Called By]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
-<LI><a href="#[c0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
+<LI><a href="#[c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
 </UL>
 
 <P><STRONG><a name="[c6]"></a>UpdateMeasuredSpeedAndTheta</STRONG> (Thumb, 140 bytes, Stack size 0 bytes, main.o(i.UpdateMeasuredSpeedAndTheta))

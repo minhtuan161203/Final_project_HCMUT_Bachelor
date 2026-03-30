@@ -24,6 +24,8 @@ from protocol import (
     FrameStreamParser,
     build_command_frame,
     build_parameter_write_chunks,
+    decode_fault_flags,
+    format_fault_text,
     parse_current_tuning_payload,
     parse_error_payload,
     parse_monitor_payload,
@@ -656,7 +658,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("ASD04 Driver GUI (Python)")
-        self.resize(1280, 840)
+        self.resize(1220, 800)
 
         self._worker = SerialWorker(FrameStreamParser(), self)
         self._connected = False
@@ -703,7 +705,7 @@ class MainWindow(QtWidgets.QMainWindow):
         content_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self)
         content_splitter.addWidget(self._build_monitor_group())
         content_splitter.addWidget(self._build_quick_command_group())
-        content_splitter.setStretchFactor(0, 3)
+        content_splitter.setStretchFactor(0, 5)
         content_splitter.setStretchFactor(1, 2)
         main_layout.addWidget(content_splitter, 1)
 
@@ -767,16 +769,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_monitor_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Monitor")
         layout = QtWidgets.QVBoxLayout(box)
-        tabs = QtWidgets.QTabWidget()
         self.monitor_labels: dict[str, QtWidgets.QLabel] = {}
 
-        basic_fields = [
+        status_fields = [
             ("enable_run", "Enable Run"),
             ("run_mode", "Run Mode"),
             ("fault_occurred", "Fault"),
             ("vdc", "Vdc"),
             ("temperature", "Temperature"),
             ("motor_power", "Motor Power"),
+        ]
+        motion_fields = [
             ("cmd_speed", "Cmd Speed"),
             ("act_speed", "Act Speed"),
             ("speed_error", "Speed Error"),
@@ -784,7 +787,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("act_position", "Act Position"),
             ("position_error", "Position Error"),
         ]
-        electrical_fields = [
+        current_fields = [
             ("id_ref", "Id Ref"),
             ("iq_ref", "Iq Ref"),
             ("phase_u", "Iu"),
@@ -792,21 +795,40 @@ class MainWindow(QtWidgets.QMainWindow):
             ("phase_w", "Iw"),
             ("id_current", "Id"),
             ("iq_current", "Iq"),
+        ]
+        voltage_fields = [
             ("vd", "Vd"),
             ("vq", "Vq"),
             ("v_phase_u", "Vu"),
             ("v_phase_v", "Vv"),
             ("v_phase_w", "Vw"),
-        ]
-        debug_fields = [
             ("theta", "Theta"),
             ("vf_frequency", "V/F Freq"),
             ("vf_voltage", "V/F Volt"),
         ]
 
-        tabs.addTab(self._build_monitor_fields_widget(basic_fields), "Basic")
-        tabs.addTab(self._build_monitor_fields_widget(electrical_fields), "Electrical")
-        tabs.addTab(self._build_monitor_fields_widget(debug_fields), "Debug")
+        dashboard_widget = QtWidgets.QWidget()
+        dashboard_layout = QtWidgets.QGridLayout(dashboard_widget)
+        dashboard_layout.setContentsMargins(0, 0, 0, 0)
+        dashboard_layout.setHorizontalSpacing(10)
+        dashboard_layout.setVerticalSpacing(10)
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Status", status_fields, columns=2), 0, 0
+        )
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Motion", motion_fields, columns=2), 0, 1
+        )
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Currents", current_fields, columns=2), 1, 0
+        )
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Voltage && Debug", voltage_fields, columns=2),
+            1,
+            1,
+        )
+        dashboard_layout.setColumnStretch(0, 1)
+        dashboard_layout.setColumnStretch(1, 1)
+        dashboard_layout.setRowStretch(2, 1)
 
         trend_note = QtWidgets.QLabel(
             "Full-size trend charts are available in the separate Trends window."
@@ -817,7 +839,7 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: self._show_auxiliary_window(self._trend_window)
         )
 
-        layout.addWidget(tabs)
+        layout.addWidget(dashboard_widget, 1)
         layout.addWidget(trend_note)
         layout.addWidget(open_trends_inline_button, 0, QtCore.Qt.AlignmentFlag.AlignRight)
         return box
@@ -1027,25 +1049,35 @@ class MainWindow(QtWidgets.QMainWindow):
         return widget
 
     def _build_quick_command_group(self) -> QtWidgets.QGroupBox:
-        box = QtWidgets.QGroupBox("Quick Commands")
+        box = QtWidgets.QGroupBox("Controls")
         layout = QtWidgets.QVBoxLayout(box)
 
-        button_grid = QtWidgets.QGridLayout()
         self.servo_on_button = QtWidgets.QPushButton("Servo ON")
         self.servo_off_button = QtWidgets.QPushButton("Servo OFF")
         self.ack_fault_button = QtWidgets.QPushButton("ACK Fault")
         self.save_flash_button = QtWidgets.QPushButton("Write To Flash")
         self.refresh_monitor_button = QtWidgets.QPushButton("Refresh Monitor")
 
+        tabs = QtWidgets.QTabWidget()
+
+        drive_tab = QtWidgets.QWidget()
+        drive_layout = QtWidgets.QVBoxLayout(drive_tab)
+        button_grid = QtWidgets.QGridLayout()
         button_grid.addWidget(self.servo_on_button, 0, 0)
         button_grid.addWidget(self.servo_off_button, 0, 1)
         button_grid.addWidget(self.ack_fault_button, 0, 2)
         button_grid.addWidget(self.save_flash_button, 0, 3)
         button_grid.addWidget(self.refresh_monitor_button, 1, 0, 1, 2)
-        layout.addLayout(button_grid)
+        drive_layout.addLayout(button_grid)
+        drive_hint = QtWidgets.QLabel(
+            "Parameters, trends, tuning/scope, and communication log are available from the top toolbar."
+        )
+        drive_hint.setWordWrap(True)
+        drive_layout.addWidget(drive_hint)
+        drive_layout.addStretch(1)
 
-        vf_group = QtWidgets.QGroupBox("Open Loop V/F Test")
-        vf_layout = QtWidgets.QGridLayout(vf_group)
+        vf_tab = QtWidgets.QWidget()
+        vf_layout = QtWidgets.QGridLayout(vf_tab)
         self.vf_frequency_spin = QtWidgets.QDoubleSpinBox()
         self.vf_frequency_spin.setRange(0.0, 50.0)
         self.vf_frequency_spin.setDecimals(2)
@@ -1069,60 +1101,36 @@ class MainWindow(QtWidgets.QMainWindow):
         vf_layout.addWidget(self.start_vf_button, 2, 0)
         vf_layout.addWidget(self.stop_vf_button, 2, 1)
         vf_layout.addWidget(vf_note, 3, 0, 1, 2)
-        layout.addWidget(vf_group)
+        vf_layout.setRowStretch(4, 1)
 
-        raw_group = QtWidgets.QGroupBox("Raw Command")
-        raw_layout = QtWidgets.QGridLayout(raw_group)
-        self.command_combo = QtWidgets.QComboBox()
-        for command in Command:
-            self.command_combo.addItem(f"0x{command.value:02X} {command.name}", command.value)
-        self.payload_edit = QtWidgets.QLineEdit()
-        self.payload_edit.setPlaceholderText("Hex payload, example: 10 00 00 80 3F")
-        self.send_raw_button = QtWidgets.QPushButton("Send Raw")
-        raw_layout.addWidget(QtWidgets.QLabel("Command"), 0, 0)
-        raw_layout.addWidget(self.command_combo, 0, 1)
-        raw_layout.addWidget(QtWidgets.QLabel("Payload"), 1, 0)
-        raw_layout.addWidget(self.payload_edit, 1, 1)
-        raw_layout.addWidget(self.send_raw_button, 1, 2)
-        layout.addWidget(raw_group)
-
-        info_group = QtWidgets.QGroupBox("Notes")
-        info_layout = QtWidgets.QVBoxLayout(info_group)
-        info_label = QtWidgets.QLabel(
-            "Basic GUI features:\n"
-            "- COM connect / disconnect\n"
-            "- monitor polling\n"
-            "- servo on / off and fault ack\n"
-            "- parameters and communication log are available from the top toolbar\n"
-            "- raw command testing\n"
-            "- SCADA-style current, voltage, and speed trend charts"
-        )
-        info_label.setWordWrap(True)
-        info_layout.addWidget(info_label)
-        layout.addWidget(info_group)
-
-        layout.addStretch(1)
+        tabs.addTab(drive_tab, "Drive")
+        tabs.addTab(vf_tab, "Open Loop V/F")
+        layout.addWidget(tabs)
         return box
 
-    def _build_monitor_fields_widget(
-        self, field_names: list[tuple[str, str]], columns: int = 2
-    ) -> QtWidgets.QWidget:
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QGridLayout(widget)
+    def _build_monitor_dashboard_section(
+        self, title: str, field_names: list[tuple[str, str]], columns: int = 2
+    ) -> QtWidgets.QGroupBox:
+        box = QtWidgets.QGroupBox(title)
+        layout = QtWidgets.QGridLayout(box)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
         for index, (key, label) in enumerate(field_names):
             value_label = QtWidgets.QLabel("-")
+            value_label.setMinimumWidth(110)
             value_label.setTextInteractionFlags(
                 QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
             )
             self.monitor_labels[key] = value_label
+            if key == "fault_occurred":
+                value_label.setWordWrap(True)
             row = index // columns
             col = (index % columns) * 2
             layout.addWidget(QtWidgets.QLabel(label), row, col)
             layout.addWidget(value_label, row, col + 1)
         for column in range(columns):
             layout.setColumnStretch(column * 2 + 1, 1)
-        layout.setRowStretch((len(field_names) // columns) + 1, 1)
-        return widget
+        return box
 
     def _build_parameter_tabs(self) -> QtWidgets.QTabWidget:
         tabs = QtWidgets.QTabWidget()
@@ -1234,7 +1242,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.read_motor_button.clicked.connect(self._read_motor_parameters)
         self.write_driver_button.clicked.connect(self._write_driver_parameters)
         self.write_motor_button.clicked.connect(self._write_motor_parameters)
-        self.send_raw_button.clicked.connect(self._send_raw_command)
         self.clear_log_button.clicked.connect(self.log_edit.clear)
         self.apply_ctuning_button.clicked.connect(self._apply_current_tuning_parameters)
         self.start_ctuning_button.clicked.connect(self._start_current_tuning)
@@ -1473,6 +1480,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._clear_trend_history()
             self._clear_current_tuning_capture()
             self._clear_trace_capture()
+            self._clear_monitor_display()
 
     def _handle_worker_log(self, message: str) -> None:
         if message.startswith("TX 02 16 01 1C"):
@@ -1615,24 +1623,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"{self.vf_voltage_spin.value():.2f} V)"
             ),
         )
-
-    def _send_raw_command(self) -> None:
-        command_value = int(self.command_combo.currentData())
-        payload_text = self.payload_edit.text().strip()
-        try:
-            payload = self._parse_hex_payload(payload_text)
-        except ValueError as exc:
-            QtWidgets.QMessageBox.warning(self, "Invalid Payload", str(exc))
-            return
-        self._enqueue_command(command_value, payload, "Raw Command")
-
-    def _parse_hex_payload(self, text: str) -> bytes:
-        if not text:
-            return b""
-        cleaned = text.replace(",", " ")
-        if " " not in cleaned and len(cleaned) % 2 == 0:
-            return bytes.fromhex(cleaned)
-        return bytes(int(token, 16) for token in cleaned.split())
 
     def _handle_frame(self, frame: ParsedFrame) -> None:
         if frame.code == ACK_NOERROR:
@@ -1869,10 +1859,36 @@ class MainWindow(QtWidgets.QMainWindow):
             return "FOC"
         return f"Unknown ({run_mode})"
 
+    def _clear_monitor_display(self) -> None:
+        for label in self.monitor_labels.values():
+            label.setText("-")
+            label.setToolTip("")
+            label.setStyleSheet("")
+        self.monitor_labels["enable_run"].setText("OFF")
+        self.monitor_labels["run_mode"].setText("Idle")
+        self.monitor_labels["fault_occurred"].setText("OK")
+        self.monitor_labels["fault_occurred"].setStyleSheet(
+            "color: #6aa84f; font-weight: 600;"
+        )
+
+    def _fault_summary_text(self, fault_code: int) -> str:
+        labels = decode_fault_flags(int(fault_code))
+        return ", ".join(labels)
+
+    def _set_fault_label(self, fault_code: int) -> None:
+        label = self.monitor_labels["fault_occurred"]
+        summary = self._fault_summary_text(fault_code)
+        label.setText(summary)
+        label.setToolTip(format_fault_text(fault_code))
+        if fault_code == 0:
+            label.setStyleSheet("color: #6aa84f; font-weight: 600;")
+        else:
+            label.setStyleSheet("color: #d9534f; font-weight: 600;")
+
     def _update_monitor(self, snapshot) -> None:
         self.monitor_labels["enable_run"].setText("ON" if snapshot.enable_run else "OFF")
         self.monitor_labels["run_mode"].setText(self._run_mode_text(snapshot.run_mode))
-        self.monitor_labels["fault_occurred"].setText(f"0x{snapshot.fault_occurred:04X}")
+        self._set_fault_label(snapshot.fault_occurred)
         self.monitor_labels["vdc"].setText(f"{snapshot.vdc:.3f} V")
         self.monitor_labels["temperature"].setText(f"{snapshot.temperature:.3f} C")
         self.monitor_labels["motor_power"].setText(str(snapshot.motor_power))
@@ -1912,13 +1928,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.monitor_labels["position_error"].setText(f"{snapshot.position_error:.3f}")
         self.monitor_labels["iq_ref"].setText(f"{snapshot.iq_ref:.3f} A")
         self.monitor_labels["motor_power"].setText(str(snapshot.motor_power))
-        self.monitor_labels["fault_occurred"].setText(f"0x{snapshot.fault_code:04X}")
+        self._set_fault_label(snapshot.fault_code)
         self.monitor_labels["phase_u"].setText(f"{snapshot.phase_u:.3f} A")
         self.monitor_labels["phase_v"].setText(f"{snapshot.phase_v:.3f} A")
         self.monitor_labels["phase_w"].setText(f"{snapshot.phase_w:.3f} A")
         self._append_log(
             "Driver error packet: "
-            f"fault=0x{snapshot.fault_code:04X}, "
+            f"{format_fault_text(snapshot.fault_code)}, "
             f"phase_u={snapshot.phase_u:.3f}, "
             f"phase_v={snapshot.phase_v:.3f}, "
             f"phase_w={snapshot.phase_w:.3f}"

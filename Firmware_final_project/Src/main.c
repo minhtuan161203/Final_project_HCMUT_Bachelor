@@ -1216,6 +1216,7 @@ static void MX_FSMC_Init(void)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	uint16_t fault = NO_ERROR;
+	uint16_t calib_fault = NO_ERROR;
 
 	if (GPIO_Pin != iMeasureIsr_Pin)
 	{
@@ -1223,12 +1224,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 
 	ReadFastProtectionFeedback();
-
+	// OR two ERRORS command
 	fault = CheckVbusFault(&Parameter);
 	fault |= CheckTempFault(&Parameter);
 
-	if ((Current_Sensor.CalibFinish != 0) && (StateMachine.bState == RUN))
+	if ((Current_Sensor.CalibFinish > 0) && (StateMachine.bState == RUN))
 	{
+		// OR Current fault when running (Just in state RUNNING) after calib prior to this state
 		fault |= CheckCurrentPhaseFault(&Current_Sensor, Parameter.fIabc[0], Parameter.fIabc[1], Parameter.fIabc[2]);
 	}
 
@@ -1257,9 +1259,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 		SetPwmEnabled(1u);
 		GeneratePWM(0.5f, 0.5f, 0.5f);
-		CalibrateCurrentSensor(&Current_Sensor, &Parameter);
+		calib_fault = CalibrateCurrentSensor(&Current_Sensor, &Parameter);
+		if (calib_fault != NO_ERROR)
+		{
+			ReportFault(calib_fault);
+			return;
+		}
 
-		if (Current_Sensor.CalibFinish != 0)
+		if (Current_Sensor.CalibFinish > 0)
 		{
 			ResetControlLoops();
 			STM_NextState(&StateMachine, START);
@@ -1348,6 +1355,7 @@ void assert_failed(uint8_t* file, uint32_t line)
   */
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+
 
 
 

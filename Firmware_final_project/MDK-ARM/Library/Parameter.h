@@ -45,6 +45,7 @@ typedef struct
 	uint32_t Sum1, Sum2;
 	int8_t CalibFinish;
 	uint16_t CalibCounter;
+	uint32_t CalibTimeoutCounter;
 }	CurrentSensor_t;
 
 void Reset_CurrentSensor(CurrentSensor_t * pHandle);
@@ -53,6 +54,6 @@ void Init_Parameter(Parameterhandle_t *pHandle);
 uint16_t CheckCurrentPhaseFault(CurrentSensor_t *pHandle, float CurrentPhaseU, float CurrentPhaseV, float CurrentPhaseW);
 uint16_t CheckVbusFault(Parameterhandle_t *pHandle);
 uint16_t CheckTempFault(Parameterhandle_t *pHandle);
-void CalibrateCurrentSensor(CurrentSensor_t *pHandle, Parameterhandle_t *param);
+uint16_t CalibrateCurrentSensor(CurrentSensor_t *pHandle, Parameterhandle_t *param);
 //void UpdateDriverAndMotorParameter(uint32_t *DriverParameter, uint32_t *MotorParameter, CurrentControl_handle_t *pCurrent, VelocityControl_handle_t *pVelocity, PositionControl_handle_t *pPosition);
 #endif

@@ -96,6 +96,23 @@ class UpdateCode(IntEnum):
     MTR_CODE_ERROR = 0xE1
 
 
+FAULT_FLAG_LABELS = {
+    0x0001: "Overcurrent",
+    0x0002: "Overvoltage",
+    0x0004: "Undervoltage",
+    0x0008: "Overtemperature",
+    0x0010: "Startup Fail",
+    0x0020: "Speed Following Error",
+    0x0040: "Software Error",
+    0x0080: "Flash Read Error",
+    0x0100: "Calibration Timeout",
+    0x0200: "Current Offset Invalid",
+}
+_KNOWN_FAULT_MASK = 0
+for _fault_bit in FAULT_FLAG_LABELS:
+    _KNOWN_FAULT_MASK |= _fault_bit
+
+
 DRIVER_PARAMETER_NAMES = [
     "DEVICE_ID",
     "CONTROL_MODE",
@@ -471,3 +488,24 @@ def build_parameter_write_chunks(values: list[float], chunk_size: int) -> list[b
 
 def format_hex(data: bytes) -> str:
     return " ".join(f"{item:02X}" for item in data)
+
+
+def decode_fault_flags(fault_code: int) -> list[str]:
+    if fault_code == 0:
+        return ["OK"]
+
+    labels: list[str] = []
+    for bitmask, label in FAULT_FLAG_LABELS.items():
+        if fault_code & bitmask:
+            labels.append(label)
+
+    unknown_bits = fault_code & ~_KNOWN_FAULT_MASK
+    if unknown_bits:
+        labels.append(f"Unknown 0x{unknown_bits:04X}")
+    return labels
+
+
+def format_fault_text(fault_code: int) -> str:
+    if fault_code == 0:
+        return "OK"
+    return f"{', '.join(decode_fault_flags(fault_code))} (0x{fault_code:04X})"

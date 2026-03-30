@@ -1,4 +1,4 @@
-#ifndef DEFINE_H
+ï»¿#ifndef DEFINE_H
 #define DEFINE_H
 
 
@@ -40,8 +40,8 @@
 
 #define OFFSET 0x7FFF
 #define Resolution16bits 65536.0f
-#define INPUT_RANGE_VDC 1367.91f // 2137.36*0.64 (0.64 là tam do -320->320mV, 2137.36 la Vdc bi chia ap sau khi qua mach chia ap )
-#define INPUT_RANGE_TEMPARATURE 400.0f //  15.(24)*0.64 (0.64 là tam do -320->320mV, 15.(24) la VTS bi chia ap sau khi qua mach chia ap )
+#define INPUT_RANGE_VDC 1367.91f // 2137.36*0.64 (0.64 lÃ  tam do -320->320mV, 2137.36 la Vdc bi chia ap sau khi qua mach chia ap )
+#define INPUT_RANGE_TEMPARATURE 400.0f //  15.(24)*0.64 (0.64 lÃ  tam do -320->320mV, 15.(24) la VTS bi chia ap sau khi qua mach chia ap )
 #define INPUT_RANGE_I 21.33f
 
 /*Fault define*/	
@@ -55,6 +55,8 @@
 #define ERROR_SPEED_FOLLOWING_ERROR					(uint16_t)(0x0020u)
 #define SOFTWARE_ERROR 											(uint16_t)(0x0040u)
 #define READ_FLASH_MEMORY_ERROR							(uint16_t)(0x0080u)
+#define ERROR_CALIB_TIMEOUT								(uint16_t)(0x0100u)
+#define ERROR_CURRENT_OFFSET_INVALID				(uint16_t)(0x0200u)
 
 #define HALF_PWM_PERIOD						5250
 #define FULL_PWM_PERIOD						10500
@@ -86,6 +88,9 @@
 #define OVER_TEMPERATURE_DEADBAND_DEGREE_UNIT					75 //degree celcious
 
 #define DIRVER_OVER_CURRENT_THRESHOLD_AMPERE_UNIT			6.0f  //Ampere
+#define CURRENT_SENSOR_CALIB_SAMPLES									5000u
+#define CURRENT_SENSOR_CALIB_TIMEOUT_TICKS						32000u
+#define CURRENT_SENSOR_OFFSET_THRESHOLD_COUNTS				2048u
 
 #define TUNING_DATA_LENGTH 600
 
@@ -153,3 +158,4 @@ typedef enum
 }MOTOR_PARAMETER_ID;
 
 #endif
+

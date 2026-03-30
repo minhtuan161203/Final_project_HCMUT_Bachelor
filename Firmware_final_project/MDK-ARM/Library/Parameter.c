@@ -287,26 +287,71 @@ uint16_t CheckTempFault(Parameterhandle_t *pHandle)
 	return fault;
 }
 
-void CalibrateCurrentSensor(CurrentSensor_t *pHandle, Parameterhandle_t *param)
+uint16_t CalibrateCurrentSensor(CurrentSensor_t *pHandle, Parameterhandle_t *param)
 {
-	
-	if(pHandle->CalibFinish == 0)
+	uint16_t raw_ia;
+	uint16_t raw_ib;
+	uint16_t avg_ia;
+	uint16_t avg_ib;
+	int32_t offset_error_ia;
+	int32_t offset_error_ib;
+
+	if ((pHandle == 0) || (param == 0))
 	{
-		if((pHandle->CalibCounter++) < 5000)
-		{
-			pHandle->Sum1 += (uint32_t)*(__IO uint16_t*)(REG_CURRENT_PHASE_U);
-			pHandle->Sum2 += (uint32_t)*(__IO uint16_t*)(REG_CURRENT_PHASE_V);
-		}
-		else
-		{
-			param->u16Offset_Ia = (uint16_t)(pHandle->Sum1 / 5000);
-			param->u16Offset_Ib = (uint16_t)(pHandle->Sum2 / 5000);
-			pHandle->Sum1 = 0;
-			pHandle->Sum2 = 0;
-			pHandle->CalibFinish = 1;
-			pHandle->CalibCounter = 0;
-		}
+		return SOFTWARE_ERROR;
 	}
+
+	if (pHandle->CalibFinish != 0)
+	{
+		return NO_ERROR;
+	}
+
+	if (++pHandle->CalibTimeoutCounter > CURRENT_SENSOR_CALIB_TIMEOUT_TICKS)
+	{
+		pHandle->CalibFinish = -1;
+		return ERROR_CALIB_TIMEOUT;
+	}
+
+	raw_ia = *(__IO uint16_t*)(REG_CURRENT_PHASE_U);
+	raw_ib = *(__IO uint16_t*)(REG_CURRENT_PHASE_V);
+	pHandle->Sum1 += (uint32_t)raw_ia;
+	pHandle->Sum2 += (uint32_t)raw_ib;
+	pHandle->CalibCounter++;
+
+	if (pHandle->CalibCounter < CURRENT_SENSOR_CALIB_SAMPLES)
+	{
+		return NO_ERROR;
+	}
+
+	avg_ia = (uint16_t)(pHandle->Sum1 / CURRENT_SENSOR_CALIB_SAMPLES);
+	avg_ib = (uint16_t)(pHandle->Sum2 / CURRENT_SENSOR_CALIB_SAMPLES);
+	offset_error_ia = (int32_t)avg_ia - (int32_t)OFFSET;
+	offset_error_ib = (int32_t)avg_ib - (int32_t)OFFSET;
+	if (offset_error_ia < 0)
+	{
+		offset_error_ia = -offset_error_ia;
+	}
+	if (offset_error_ib < 0)
+	{
+		offset_error_ib = -offset_error_ib;
+	}
+
+	pHandle->Sum1 = 0;
+	pHandle->Sum2 = 0;
+	pHandle->CalibCounter = 0;
+	pHandle->CalibTimeoutCounter = 0;
+
+	if ((offset_error_ia > CURRENT_SENSOR_OFFSET_THRESHOLD_COUNTS) ||
+		(offset_error_ib > CURRENT_SENSOR_OFFSET_THRESHOLD_COUNTS))
+	{
+		pHandle->CalibFinish = -1;
+		return ERROR_CURRENT_OFFSET_INVALID;
+	}
+
+	param->u16Offset_Ia = avg_ia;
+	param->u16Offset_Ib = avg_ib;
+	pHandle->CalibFinish = 1;
+	return NO_ERROR;
 }
 
 void Reset_CurrentSensor(CurrentSensor_t * pHandle)
@@ -316,4 +361,5 @@ void Reset_CurrentSensor(CurrentSensor_t * pHandle)
 	pHandle->Sum2 = 0;
 	pHandle->CalibFinish = 0;
 	pHandle->CalibCounter = 0;
+	pHandle->CalibTimeoutCounter = 0;
 }
