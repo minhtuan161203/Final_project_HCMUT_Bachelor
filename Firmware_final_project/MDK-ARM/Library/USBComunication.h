@@ -66,6 +66,7 @@ typedef enum
 		CMD_APPLY_ID_SQUARE_TUNING = 0x57,
 		CMD_START_ID_SQUARE_TUNING = 0x58,
 		CMD_STOP_ID_SQUARE_TUNING = 0x59,
+		CMD_SET_CONTROL_TIMING_MODE = 0x5A,
 }Command_e;
 
 typedef enum
@@ -123,12 +124,19 @@ typedef struct
 typedef struct
 {
 	uint8_t Enable;
+	uint8_t AlignmentDone;
+	uint8_t ElectricalAngleTestMode;
+	uint8_t CurrentPolarityInvertTest;
+	uint8_t CurrentUvSwapTest;
+	uint16_t AlignmentCounter;
 	float fAmplitudeCmd;
 	float fFrequencyCmd;
 	float fAmplitudeApplied;
 	float fFrequencyApplied;
 	float fPhase;
 	float fVoltageLimitApplied;
+	float fAlignmentCurrentApplied;
+	int32_t OffsetCaptured;
 }IdSquareTuning_t;
 
 void UpdateDriverParameter(float *DriverParameter);

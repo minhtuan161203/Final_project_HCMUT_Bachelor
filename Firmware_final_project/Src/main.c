@@ -85,6 +85,7 @@ volatile float gTargetSpeedRpm = 0.0f;
 volatile uint8_t gRunMode = RUN_MODE_FOC;
 volatile float gVfFrequencyHz = 0.0f;
 volatile float gVfVoltageV = 0.0f;
+volatile float gOpenLoopFrequencyLimitHz = DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ;
 float gIdRefA = 0.0f;
 float gIqRefA = 0.0f;
 volatile uint16_t gRawCurrentU = 0u;
@@ -92,6 +93,26 @@ volatile uint16_t gRawCurrentV = 0u;
 volatile uint16_t gRawVdc = 0u;
 volatile uint16_t gRawTemp = 0u;
 volatile uint16_t gDebugFaultSnapshot = 0u;
+volatile float gDebugSpeedRawRpm = 0.0f;
+volatile float gDebugSpeedRawRpmAvg = 0.0f;
+volatile float gDebugObservedElectricalHz = 0.0f;
+volatile float gDebugObservedElectricalHzAvg = 0.0f;
+volatile float gDebugOpenLoopElectricalHzCmd = 0.0f;
+volatile float gDebugOpenLoopSyncRpmCmd = 0.0f;
+volatile float gDebugExpectedDeltaPosSync = 0.0f;
+volatile float gDebugDeltaPosAvg = 0.0f;
+volatile float gDebugEncoderTurns = 0.0f;
+volatile float gDebugMechanicalAngleRad = 0.0f;
+volatile float gDebugElectricalAngleRad = 0.0f;
+volatile uint32_t gDebugIsrDeltaCycles = 0u;
+volatile float gDebugIsrPeriodUs = 0.0f;
+volatile float gDebugIsrFrequencyHz = 0.0f;
+volatile uint8_t gIsrMeasureOnlyMode = 0u;
+volatile uint32_t gIsrMeasureEdgeCount = 0u;
+volatile float gIsrMeasureEdgeFrequencyHz = 0.0f;
+volatile uint8_t gControlTimingMode = USER_DEFAULT_CONTROL_TIMING_MODE;
+volatile float gEffectiveCurrentLoopFrequencyHz = USER_SELECTED_ISR_FREQUENCY;
+volatile float gEffectiveSpeedLoopFrequencyHz = USER_EFFECTIVE_SPEED_LOOP_FREQUENCY;
 float gTracePosError = 0.0f;
 float RecordTable1[TRACE_DATA_LENGTH * 4u];
 TraceData Trace_Data;
@@ -141,8 +162,17 @@ static void ReportFault(uint16_t fault);
 static void RunFocLoop(void);
 static float CalcIdSquareTuningVoltageLimit(void);
 static float CalcIdSquareTuningReference(void);
+static float CalcIdSquareTuningAlignmentCurrent(void);
+static int32_t CalcAlignedEncoderOffset(float encoder_resolution);
 static float *ResolveTraceChannelPointer(uint8_t channel_code);
 static void UpdateTraceCapture(void);
+static void ResetDebugAveraging(void);
+static void InitIsrDebugCounter(void);
+static void UpdateIsrDebugPeriod(void);
+static void UpdateIsrMeasureOnlyFrequency(void);
+static float GetEffectiveCurrentLoopFrequency(void);
+static float GetEffectiveSpeedLoopFrequency(void);
+void ApplyControlTimingMode(uint8_t mode);
 
 /* USER CODE END PFP */
 
@@ -152,6 +182,24 @@ static void UpdateTraceCapture(void);
 #define ID_SQUARE_TUNING_MAX_VOLTAGE_RATIO 0.20f
 #define ID_SQUARE_TUNING_MAX_FREQUENCY_HZ 50.0f
 #define ID_SQUARE_TUNING_MIN_VOLTAGE_LIMIT_V 1.0f
+#define ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A 0.2f
+#define ID_SQUARE_TUNING_ALIGN_TIME_S 0.25f
+#define ID_SQUARE_ANGLE_TEST_NONE 0u
+#define ID_SQUARE_ANGLE_TEST_PLUS_90 1u
+#define ID_SQUARE_ANGLE_TEST_MINUS_90 2u
+#define ID_SQUARE_ANGLE_TEST_PLUS_180 3u
+#define SPEED_ESTIMATE_LPF_ALPHA 0.1f
+#define DEBUG_AVG_SAMPLES 256u
+
+static float sDebugDeltaPosAccum = 0.0f;
+static float sDebugSpeedRawAccum = 0.0f;
+static float sDebugObservedElecHzAccum = 0.0f;
+static uint16_t sDebugAvgCounter = 0u;
+static uint32_t sLastIsrCycleCount = 0u;
+static uint8_t sIsrDebugCounterReady = 0u;
+static uint32_t sIsrMeasurePrevCount = 0u;
+static uint32_t sIsrMeasurePrevTickMs = 0u;
+static uint8_t sIsrMeasurePrevMode = 0u;
 
 static float ClampFloat(float value, float lower, float upper)
 {
@@ -179,6 +227,131 @@ static float WrapAngle(float angle)
 	return angle;
 }
 
+static void ResetDebugAveraging(void)
+{
+	sDebugDeltaPosAccum = 0.0f;
+	sDebugSpeedRawAccum = 0.0f;
+	sDebugObservedElecHzAccum = 0.0f;
+	sDebugAvgCounter = 0u;
+	gDebugDeltaPosAvg = 0.0f;
+	gDebugSpeedRawRpmAvg = 0.0f;
+	gDebugObservedElectricalHzAvg = 0.0f;
+}
+
+static float GetEffectiveCurrentLoopFrequency(void)
+{
+	if (gEffectiveCurrentLoopFrequencyHz > 1.0f)
+	{
+		return gEffectiveCurrentLoopFrequencyHz;
+	}
+	return USER_ISR_FREQUENCY_16KHZ;
+}
+
+static float GetEffectiveSpeedLoopFrequency(void)
+{
+	if (gEffectiveSpeedLoopFrequencyHz > 1.0f)
+	{
+		return gEffectiveSpeedLoopFrequencyHz;
+	}
+	return GetEffectiveCurrentLoopFrequency() * 0.5f;
+}
+
+void ApplyControlTimingMode(uint8_t mode)
+{
+	float current_loop_hz;
+
+	if (mode == CONTROL_TIMING_MODE_3KHZ)
+	{
+		current_loop_hz = USER_ISR_FREQUENCY_3KHZ;
+	}
+	else
+	{
+		mode = CONTROL_TIMING_MODE_16KHZ;
+		current_loop_hz = USER_ISR_FREQUENCY_16KHZ;
+	}
+
+	gControlTimingMode = mode;
+	gEffectiveCurrentLoopFrequencyHz = current_loop_hz;
+	gEffectiveSpeedLoopFrequencyHz = current_loop_hz * 0.5f;
+	Parameter.Ui16ControlFrequency = (uint16_t)gEffectiveCurrentLoopFrequencyHz;
+
+	gSpeedPi.fDtSec = 1.0f / GetEffectiveSpeedLoopFrequency();
+	gIdPi.fDtSec = 1.0f / GetEffectiveCurrentLoopFrequency();
+	gIqPi.fDtSec = 1.0f / GetEffectiveCurrentLoopFrequency();
+
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.AlignmentCounter = 0u;
+	ResetDebugAveraging();
+	ResetControl_V_over_F();
+}
+
+static void InitIsrDebugCounter(void)
+{
+	SystemCoreClockUpdate();
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->CYCCNT = 0u;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+	sLastIsrCycleCount = DWT->CYCCNT;
+	sIsrDebugCounterReady = 1u;
+	gDebugIsrDeltaCycles = 0u;
+	gDebugIsrPeriodUs = 0.0f;
+	gDebugIsrFrequencyHz = 0.0f;
+}
+
+static void UpdateIsrDebugPeriod(void)
+{
+	uint32_t current_cycle_count;
+	uint32_t delta_cycles;
+
+	if (sIsrDebugCounterReady == 0u)
+	{
+		return;
+	}
+
+	current_cycle_count = DWT->CYCCNT;
+	delta_cycles = current_cycle_count - sLastIsrCycleCount;
+	sLastIsrCycleCount = current_cycle_count;
+	gDebugIsrDeltaCycles = delta_cycles;
+
+	if ((delta_cycles > 0u) && (SystemCoreClock > 0u))
+	{
+		gDebugIsrFrequencyHz = (float)SystemCoreClock / (float)delta_cycles;
+		gDebugIsrPeriodUs = ((float)delta_cycles * 1000000.0f) / (float)SystemCoreClock;
+	}
+}
+
+static void UpdateIsrMeasureOnlyFrequency(void)
+{
+	uint32_t now_tick_ms;
+	uint32_t delta_tick_ms;
+	uint32_t delta_count;
+
+	if (gIsrMeasureOnlyMode != sIsrMeasurePrevMode)
+	{
+		sIsrMeasurePrevMode = gIsrMeasureOnlyMode;
+		sIsrMeasurePrevCount = gIsrMeasureEdgeCount;
+		sIsrMeasurePrevTickMs = HAL_GetTick();
+		gIsrMeasureEdgeFrequencyHz = 0.0f;
+	}
+
+	if (gIsrMeasureOnlyMode == 0u)
+	{
+		return;
+	}
+
+	now_tick_ms = HAL_GetTick();
+	delta_tick_ms = now_tick_ms - sIsrMeasurePrevTickMs;
+	if (delta_tick_ms < 200u)
+	{
+		return;
+	}
+
+	delta_count = gIsrMeasureEdgeCount - sIsrMeasurePrevCount;
+	gIsrMeasureEdgeFrequencyHz = ((float)delta_count * 1000.0f) / (float)delta_tick_ms;
+	sIsrMeasurePrevCount = gIsrMeasureEdgeCount;
+	sIsrMeasurePrevTickMs = now_tick_ms;
+}
+
 static void SetPwmEnabled(uint8_t enable)
 {
 	if ((enable != 0u) && (gPwmEnabled == 0u))
@@ -201,6 +374,10 @@ static void ResetControlLoops(void)
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	gSpeedLoopDivider = 0u;
+	gDebugOpenLoopElectricalHzCmd = 0.0f;
+	gDebugOpenLoopSyncRpmCmd = 0.0f;
+	gDebugExpectedDeltaPosSync = 0.0f;
+	ResetDebugAveraging();
 	ResetControl_V_over_F();
 	GeneratePWM(0.5f, 0.5f, 0.5f);
 }
@@ -275,13 +452,100 @@ static float CalcIdSquareTuningReference(void)
 		return 0.0f;
 	}
 
-	IdSquareTuning.fPhase += IdSquareTuning.fFrequencyApplied / CURRENT_LOOP_FREQUENCY;
+	IdSquareTuning.fPhase += IdSquareTuning.fFrequencyApplied / GetEffectiveCurrentLoopFrequency();
 	if (IdSquareTuning.fPhase >= 1.0f)
 	{
 		IdSquareTuning.fPhase -= 1.0f;
 	}
 
 	return (IdSquareTuning.fPhase < 0.5f) ? IdSquareTuning.fAmplitudeApplied : -IdSquareTuning.fAmplitudeApplied;
+}
+
+static float CalcIdSquareTuningAlignmentCurrent(void)
+{
+	float rated_limit = MotorParameter[MOTOR_RATED_CURRENT_RMS] * ID_SQUARE_TUNING_MAX_RATED_CURRENT_RATIO;
+	float oc_limit = Current_Sensor.OverCurrentThreshold * ID_SQUARE_TUNING_MAX_OC_RATIO;
+	float amplitude_limit = rated_limit;
+	float align_current;
+
+	if ((oc_limit > 0.0f) && ((amplitude_limit <= 0.0f) || (oc_limit < amplitude_limit)))
+	{
+		amplitude_limit = oc_limit;
+	}
+	if (amplitude_limit < 0.1f)
+	{
+		amplitude_limit = 0.1f;
+	}
+
+	IdSquareTuning.fAmplitudeApplied = ClampFloat(
+		fabsf(IdSquareTuning.fAmplitudeCmd),
+		0.0f,
+		amplitude_limit);
+	align_current = IdSquareTuning.fAmplitudeApplied;
+	if (align_current < ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A)
+	{
+		align_current = ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A;
+	}
+	if (align_current > amplitude_limit)
+	{
+		align_current = amplitude_limit;
+	}
+	IdSquareTuning.fAlignmentCurrentApplied = align_current;
+	return align_current;
+}
+
+static int32_t CalcAlignedEncoderOffset(float encoder_resolution)
+{
+	float pole_pairs;
+	float electrical_offset_counts;
+	float single_turn_position;
+	int32_t offset_counts;
+
+	if (encoder_resolution <= 1.0f)
+	{
+		return 0;
+	}
+
+	pole_pairs = (MotorParameter[MOTOR_NUMBER_POLE_PAIRS] > 0.0f) ?
+		MotorParameter[MOTOR_NUMBER_POLE_PAIRS] : (float)INITIAL_MOTOR_POLE_PAIRS;
+	if (pole_pairs <= 0.0f)
+	{
+		pole_pairs = 1.0f;
+	}
+
+	if (MotorParameter[MOTOR_CURRENT_CTRL_DIRECTION] == 0.0f)
+	{
+		single_turn_position = (float)Parameter.EncSingleTurn;
+	}
+	else
+	{
+		single_turn_position = encoder_resolution - (float)Parameter.EncSingleTurn;
+	}
+
+	single_turn_position = fmodf(single_turn_position, encoder_resolution);
+	if (single_turn_position < 0.0f)
+	{
+		single_turn_position += encoder_resolution;
+	}
+	if (single_turn_position > (encoder_resolution * 0.5f))
+	{
+		single_turn_position -= encoder_resolution;
+	}
+
+	offset_counts = (int32_t)lroundf(-single_turn_position);
+	electrical_offset_counts = (encoder_resolution * DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG) /
+		(360.0f * pole_pairs);
+	offset_counts += (int32_t)lroundf(electrical_offset_counts);
+	if (offset_counts > (int32_t)(encoder_resolution * 0.5f))
+	{
+		offset_counts -= (int32_t)encoder_resolution;
+	}
+	else if (offset_counts < -(int32_t)(encoder_resolution * 0.5f))
+	{
+		offset_counts += (int32_t)encoder_resolution;
+	}
+
+	return offset_counts;
 }
 
 static float *ResolveTraceChannelPointer(uint8_t channel_code)
@@ -380,7 +644,7 @@ void UpdateDriverParameter(float *driver_parameter)
 	speed_limit = ((MotorParameter[MOTOR_RATED_CURRENT_RMS] > 0.0f) ?
 		MotorParameter[MOTOR_RATED_CURRENT_RMS] : DIRVER_OVER_CURRENT_THRESHOLD_AMPERE_UNIT);
 
-	gSpeedPi.fDtSec = 1.0f / SPEED_LOOP_FREQUENCY;
+	gSpeedPi.fDtSec = 1.0f / GetEffectiveSpeedLoopFrequency();
 	gSpeedPi.fKp = driver_parameter[SPEED_P_GAIN];
 	gSpeedPi.fKi = driver_parameter[SPEED_I_GAIN];
 	gSpeedPi.fUpOutLim = speed_limit;
@@ -402,7 +666,7 @@ void UpdateMotorParameter(float *motor_parameter)
 
 	if (motor_parameter[MOTOR_ENCODER_ID] <= 0.0f)
 	{
-		motor_parameter[MOTOR_ENCODER_ID] = (float)TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
+		motor_parameter[MOTOR_ENCODER_ID] = (float)DEFAULT_MOTOR_ENCODER_ID;
 	}
 	if (motor_parameter[MOTOR_ENCODER_RESOLUTION] <= 0.0f)
 	{
@@ -414,13 +678,29 @@ void UpdateMotorParameter(float *motor_parameter)
 	}
 	if (motor_parameter[MOTOR_RATED_CURRENT_RMS] <= 0.0f)
 	{
-		motor_parameter[MOTOR_RATED_CURRENT_RMS] = 2.0f;
+		motor_parameter[MOTOR_RATED_CURRENT_RMS] = DEFAULT_MOTOR_RATED_CURRENT_RMS;
 	}
-	if (motor_parameter[MOTOR_CURRENT_P_GAIN] <= 0.0f)
+	if (motor_parameter[MOTOR_PEAK_CURRENT_RMS] <= 0.0f)
+	{
+		motor_parameter[MOTOR_PEAK_CURRENT_RMS] = DEFAULT_MOTOR_PEAK_CURRENT_RMS;
+	}
+	if (motor_parameter[MOTOR_MAXIMUM_POWER] <= 0.0f)
+	{
+		motor_parameter[MOTOR_MAXIMUM_POWER] = DEFAULT_MOTOR_MAXIMUM_POWER_W;
+	}
+	if (motor_parameter[MOTOR_MAXIMUM_VOLTAGE] <= 0.0f)
+	{
+		motor_parameter[MOTOR_MAXIMUM_VOLTAGE] = DEFAULT_MOTOR_MAXIMUM_VOLTAGE_V;
+	}
+	if (motor_parameter[MOTOR_MAXIMUM_SPEED] <= 0.0f)
+	{
+		motor_parameter[MOTOR_MAXIMUM_SPEED] = DEFAULT_MOTOR_RATED_SPEED_RPM;
+	}
+	if (motor_parameter[MOTOR_CURRENT_P_GAIN] < 0.0f)
 	{
 		motor_parameter[MOTOR_CURRENT_P_GAIN] = 1.0f;
 	}
-	if (motor_parameter[MOTOR_CURRENT_I_GAIN] <= 0.0f)
+	if (motor_parameter[MOTOR_CURRENT_I_GAIN] < 0.0f)
 	{
 		motor_parameter[MOTOR_CURRENT_I_GAIN] = 150.0f;
 	}
@@ -437,13 +717,13 @@ void UpdateMotorParameter(float *motor_parameter)
 		0.5f,
 		DIRVER_OVER_CURRENT_THRESHOLD_AMPERE_UNIT);
 
-	gIdPi.fDtSec = 1.0f / CURRENT_LOOP_FREQUENCY;
+	gIdPi.fDtSec = 1.0f / GetEffectiveCurrentLoopFrequency();
 	gIdPi.fKp = current_kp;
 	gIdPi.fKi = current_ki;
 	gIdPi.fUpOutLim = 0.0f;
 	gIdPi.fLowOutLim = 0.0f;
 
-	gIqPi.fDtSec = 1.0f / CURRENT_LOOP_FREQUENCY;
+	gIqPi.fDtSec = 1.0f / GetEffectiveCurrentLoopFrequency();
 	gIqPi.fKp = current_kp;
 	gIqPi.fKi = current_ki;
 	gIqPi.fUpOutLim = 0.0f;
@@ -461,18 +741,20 @@ static void LoadDefaultParameters(void)
 	DriverParameter[CONTROL_MODE] = (float)SPEED_CONTROL_MODE;
 	DriverParameter[SPEED_P_GAIN] = 0.02f;
 	DriverParameter[SPEED_I_GAIN] = 5.0f;
-	DriverParameter[MAXIMUM_SPEED] = 1500.0f;
+	DriverParameter[MAXIMUM_SPEED] = DEFAULT_MOTOR_RATED_SPEED_RPM;
 	DriverParameter[SPEED_UNIT] = 0.0f;
 
-	MotorParameter[MOTOR_RATED_CURRENT_RMS] = 2.0f;
-	MotorParameter[MOTOR_PEAK_CURRENT_RMS] = 4.0f;
-	MotorParameter[MOTOR_ENCODER_ID] = (float)TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
+	MotorParameter[MOTOR_RATED_CURRENT_RMS] = DEFAULT_MOTOR_RATED_CURRENT_RMS;
+	MotorParameter[MOTOR_PEAK_CURRENT_RMS] = DEFAULT_MOTOR_PEAK_CURRENT_RMS;
+	MotorParameter[MOTOR_ENCODER_ID] = (float)DEFAULT_MOTOR_ENCODER_ID;
 	MotorParameter[MOTOR_ENCODER_RESOLUTION] = (float)MOTOR_ENC_RES;
-	MotorParameter[MOTOR_MAXIMUM_VOLTAGE] = 48.0f;
+	MotorParameter[MOTOR_MAXIMUM_POWER] = DEFAULT_MOTOR_MAXIMUM_POWER_W;
+	MotorParameter[MOTOR_MAXIMUM_VOLTAGE] = DEFAULT_MOTOR_MAXIMUM_VOLTAGE_V;
+	MotorParameter[MOTOR_MAXIMUM_SPEED] = DEFAULT_MOTOR_RATED_SPEED_RPM;
 	MotorParameter[MOTOR_NUMBER_POLE_PAIRS] = (float)INITIAL_MOTOR_POLE_PAIRS;
 	MotorParameter[MOTOR_CURRENT_P_GAIN] = 1.0f;
 	MotorParameter[MOTOR_CURRENT_I_GAIN] = 150.0f;
-	MotorParameter[MOTOR_CURRENT_CTRL_DIRECTION] = 0.0f;
+	MotorParameter[MOTOR_CURRENT_CTRL_DIRECTION] = 1.0f;
 
 	UpdateMotorParameter(MotorParameter);
 	UpdateDriverParameter(DriverParameter);
@@ -496,14 +778,55 @@ static void UpdateMeasuredSpeedAndTheta(void)
 {
 	float encoder_resolution;
 	float electrical_angle;
-	float position_with_offset;
+	float mechanical_angle;
+	float raw_speed_rpm;
+	float position_single_turn;
 
 	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
 		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
 
-	Parameter.fActSpeed = ((float)Parameter.DeltaPos * CURRENT_LOOP_FREQUENCY * 60.0f) / encoder_resolution;
-	position_with_offset = Parameter.fPosition + (float)Parameter.Offset_Enc;
-	electrical_angle = (position_with_offset / encoder_resolution) * (2.0f * PI) * (float)Parameter.u8PolePair;
+	raw_speed_rpm = ((float)Parameter.DeltaPos * GetEffectiveCurrentLoopFrequency() * 60.0f) / encoder_resolution;
+	gDebugSpeedRawRpm = raw_speed_rpm;
+	Parameter.fActSpeedFilter += SPEED_ESTIMATE_LPF_ALPHA * (raw_speed_rpm - Parameter.fActSpeedFilter);
+	Parameter.fActSpeed = Parameter.fActSpeedFilter;
+	gDebugObservedElectricalHz = fabsf(Parameter.fActSpeed) * ((float)Parameter.u8PolePair / 60.0f);
+	gDebugEncoderTurns = Parameter.fPosition / encoder_resolution;
+
+	sDebugDeltaPosAccum += (float)Parameter.DeltaPos;
+	sDebugSpeedRawAccum += raw_speed_rpm;
+	sDebugObservedElecHzAccum += gDebugObservedElectricalHz;
+	sDebugAvgCounter++;
+	if (sDebugAvgCounter >= DEBUG_AVG_SAMPLES)
+	{
+		gDebugDeltaPosAvg = sDebugDeltaPosAccum / (float)sDebugAvgCounter;
+		gDebugSpeedRawRpmAvg = sDebugSpeedRawAccum / (float)sDebugAvgCounter;
+		gDebugObservedElectricalHzAvg = sDebugObservedElecHzAccum / (float)sDebugAvgCounter;
+		sDebugDeltaPosAccum = 0.0f;
+		sDebugSpeedRawAccum = 0.0f;
+		sDebugObservedElecHzAccum = 0.0f;
+		sDebugAvgCounter = 0u;
+	}
+
+	if (MotorParameter[MOTOR_CURRENT_CTRL_DIRECTION] == 0.0f)
+	{
+		position_single_turn = (float)Parameter.EncSingleTurn;
+	}
+	else
+	{
+		position_single_turn = encoder_resolution - (float)Parameter.EncSingleTurn;
+	}
+
+	position_single_turn += (float)Parameter.Offset_Enc;
+	position_single_turn = fmodf(position_single_turn, encoder_resolution);
+	if (position_single_turn < 0.0f)
+	{
+		position_single_turn += encoder_resolution;
+	}
+
+	mechanical_angle = (position_single_turn / encoder_resolution) * (2.0f * PI);
+	electrical_angle = mechanical_angle * (float)Parameter.u8PolePair;
+	gDebugMechanicalAngleRad = WrapAngle(mechanical_angle);
+	gDebugElectricalAngleRad = WrapAngle(electrical_angle);
 	Parameter.fTheta = WrapAngle(electrical_angle);
 }
 
@@ -527,15 +850,40 @@ static float GetOpenLoopVoltageLimit(void)
 	return voltage_limit;
 }
 
+static float GetOpenLoopFrequencyLimitHz(void)
+{
+	float max_speed_rpm = MotorParameter[MOTOR_MAXIMUM_SPEED];
+	float pole_pairs = MotorParameter[MOTOR_NUMBER_POLE_PAIRS];
+
+	if (max_speed_rpm <= 0.0f)
+	{
+		max_speed_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM;
+	}
+	if (pole_pairs <= 0.0f)
+	{
+		pole_pairs = (float)INITIAL_MOTOR_POLE_PAIRS;
+	}
+
+	return (max_speed_rpm * pole_pairs) / 60.0f;
+}
+
 static void RunOpenLoopVf(void)
 {
-	float requested_frequency = ClampFloat(gVfFrequencyHz, 0.0f, 50.0f);
+	float frequency_limit_hz = GetOpenLoopFrequencyLimitHz();
+	float requested_frequency;
 	float requested_voltage = ClampFloat(gVfVoltageV, 0.0f, GetOpenLoopVoltageLimit());
 	float modulation = 0.0f;
 	float pole_pairs = (Parameter.u8PolePair > 0u) ? (float)Parameter.u8PolePair : 1.0f;
 	float sin_theta;
 	float cos_theta;
 	PWM_Phases_t vf_output;
+
+	if (frequency_limit_hz < 1.0f)
+	{
+		frequency_limit_hz = DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ;
+	}
+	gOpenLoopFrequencyLimitHz = frequency_limit_hz;
+	requested_frequency = ClampFloat(gVfFrequencyHz, 0.0f, frequency_limit_hz);
 
 	if (Parameter.fVdc > 1.0f)
 	{
@@ -546,6 +894,11 @@ static void RunOpenLoopVf(void)
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	gTargetSpeedRpm = (requested_frequency * 60.0f) / pole_pairs;
+	gDebugOpenLoopElectricalHzCmd = requested_frequency;
+	gDebugOpenLoopSyncRpmCmd = gTargetSpeedRpm;
+	gDebugExpectedDeltaPosSync = (requested_frequency * (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f ?
+		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES)) /
+		(GetEffectiveCurrentLoopFrequency() * pole_pairs);
 	vf_output = Control_V_over_F(requested_frequency, modulation);
 
 	Parameter.fVabc[0] = (vf_output.U - 0.5f) * Parameter.fVdc;
@@ -589,8 +942,12 @@ static void ReportFault(uint16_t fault)
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
 	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+	IdSquareTuning.OffsetCaptured = 0;
 	STM_FaultProcessing(&StateMachine, fault, 0xFFFFFFFFu);
 	ResetControlLoops();
 	SetPwmEnabled(0u);
@@ -605,6 +962,12 @@ static void RunFocLoop(void)
 	float duty_u;
 	float duty_v;
 	float duty_w;
+	float control_theta;
+	float current_phase_u;
+	float current_phase_v;
+	float current_temp;
+	float encoder_resolution;
+	uint8_t alignment_active = 0u;
 
 	if (Parameter.fVdc < 1.0f)
 	{
@@ -612,11 +975,55 @@ static void RunFocLoop(void)
 		return;
 	}
 
-	sin_theta = sinf(Parameter.fTheta);
-	cos_theta = cosf(Parameter.fTheta);
+	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
+		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
+	control_theta = Parameter.fTheta;
+	if ((IdSquareTuning.Enable != 0u) && (IdSquareTuning.AlignmentDone == 0u))
+	{
+		control_theta = 0.0f;
+		alignment_active = 1u;
+	}
+	else if (IdSquareTuning.Enable != 0u)
+	{
+		switch (IdSquareTuning.ElectricalAngleTestMode)
+		{
+			case ID_SQUARE_ANGLE_TEST_PLUS_90:
+				control_theta = WrapAngle(control_theta + (0.5f * PI));
+				break;
+			case ID_SQUARE_ANGLE_TEST_MINUS_90:
+				control_theta = WrapAngle(control_theta - (0.5f * PI));
+				break;
+			case ID_SQUARE_ANGLE_TEST_PLUS_180:
+				control_theta = WrapAngle(control_theta + PI);
+				break;
+			case ID_SQUARE_ANGLE_TEST_NONE:
+			default:
+				break;
+		}
+	}
 
-	gClarke.fA = Parameter.fIabc[0];
-	gClarke.fB = Parameter.fIabc[1];
+	sin_theta = sinf(control_theta);
+	cos_theta = cosf(control_theta);
+
+	current_phase_u = Parameter.fIabc[0];
+	current_phase_v = Parameter.fIabc[1];
+	if (IdSquareTuning.Enable != 0u)
+	{
+		if (IdSquareTuning.CurrentUvSwapTest != 0u)
+		{
+			current_temp = current_phase_u;
+			current_phase_u = current_phase_v;
+			current_phase_v = current_temp;
+		}
+		if (IdSquareTuning.CurrentPolarityInvertTest != 0u)
+		{
+			current_phase_u = -current_phase_u;
+			current_phase_v = -current_phase_v;
+		}
+	}
+
+	gClarke.fA = current_phase_u;
+	gClarke.fB = current_phase_v;
 	gClarke.m_ab2albe(&gClarke);
 
 	gPark.fAl = gClarke.fAl;
@@ -632,13 +1039,14 @@ static void RunFocLoop(void)
 	{
 		gTargetSpeedRpm = 0.0f;
 		gIqRefA = 0.0f;
-		gIdRefA = CalcIdSquareTuningReference();
+		gIdRefA = (alignment_active != 0u) ? CalcIdSquareTuningAlignmentCurrent() : CalcIdSquareTuningReference();
 		IdSquareTuning.fVoltageLimitApplied = CalcIdSquareTuningVoltageLimit();
 		voltage_limit = IdSquareTuning.fVoltageLimitApplied;
 	}
 	else
 	{
 		IdSquareTuning.fVoltageLimitApplied = 0.0f;
+		IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
 		gSpeedLoopDivider++;
 		if (gSpeedLoopDivider >= 2u)
 		{
@@ -688,6 +1096,24 @@ static void RunFocLoop(void)
 		ClampFloat(duty_u, 0.05f, 0.95f),
 		ClampFloat(duty_v, 0.05f, 0.95f),
 		ClampFloat(duty_w, 0.05f, 0.95f));
+
+	if (alignment_active != 0u)
+	{
+		if (IdSquareTuning.AlignmentCounter <
+			(uint16_t)(GetEffectiveCurrentLoopFrequency() * ID_SQUARE_TUNING_ALIGN_TIME_S))
+		{
+			IdSquareTuning.AlignmentCounter++;
+		}
+		else
+		{
+			IdSquareTuning.OffsetCaptured = CalcAlignedEncoderOffset(encoder_resolution);
+			Parameter.Offset_Enc = IdSquareTuning.OffsetCaptured;
+			MotorParameter[MOTOR_HALL_OFFSET] = (float)IdSquareTuning.OffsetCaptured;
+			IdSquareTuning.AlignmentDone = 1u;
+			IdSquareTuning.AlignmentCounter = 0u;
+			ResetControlLoops();
+		}
+	}
 }
 
 /* USER CODE END 0 */
@@ -718,6 +1144,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+	InitIsrDebugCounter();
 
   /* USER CODE END SysInit */
 
@@ -737,11 +1164,11 @@ int main(void)
 	STM_Init(&StateMachine);
 	memset(&USB_Comm, 0, sizeof(USB_Comm));
 	LoadDefaultParameters();
+	ApplyControlTimingMode(USER_DEFAULT_CONTROL_TIMING_MODE);
 	HAL_GPIO_WritePin(oEnableReadADC_GPIO_Port, oEnableReadADC_Pin, GPIO_PIN_SET); //==> required for current reading value
 	
-	// Enable FPGA read encoder value -- Can replace by others Encoder Types
-	*(__IO uint16_t*)(REG_ENCODER_ID) = TAMAGAWA_SERIAL_ABS_SINGLE_TURN;
-	// TAMAGAWA_SERIAL_ABS_SINGLE_TURN is 17bit encoder!
+	// Keep FPGA encoder parser aligned with the active motor parameter set.
+	*(__IO uint16_t*)(REG_ENCODER_ID) = (uint16_t)MotorParameter[MOTOR_ENCODER_ID];
 
   /* USER CODE END 2 */
 
@@ -749,6 +1176,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	UpdateIsrMeasureOnlyFrequency();
 	USB_ProcessData(&USB_Comm);
 	USB_TransmitData(&USB_Comm);
 	
@@ -1218,7 +1646,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	uint16_t fault = NO_ERROR;
 	uint16_t calib_fault = NO_ERROR;
 
-	if (GPIO_Pin != iMeasureIsr_Pin)
+//	if (GPIO_Pin != iMeasureIsr_Pin)
+//	{
+//		return;
+//	}
+
+	UpdateIsrDebugPeriod();
+	gIsrMeasureEdgeCount++;
+	if (gIsrMeasureOnlyMode != 0u)
 	{
 		return;
 	}
@@ -1241,6 +1676,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 
 	GetParameter(&Parameter, MotorParameter);
+	UpdateMeasuredSpeedAndTheta();
 
 	if ((StateMachine.bState == FAULT_NOW) || (StateMachine.bState == FAULT_OVER))
 	{
@@ -1279,8 +1715,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if ((StateMachine.bState == IDLE) || (StateMachine.bState == STOP))
 	{
 		IdSquareTuning.Enable = 0u;
+		IdSquareTuning.AlignmentDone = 0u;
+		IdSquareTuning.AlignmentCounter = 0u;
 		IdSquareTuning.fPhase = 0.0f;
 		IdSquareTuning.fVoltageLimitApplied = 0.0f;
+		IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+		IdSquareTuning.OffsetCaptured = 0;
 		ResetControlLoops();
 		SetPwmEnabled(0u);
 		if (StateMachine.bState == STOP)
@@ -1299,7 +1739,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 
 	SetPwmEnabled(1u);
-	UpdateMeasuredSpeedAndTheta();
 	if (gRunMode == RUN_MODE_OPEN_LOOP_VF)
 	{
 		RunOpenLoopVf();

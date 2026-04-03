@@ -15,12 +15,27 @@ ACK_ERROR = 0xFF
 HEADER_SIZE = 2
 CRC_SIZE = 1
 REG_SIZE = 1
-CURRENT_LOOP_FREQUENCY_HZ = 16000.0
+CURRENT_LOOP_FREQUENCY_HZ = 3000.0
 TRACE_SAMPLES_PER_CHUNK = 10
 TRACE_CHANNELS_PER_SAMPLE = 4
 CURRENT_TUNING_SAMPLES_PER_CHUNK = 20
 CURRENT_TUNING_TOTAL_SAMPLES = 600
 TRACE_TOTAL_SAMPLES = 1000
+
+CONTROL_TIMING_MODE_16KHZ = 0
+CONTROL_TIMING_MODE_3KHZ = 1
+ID_SQUARE_ANGLE_TEST_NONE = 0
+ID_SQUARE_ANGLE_TEST_PLUS_90 = 1
+ID_SQUARE_ANGLE_TEST_MINUS_90 = 2
+ID_SQUARE_ANGLE_TEST_PLUS_180 = 3
+
+DEFAULT_MOTOR_RATED_CURRENT_RMS = 1.6
+DEFAULT_MOTOR_PEAK_CURRENT_RMS = 3.2
+DEFAULT_MOTOR_MAXIMUM_POWER = 200.0
+DEFAULT_MOTOR_MAXIMUM_VOLTAGE = 91.0
+DEFAULT_MOTOR_RATED_SPEED_RPM = 3000.0
+DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ = 200.0
+DEFAULT_MOTOR_POLE_PAIRS = 4.0
 
 
 class Command(IntEnum):
@@ -81,6 +96,7 @@ class Command(IntEnum):
     CMD_APPLY_ID_SQUARE_TUNING = 0x57
     CMD_START_ID_SQUARE_TUNING = 0x58
     CMD_STOP_ID_SQUARE_TUNING = 0x59
+    CMD_SET_CONTROL_TIMING_MODE = 0x5A
 
 
 class UpdateCode(IntEnum):
@@ -220,6 +236,27 @@ class MonitorSnapshot:
     theta: float = 0.0
     vf_frequency: float = 0.0
     vf_voltage: float = 0.0
+    debug_open_loop_electrical_hz_cmd: float = 0.0
+    debug_open_loop_sync_rpm_cmd: float = 0.0
+    debug_observed_electrical_hz: float = 0.0
+    debug_speed_raw_rpm: float = 0.0
+    debug_expected_delta_pos_sync: float = 0.0
+    debug_delta_pos_avg: float = 0.0
+    debug_encoder_turns: float = 0.0
+    debug_mechanical_angle_rad: float = 0.0
+    debug_electrical_angle_rad: float = 0.0
+    debug_speed_raw_rpm_avg: float = 0.0
+    debug_observed_electrical_hz_avg: float = 0.0
+    debug_delta_pos: int = 0
+    debug_enc_single_turn: int = 0
+    debug_isr_delta_cycles: int = 0
+    debug_isr_period_us: float = 0.0
+    debug_isr_frequency_hz: float = 0.0
+    debug_isr_measure_only_mode: int = 0
+    debug_isr_measure_edge_frequency_hz: float = 0.0
+    control_timing_mode: int = CONTROL_TIMING_MODE_16KHZ
+    control_loop_frequency_hz: float = CURRENT_LOOP_FREQUENCY_HZ
+    speed_loop_frequency_hz: float = CURRENT_LOOP_FREQUENCY_HZ * 0.5
 
 
 @dataclass(slots=True)
@@ -367,6 +404,47 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
             snapshot.vf_frequency,
             snapshot.vf_voltage,
         ) = struct.unpack_from("<14f", payload, offset)
+        offset += 14 * 4
+
+    if len(payload) >= offset + (11 * 4) + (2 * 4):
+        (
+            snapshot.debug_open_loop_electrical_hz_cmd,
+            snapshot.debug_open_loop_sync_rpm_cmd,
+            snapshot.debug_observed_electrical_hz,
+            snapshot.debug_speed_raw_rpm,
+            snapshot.debug_expected_delta_pos_sync,
+            snapshot.debug_delta_pos_avg,
+            snapshot.debug_encoder_turns,
+            snapshot.debug_mechanical_angle_rad,
+            snapshot.debug_electrical_angle_rad,
+            snapshot.debug_speed_raw_rpm_avg,
+            snapshot.debug_observed_electrical_hz_avg,
+            snapshot.debug_delta_pos,
+            snapshot.debug_enc_single_turn,
+        ) = struct.unpack_from("<11f2i", payload, offset)
+        offset += struct.calcsize("<11f2i")
+
+    if len(payload) >= offset + struct.calcsize("<I2f"):
+        (
+            snapshot.debug_isr_delta_cycles,
+            snapshot.debug_isr_period_us,
+            snapshot.debug_isr_frequency_hz,
+        ) = struct.unpack_from("<I2f", payload, offset)
+        offset += struct.calcsize("<I2f")
+
+    if len(payload) >= offset + struct.calcsize("<Bf"):
+        (
+            snapshot.debug_isr_measure_only_mode,
+            snapshot.debug_isr_measure_edge_frequency_hz,
+        ) = struct.unpack_from("<Bf", payload, offset)
+        offset += struct.calcsize("<Bf")
+
+    if len(payload) >= offset + struct.calcsize("<B2f"):
+        (
+            snapshot.control_timing_mode,
+            snapshot.control_loop_frequency_hz,
+            snapshot.speed_loop_frequency_hz,
+        ) = struct.unpack_from("<B2f", payload, offset)
 
     return snapshot
 

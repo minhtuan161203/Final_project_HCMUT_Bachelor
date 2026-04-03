@@ -1,4 +1,4 @@
-﻿#ifndef DEFINE_H
+#ifndef DEFINE_H
 #define DEFINE_H
 
 
@@ -63,6 +63,18 @@
 #define MOTOR_POWER_CONVERSION_FACTOR			1
 #define SPEED_LOOP_FREQUENCY				(float)8000.0f 		//Hz	//8000
 #define CURRENT_LOOP_FREQUENCY			(float)16000.0f		//Hz
+#define CONTROL_TIMING_MODE_16KHZ		0u
+#define CONTROL_TIMING_MODE_3KHZ		1u
+#define USER_ISR_FREQUENCY_3KHZ			(float)3000.0f
+#define USER_ISR_FREQUENCY_16KHZ		CURRENT_LOOP_FREQUENCY
+/*
+ * Compile-time default for the runtime-selectable timing profile.
+ * GUI/USB can switch between 3 kHz and 16 kHz later without rebuilding.
+ */
+#define USER_DEFAULT_CONTROL_TIMING_MODE	CONTROL_TIMING_MODE_3KHZ
+#define USER_SELECTED_ISR_FREQUENCY		USER_ISR_FREQUENCY_3KHZ
+#define USER_EFFECTIVE_CURRENT_LOOP_FREQUENCY	USER_SELECTED_ISR_FREQUENCY
+#define USER_EFFECTIVE_SPEED_LOOP_FREQUENCY		(USER_EFFECTIVE_CURRENT_LOOP_FREQUENCY * 0.5f)
 #define POS_MAX_CNT									1
 #define POSITION_LOOP_FREQUENCY			8000
 /*Motor Speed Sensor*/
@@ -72,7 +84,7 @@
 //#define JOG_STEP_SPEED_CONVERSION				12 // 60*1000/(ENC_RESOLUTION)/0.5ms
 #define SPEED_CONVERSION_FACTOR   MOTOR_ENC_RES/60// RPM to Cnt Per Sec
 #define CNT_PER_S_TO_RPM_FACTOR 0.00045776367f
-#define MOTOR_ENC_RES						1048576 //8388608	//131072     //pulse/rev
+#define MOTOR_ENC_RES						1048576 // 20-bit incremental encoder pulses/rev
 #define POSITION_MAX_ERR			MOTOR_ENC_RES/5
 
 /*Flash Memory Address*/
@@ -89,7 +101,7 @@
 
 #define DIRVER_OVER_CURRENT_THRESHOLD_AMPERE_UNIT			6.0f  //Ampere
 #define CURRENT_SENSOR_CALIB_SAMPLES									5000u
-#define CURRENT_SENSOR_CALIB_TIMEOUT_TICKS						32000u
+#define CURRENT_SENSOR_CALIB_TIMEOUT_SECONDS					2.0f
 #define CURRENT_SENSOR_OFFSET_THRESHOLD_COUNTS				2048u
 
 #define TUNING_DATA_LENGTH 600
@@ -99,7 +111,20 @@
 #define FFT_DATA_LEN_TH						8192
 #define TRACE_DATA_LENGTH					1000
 #define AUTO_TUNING_DATA_LENGTH		2000
-#define INITIAL_MOTOR_POLE_PAIRS 	1
+#define DEFAULT_MOTOR_ENCODER_ID		PANASONIC_MINAS_A5_SERIAL_INC
+#define DEFAULT_MOTOR_RATED_CURRENT_RMS	1.6f
+#define DEFAULT_MOTOR_PEAK_CURRENT_RMS	3.2f
+#define DEFAULT_MOTOR_MAXIMUM_POWER_W	200.0f
+#define DEFAULT_MOTOR_MAXIMUM_VOLTAGE_V	91.0f
+#define DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ	200.0f
+#define DEFAULT_MOTOR_RATED_SPEED_RPM	3000.0f
+#define INITIAL_MOTOR_POLE_PAIRS 	4
+/*
+ * Empirical electrical zero compensation captured during Id tuning/alignment.
+ * Positive value advances the encoder electrical frame.
+ * Change back to 0.0f if later verification shows no permanent +90e offset.
+ */
+#define DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG	90.0f
 typedef enum
 {
 	DEVICE_ID,															/*00:						32 bit*/

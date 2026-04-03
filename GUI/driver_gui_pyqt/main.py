@@ -12,8 +12,21 @@ from qt_compat import QtCore, QtGui, QtWidgets, QT_API
 from protocol import (
     ACK_ERROR,
     ACK_NOERROR,
+    CONTROL_TIMING_MODE_16KHZ,
+    CONTROL_TIMING_MODE_3KHZ,
     CURRENT_LOOP_FREQUENCY_HZ,
     CURRENT_TUNING_TOTAL_SAMPLES,
+    DEFAULT_MOTOR_MAXIMUM_POWER,
+    DEFAULT_MOTOR_MAXIMUM_VOLTAGE,
+    DEFAULT_MOTOR_PEAK_CURRENT_RMS,
+    DEFAULT_MOTOR_POLE_PAIRS,
+    DEFAULT_MOTOR_RATED_CURRENT_RMS,
+    DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ,
+    DEFAULT_MOTOR_RATED_SPEED_RPM,
+    ID_SQUARE_ANGLE_TEST_MINUS_90,
+    ID_SQUARE_ANGLE_TEST_NONE,
+    ID_SQUARE_ANGLE_TEST_PLUS_90,
+    ID_SQUARE_ANGLE_TEST_PLUS_180,
     Command,
     DRIVER_PARAMETER_NAMES,
     MOTOR_PARAMETER_NAMES,
@@ -64,6 +77,20 @@ TREND_EMA_ALPHA = {
     "act_speed": 0.25,
     "cmd_speed": None,
     "speed_error": 0.22,
+}
+
+DEFAULT_DRIVER_PARAMETER_VALUES: dict[int, float] = {
+    12: DEFAULT_MOTOR_RATED_SPEED_RPM,
+}
+
+DEFAULT_MOTOR_PARAMETER_VALUES: dict[int, float] = {
+    0: DEFAULT_MOTOR_RATED_CURRENT_RMS,
+    1: DEFAULT_MOTOR_PEAK_CURRENT_RMS,
+    9: DEFAULT_MOTOR_MAXIMUM_POWER,
+    10: DEFAULT_MOTOR_MAXIMUM_VOLTAGE,
+    11: DEFAULT_MOTOR_POLE_PAIRS,
+    13: DEFAULT_MOTOR_RATED_SPEED_RPM,
+    19: 1.0,
 }
 
 TRACE_CHANNEL_META = {
@@ -668,6 +695,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_sent: PendingFrame | None = None
         self._port_descriptors: list[PortDescriptor] = []
         self._latest_monitor_snapshot = None
+        self._active_timing_mode = CONTROL_TIMING_MODE_3KHZ
+        self._active_control_loop_hz = 3000.0
+        self._active_speed_loop_hz = 1500.0
         self._trend_buffer = CircularSeriesBuffer(
             list(TREND_SERIES_META.keys()),
             capacity=TREND_BUFFER_CAPACITY,
@@ -692,6 +722,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._connect_signals()
+        self._set_active_timing_profile(self._active_timing_mode)
         self._refresh_ports()
         self._monitor_timer.start()
         self._trend_refresh_timer.start()
@@ -712,6 +743,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._parameter_window = self._build_parameter_window()
         self._trend_window = self._build_trend_window()
         self._tuning_window = self._build_tuning_window()
+        self._debug_terminal_window = self._build_debug_terminal_window()
         self._log_window = self._build_log_window()
 
         self.statusBar().showMessage(f"Ready ({QT_API})")
@@ -738,14 +770,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.monitor_rate_combo.addItem("20 Hz", 50)
         self.monitor_rate_combo.addItem("40 Hz", 25)
         self.monitor_rate_combo.setCurrentIndex(2)
+        self.timing_mode_combo = QtWidgets.QComboBox()
+        self.timing_mode_combo.addItem("3 kHz ISR", CONTROL_TIMING_MODE_3KHZ)
+        self.timing_mode_combo.addItem("16 kHz ISR", CONTROL_TIMING_MODE_16KHZ)
+        self.timing_mode_combo.setCurrentIndex(0)
+        self.apply_timing_mode_button = QtWidgets.QPushButton("Apply Timing")
 
         self.device_hint_label = QtWidgets.QLabel(
             f"Known device VID:PID = {KNOWN_DEVICE_VID:04X}:{KNOWN_DEVICE_PID:04X}"
         )
         self.connection_state_label = QtWidgets.QLabel("Disconnected")
+        self.timing_mode_state_label = QtWidgets.QLabel("Active: 3 kHz (3000 Hz)")
         self.open_parameters_button = QtWidgets.QPushButton("Parameters...")
         self.open_trends_button = QtWidgets.QPushButton("Trends...")
         self.open_tuning_button = QtWidgets.QPushButton("Tuning / Scope...")
+        self.open_debug_terminal_button = QtWidgets.QPushButton("Debug Terminal...")
         self.open_log_button = QtWidgets.QPushButton("Log...")
 
         layout.addWidget(QtWidgets.QLabel("Port"), 0, 0)
@@ -757,13 +796,18 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.disconnect_button, 0, 6)
         layout.addWidget(QtWidgets.QLabel("Poll Rate"), 0, 7)
         layout.addWidget(self.monitor_rate_combo, 0, 8)
+        layout.addWidget(QtWidgets.QLabel("Timing"), 0, 9)
+        layout.addWidget(self.timing_mode_combo, 0, 10)
+        layout.addWidget(self.apply_timing_mode_button, 0, 11)
         layout.addWidget(self.auto_poll_checkbox, 1, 0, 1, 2)
         layout.addWidget(self.device_hint_label, 1, 2, 1, 3)
-        layout.addWidget(self.open_parameters_button, 1, 5)
-        layout.addWidget(self.open_trends_button, 1, 6)
-        layout.addWidget(self.open_tuning_button, 1, 7)
-        layout.addWidget(self.open_log_button, 1, 8)
-        layout.addWidget(self.connection_state_label, 1, 9)
+        layout.addWidget(self.timing_mode_state_label, 1, 5, 1, 2)
+        layout.addWidget(self.open_parameters_button, 1, 7)
+        layout.addWidget(self.open_trends_button, 1, 8)
+        layout.addWidget(self.open_tuning_button, 1, 9)
+        layout.addWidget(self.open_debug_terminal_button, 1, 10)
+        layout.addWidget(self.open_log_button, 1, 11)
+        layout.addWidget(self.connection_state_label, 1, 12)
         return box
 
     def _build_monitor_group(self) -> QtWidgets.QGroupBox:
@@ -774,6 +818,8 @@ class MainWindow(QtWidgets.QMainWindow):
         status_fields = [
             ("enable_run", "Enable Run"),
             ("run_mode", "Run Mode"),
+            ("control_timing_mode", "Timing Mode"),
+            ("effective_loop_hz", "Loop Freq"),
             ("fault_occurred", "Fault"),
             ("vdc", "Vdc"),
             ("temperature", "Temperature"),
@@ -944,6 +990,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_ki_spin.setRange(0.0, 10000.0)
         self.ctuning_ki_spin.setDecimals(5)
         self.ctuning_ki_spin.setSingleStep(0.001)
+        self.ctuning_angle_test_combo = QtWidgets.QComboBox()
+        self.ctuning_angle_test_combo.addItem("None", ID_SQUARE_ANGLE_TEST_NONE)
+        self.ctuning_angle_test_combo.addItem("+90e", ID_SQUARE_ANGLE_TEST_PLUS_90)
+        self.ctuning_angle_test_combo.addItem("-90e", ID_SQUARE_ANGLE_TEST_MINUS_90)
+        self.ctuning_angle_test_combo.addItem("+180e", ID_SQUARE_ANGLE_TEST_PLUS_180)
+        self.ctuning_angle_test_combo.setToolTip(
+            "Apply a temporary electrical angle shift only during Id tuning after alignment. Use this to test whether the dq frame is off by +90e, -90e, or +180e."
+        )
+        self.ctuning_invert_current_checkbox = QtWidgets.QCheckBox("Invert Current")
+        self.ctuning_invert_current_checkbox.setToolTip(
+            "Invert U/V current polarity only during Id tuning."
+        )
+        self.ctuning_swap_uv_checkbox = QtWidgets.QCheckBox("Swap U/V")
+        self.ctuning_swap_uv_checkbox.setToolTip(
+            "Swap U/V current channels only during Id tuning."
+        )
+        ctuning_test_flags_widget = QtWidgets.QWidget()
+        ctuning_test_flags_layout = QtWidgets.QHBoxLayout(ctuning_test_flags_widget)
+        ctuning_test_flags_layout.setContentsMargins(0, 0, 0, 0)
+        ctuning_test_flags_layout.setSpacing(10)
+        ctuning_test_flags_layout.addWidget(QtWidgets.QLabel("Angle Test"))
+        ctuning_test_flags_layout.addWidget(self.ctuning_angle_test_combo)
+        ctuning_test_flags_layout.addWidget(self.ctuning_invert_current_checkbox)
+        ctuning_test_flags_layout.addWidget(self.ctuning_swap_uv_checkbox)
+        ctuning_test_flags_layout.addStretch(1)
 
         self.apply_ctuning_button = QtWidgets.QPushButton("Apply Id Tune Config")
         self.start_ctuning_button = QtWidgets.QPushButton("Start Id Tune + Scope")
@@ -960,21 +1031,22 @@ class MainWindow(QtWidgets.QMainWindow):
         control_layout.addWidget(self.ctuning_kp_spin, 1, 3)
         control_layout.addWidget(QtWidgets.QLabel("Current Ki"), 2, 0)
         control_layout.addWidget(self.ctuning_ki_spin, 2, 1)
+        control_layout.addWidget(ctuning_test_flags_widget, 2, 2, 1, 2)
         self.ctuning_window_label = QtWidgets.QLabel("")
-        control_layout.addWidget(QtWidgets.QLabel("Capture Window"), 2, 2)
-        control_layout.addWidget(self.ctuning_window_label, 2, 3)
-        control_layout.addWidget(self.apply_ctuning_button, 3, 0, 1, 2)
-        control_layout.addWidget(self.start_ctuning_button, 3, 2)
-        control_layout.addWidget(self.stop_ctuning_button, 3, 3)
-        control_layout.addWidget(QtWidgets.QLabel("Status"), 4, 0)
-        control_layout.addWidget(self.ctuning_status_label, 4, 1, 1, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Capture Window"), 3, 2)
+        control_layout.addWidget(self.ctuning_window_label, 3, 3)
+        control_layout.addWidget(self.apply_ctuning_button, 4, 0, 1, 2)
+        control_layout.addWidget(self.start_ctuning_button, 4, 2)
+        control_layout.addWidget(self.stop_ctuning_button, 4, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
+        control_layout.addWidget(self.ctuning_status_label, 5, 1, 1, 3)
 
         scope_toolbar = QtWidgets.QHBoxLayout()
         self.ctuning_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
         self.ctuning_auto_scale_checkbox.setChecked(True)
         self.ctuning_clear_button = QtWidgets.QPushButton("Clear Capture")
         scope_hint = QtWidgets.QLabel(
-            "Lock the rotor mechanically before use. Start from 5-10% rated current, keep the square-wave frequency low, and only increase amplitude after the trace is stable. Use a lower capture rate if you want a longer time window to see more than one pulse. Firmware clamps Id amplitude, limits the current-loop voltage to a safe fraction of Vdc, keeps Iq at zero, and records Id_ref / Id / Vd / Vq from the 16 kHz ISR."
+            "Lock the rotor mechanically before use. Start from 5-10% rated current, keep the square-wave frequency low, and only increase amplitude after the trace is stable. Use a lower capture rate if you want a longer time window to see more than one pulse. Firmware clamps Id amplitude, limits the current-loop voltage to a safe fraction of Vdc, keeps Iq at zero, and records Id_ref / Id / Vd / Vq using the active timing profile."
         )
         scope_hint.setWordWrap(True)
         scope_toolbar.addWidget(self.ctuning_auto_scale_checkbox)
@@ -1079,19 +1151,19 @@ class MainWindow(QtWidgets.QMainWindow):
         vf_tab = QtWidgets.QWidget()
         vf_layout = QtWidgets.QGridLayout(vf_tab)
         self.vf_frequency_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_frequency_spin.setRange(0.0, 50.0)
+        self.vf_frequency_spin.setRange(0.0, DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ)
         self.vf_frequency_spin.setDecimals(2)
         self.vf_frequency_spin.setSingleStep(0.50)
         self.vf_frequency_spin.setSuffix(" Hz")
         self.vf_voltage_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_voltage_spin.setRange(0.0, 40.0)
+        self.vf_voltage_spin.setRange(0.0, DEFAULT_MOTOR_MAXIMUM_VOLTAGE)
         self.vf_voltage_spin.setDecimals(2)
         self.vf_voltage_spin.setSingleStep(1.0)
         self.vf_voltage_spin.setSuffix(" V")
         self.start_vf_button = QtWidgets.QPushButton("Start V/F")
         self.stop_vf_button = QtWidgets.QPushButton("Stop V/F")
         vf_note = QtWidgets.QLabel(
-            "Electrical frequency and voltage reference are clamped in firmware for safe open-loop testing."
+            "Default motor profile: 4 pole pairs, 3000 rpm, 200 Hz electrical, 91 V, 1.6 A, 200 W. Open-loop commands are still clamped in firmware for safe testing."
         )
         vf_note.setWordWrap(True)
         vf_layout.addWidget(QtWidgets.QLabel("Electrical Frequency"), 0, 0)
@@ -1138,6 +1210,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.motor_table = self._create_parameter_table(MOTOR_PARAMETER_NAMES)
         tabs.addTab(self.driver_table, "Driver Parameters")
         tabs.addTab(self.motor_table, "Motor Parameters")
+        self._populate_default_parameter_tables()
         return tabs
 
     def _build_parameter_window(self) -> QtWidgets.QDialog:
@@ -1183,6 +1256,19 @@ class MainWindow(QtWidgets.QMainWindow):
         header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         return table
 
+    def _populate_default_parameter_tables(self) -> None:
+        self._apply_default_values_to_table(self.driver_table, DEFAULT_DRIVER_PARAMETER_VALUES)
+        self._apply_default_values_to_table(self.motor_table, DEFAULT_MOTOR_PARAMETER_VALUES)
+
+    @staticmethod
+    def _apply_default_values_to_table(
+        table: QtWidgets.QTableWidget, defaults: dict[int, float]
+    ) -> None:
+        for row, value in defaults.items():
+            item = table.item(row, 2)
+            if item is not None:
+                item.setText(f"{value:.6f}")
+
     def _build_log_window(self) -> QtWidgets.QDialog:
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Communication Log")
@@ -1202,6 +1288,38 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.log_edit)
         return dialog
 
+    def _build_debug_terminal_window(self) -> QtWidgets.QDialog:
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Drive Debug Terminal")
+        dialog.resize(760, 560)
+        dialog.setModal(False)
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        toolbar = QtWidgets.QHBoxLayout()
+        self.refresh_debug_terminal_button = QtWidgets.QPushButton("Refresh Snapshot")
+        self.copy_debug_terminal_button = QtWidgets.QPushButton("Copy Snapshot")
+        toolbar.addWidget(self.refresh_debug_terminal_button)
+        toolbar.addWidget(self.copy_debug_terminal_button)
+        toolbar.addStretch(1)
+
+        self.debug_terminal_edit = QtWidgets.QPlainTextEdit()
+        self.debug_terminal_edit.setReadOnly(True)
+        self.debug_terminal_edit.setLineWrapMode(
+            QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap
+        )
+        fixed_font = QtGui.QFontDatabase.systemFont(
+            QtGui.QFontDatabase.SystemFont.FixedFont
+        )
+        self.debug_terminal_edit.setFont(fixed_font)
+        self.debug_terminal_edit.setPlainText(
+            "Waiting for monitor data...\n\n"
+            "Connect the driver, press Refresh Snapshot, then copy the text here."
+        )
+
+        layout.addLayout(toolbar)
+        layout.addWidget(self.debug_terminal_edit)
+        return dialog
+
     def _connect_signals(self) -> None:
         self.refresh_ports_button.clicked.connect(self._refresh_ports)
         self.connect_button.clicked.connect(self._connect_selected_port)
@@ -1215,10 +1333,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.open_tuning_button.clicked.connect(
             lambda: self._show_auxiliary_window(self._tuning_window)
         )
+        self.open_debug_terminal_button.clicked.connect(
+            lambda: self._show_auxiliary_window(self._debug_terminal_window)
+        )
         self.open_log_button.clicked.connect(
             lambda: self._show_auxiliary_window(self._log_window)
         )
+        self.refresh_debug_terminal_button.clicked.connect(self._request_monitor_once)
+        self.copy_debug_terminal_button.clicked.connect(self._copy_debug_terminal_text)
         self.monitor_rate_combo.currentIndexChanged.connect(self._update_monitor_poll_interval)
+        self.apply_timing_mode_button.clicked.connect(self._apply_control_timing_mode)
         self.refresh_monitor_button.clicked.connect(self._request_monitor_once)
         self.start_vf_button.clicked.connect(self._start_open_loop_vf)
         self.stop_vf_button.clicked.connect(
@@ -1268,17 +1392,83 @@ class MainWindow(QtWidgets.QMainWindow):
         window.raise_()
         window.activateWindow()
 
+    def _timing_mode_text(self, mode: int) -> str:
+        if int(mode) == CONTROL_TIMING_MODE_3KHZ:
+            return "3 kHz"
+        return "16 kHz"
+
+    def _format_capture_rate_label(self, decimation: int, loop_hz: float) -> str:
+        rate_hz = loop_hz / float(decimation + 1)
+        if rate_hz >= 1000.0:
+            text = f"{rate_hz / 1000.0:.3g} kHz"
+        else:
+            text = f"{rate_hz:.3g} Hz"
+        if decimation == 0:
+            text += " (every ISR)"
+        return text
+
+    def _refresh_capture_rate_combos(self) -> None:
+        combos = [self.ctuning_rate_combo, self.trace_rate_combo]
+        decimations = [0, 1, 3, 7, 15]
+        for combo in combos:
+            current_data = int(combo.currentData() or 0)
+            combo.blockSignals(True)
+            combo.clear()
+            for decimation in decimations:
+                combo.addItem(
+                    self._format_capture_rate_label(decimation, self._active_control_loop_hz),
+                    decimation,
+                )
+            index = combo.findData(current_data)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
+
+        self._update_current_tuning_capture_window_label()
+
+    def _set_active_timing_profile(
+        self,
+        mode: int,
+        current_loop_hz: float | None = None,
+        speed_loop_hz: float | None = None,
+        *,
+        update_combo: bool = True,
+    ) -> None:
+        mode = CONTROL_TIMING_MODE_3KHZ if int(mode) == CONTROL_TIMING_MODE_3KHZ else CONTROL_TIMING_MODE_16KHZ
+        if current_loop_hz is None or current_loop_hz <= 1.0:
+            current_loop_hz = 3000.0 if mode == CONTROL_TIMING_MODE_3KHZ else 16000.0
+        if speed_loop_hz is None or speed_loop_hz <= 1.0:
+            speed_loop_hz = current_loop_hz * 0.5
+
+        self._active_timing_mode = mode
+        self._active_control_loop_hz = float(current_loop_hz)
+        self._active_speed_loop_hz = float(speed_loop_hz)
+
+        if hasattr(self, "timing_mode_combo") and update_combo:
+            index = self.timing_mode_combo.findData(mode)
+            if index >= 0:
+                self.timing_mode_combo.blockSignals(True)
+                self.timing_mode_combo.setCurrentIndex(index)
+                self.timing_mode_combo.blockSignals(False)
+
+        if hasattr(self, "timing_mode_state_label"):
+            self.timing_mode_state_label.setText(
+                f"Active: {self._timing_mode_text(mode)} ({self._active_control_loop_hz:.0f} Hz)"
+            )
+
+        if hasattr(self, "ctuning_rate_combo") and hasattr(self, "trace_rate_combo"):
+            self._refresh_capture_rate_combos()
+
     def _update_monitor_poll_interval(self) -> None:
         interval_ms = int(self.monitor_rate_combo.currentData() or 250)
         self._monitor_timer.setInterval(interval_ms)
 
     def _trace_sample_period_s(self) -> float:
         decimation = int(self.trace_rate_combo.currentData() or 0)
-        return (decimation + 1) / CURRENT_LOOP_FREQUENCY_HZ
+        return (decimation + 1) / max(self._active_control_loop_hz, 1.0)
 
     def _current_tuning_sample_period_s(self) -> float:
         decimation = int(self.ctuning_rate_combo.currentData() or 0)
-        return (decimation + 1) / CURRENT_LOOP_FREQUENCY_HZ
+        return (decimation + 1) / max(self._active_control_loop_hz, 1.0)
 
     def _update_current_tuning_capture_window_label(self) -> None:
         window_ms = TRACE_TOTAL_SAMPLES * self._current_tuning_sample_period_s() * 1000.0
@@ -1307,11 +1497,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_current_tuning_parameters(self) -> None:
         payload = struct.pack(
-            "<4f",
+            "<4fBBB",
             float(self.ctuning_ref1_spin.value()),
             float(self.ctuning_ref2_spin.value()),
             float(self.ctuning_kp_spin.value()),
             float(self.ctuning_ki_spin.value()),
+            int(self.ctuning_angle_test_combo.currentData() or 0),
+            1 if self.ctuning_invert_current_checkbox.isChecked() else 0,
+            1 if self.ctuning_swap_uv_checkbox.isChecked() else 0,
         )
         self._enqueue_command(
             Command.CMD_APPLY_ID_SQUARE_TUNING,
@@ -1481,6 +1674,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._clear_current_tuning_capture()
             self._clear_trace_capture()
             self._clear_monitor_display()
+            self._refresh_debug_terminal(None)
 
     def _handle_worker_log(self, message: str) -> None:
         if message.startswith("TX 02 16 01 1C"):
@@ -1504,6 +1698,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_log(self, message: str) -> None:
         timestamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss.zzz")
         self.log_edit.appendPlainText(f"[{timestamp}] {message}")
+
+    def _copy_debug_terminal_text(self) -> None:
+        QtWidgets.QApplication.clipboard().setText(self.debug_terminal_edit.toPlainText())
+        self.statusBar().showMessage("Debug snapshot copied", 2000)
 
     def _enqueue_command(
         self, command: Command | int, payload: bytes, description: str, quiet: bool = False
@@ -1597,6 +1795,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Write Motor Parameters chunk {index}/{len(chunks)}",
             )
 
+    def _apply_control_timing_mode(self) -> None:
+        selected_mode = int(self.timing_mode_combo.currentData() or CONTROL_TIMING_MODE_16KHZ)
+        payload = bytes([selected_mode & 0xFF])
+        self._enqueue_command(
+            Command.CMD_SET_CONTROL_TIMING_MODE,
+            payload,
+            f"Set Control Timing Mode ({self._timing_mode_text(selected_mode)})",
+        )
+        self._set_active_timing_profile(selected_mode, update_combo=False)
+        self._request_monitor_once()
+
     def _table_values(self, table: QtWidgets.QTableWidget) -> list[float]:
         values: list[float] = []
         for row in range(table.rowCount()):
@@ -1658,8 +1867,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._append_log(f"Monitor parse error: {exc}")
                 return
             self._latest_monitor_snapshot = snapshot
+            self._set_active_timing_profile(
+                snapshot.control_timing_mode,
+                snapshot.control_loop_frequency_hz,
+                snapshot.speed_loop_frequency_hz,
+            )
             self._append_snapshot_to_trend_buffer(snapshot)
             self._update_monitor(snapshot)
+            self._refresh_debug_terminal(snapshot)
             return
 
         if subcommand == UpdateCode.MTR_CODE_ERROR:
@@ -1740,7 +1955,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._current_tuning_capture.series_defs:
             self._current_tuning_capture = ScopeCaptureState(
                 title="Current Tuning Response",
-                sample_period_s=1.0 / CURRENT_LOOP_FREQUENCY_HZ,
+                sample_period_s=1.0 / max(self._active_control_loop_hz, 1.0),
                 total_samples=CURRENT_TUNING_TOTAL_SAMPLES,
                 series_defs=[
                     {"label": "Reference", "unit": "A", "color": "#ff7f0e"},
@@ -1859,6 +2074,101 @@ class MainWindow(QtWidgets.QMainWindow):
             return "FOC"
         return f"Unknown ({run_mode})"
 
+    def _format_debug_terminal_text(self, snapshot) -> str:
+        timestamp = QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz")
+        expected_delta = float(snapshot.debug_expected_delta_pos_sync)
+        actual_delta = float(snapshot.debug_delta_pos)
+        delta_ratio = actual_delta / expected_delta if abs(expected_delta) > 1e-6 else 0.0
+        delta_ratio_avg = (
+            float(snapshot.debug_delta_pos_avg) / expected_delta
+            if abs(expected_delta) > 1e-6
+            else 0.0
+        )
+        sync_rpm = float(snapshot.debug_open_loop_sync_rpm_cmd)
+        speed_ratio = float(snapshot.act_speed) / sync_rpm if abs(sync_rpm) > 1e-6 else 0.0
+        speed_ratio_raw_avg = (
+            float(snapshot.debug_speed_raw_rpm_avg) / sync_rpm
+            if abs(sync_rpm) > 1e-6
+            else 0.0
+        )
+        theta_deg = float(snapshot.theta) * 180.0 / 3.141592653589793
+        mechanical_deg = (
+            float(snapshot.debug_mechanical_angle_rad) * 180.0 / 3.141592653589793
+        )
+        electrical_deg = (
+            float(snapshot.debug_electrical_angle_rad) * 180.0 / 3.141592653589793
+        )
+
+        lines = [
+            f"Timestamp: {timestamp}",
+            f"Port: {self._current_port or '-'}",
+            f"RunMode: {self._run_mode_text(snapshot.run_mode)}",
+            f"ControlTimingMode: {self._timing_mode_text(snapshot.control_timing_mode)}",
+            f"ControlLoopHz: {snapshot.control_loop_frequency_hz:.6f}",
+            f"SpeedLoopHz: {snapshot.speed_loop_frequency_hz:.6f}",
+            f"EnableRun: {'ON' if snapshot.enable_run else 'OFF'}",
+            f"Fault: {format_fault_text(snapshot.fault_occurred)}",
+            "",
+            "[OpenLoopCommand]",
+            f"OpenLoopElectricalHzCmd: {snapshot.debug_open_loop_electrical_hz_cmd:.6f}",
+            f"OpenLoopSyncRpmCmd: {snapshot.debug_open_loop_sync_rpm_cmd:.6f}",
+            f"ExpectedDeltaPosSync: {snapshot.debug_expected_delta_pos_sync:.6f}",
+            f"IsrDeltaCycles: {snapshot.debug_isr_delta_cycles}",
+            f"IsrPeriodUs: {snapshot.debug_isr_period_us:.6f}",
+            f"IsrFrequencyHz: {snapshot.debug_isr_frequency_hz:.6f}",
+            f"IsrMeasureOnlyMode: {snapshot.debug_isr_measure_only_mode}",
+            f"IsrMeasureEdgeFrequencyHz: {snapshot.debug_isr_measure_edge_frequency_hz:.6f}",
+            "",
+            "[ObservedFeedback]",
+            f"ActSpeedFilteredRpm: {snapshot.act_speed:.6f}",
+            f"SpeedRawRpm: {snapshot.debug_speed_raw_rpm:.6f}",
+            f"SpeedRawRpmAvg: {snapshot.debug_speed_raw_rpm_avg:.6f}",
+            f"ObservedElectricalHz: {snapshot.debug_observed_electrical_hz:.6f}",
+            f"ObservedElectricalHzAvg: {snapshot.debug_observed_electrical_hz_avg:.6f}",
+            f"DeltaPos: {snapshot.debug_delta_pos}",
+            f"DeltaPosAvg: {snapshot.debug_delta_pos_avg:.6f}",
+            f"EncSingleTurn: {snapshot.debug_enc_single_turn}",
+            f"EncoderTurns: {snapshot.debug_encoder_turns:.6f}",
+            "",
+            "[Angles]",
+            f"ThetaRad: {snapshot.theta:.6f}",
+            f"ThetaDeg: {theta_deg:.6f}",
+            f"MechanicalAngleRad: {snapshot.debug_mechanical_angle_rad:.6f}",
+            f"MechanicalAngleDeg: {mechanical_deg:.6f}",
+            f"ElectricalAngleRad: {snapshot.debug_electrical_angle_rad:.6f}",
+            f"ElectricalAngleDeg: {electrical_deg:.6f}",
+            "",
+            "[Ratios]",
+            f"DeltaPosRatioActualOverExpected: {delta_ratio:.6f}",
+            f"DeltaPosAvgRatioOverExpected: {delta_ratio_avg:.6f}",
+            f"SpeedRatioActualOverSync: {speed_ratio:.6f}",
+            f"SpeedRawAvgRatioOverSync: {speed_ratio_raw_avg:.6f}",
+            "",
+            "[Monitor]",
+            f"Vdc: {snapshot.vdc:.6f}",
+            f"Temperature: {snapshot.temperature:.6f}",
+            f"IdRef: {snapshot.id_ref:.6f}",
+            f"IqRef: {snapshot.iq_ref:.6f}",
+            f"Iu: {snapshot.phase_u:.6f}",
+            f"Iv: {snapshot.phase_v:.6f}",
+            f"Iw: {snapshot.phase_w:.6f}",
+            f"Id: {snapshot.id_current:.6f}",
+            f"Iq: {snapshot.iq_current:.6f}",
+            f"Vd: {snapshot.vd:.6f}",
+            f"Vq: {snapshot.vq:.6f}",
+            f"ActPosition: {snapshot.act_position:.6f}",
+        ]
+        return "\n".join(lines)
+
+    def _refresh_debug_terminal(self, snapshot) -> None:
+        if snapshot is None:
+            self.debug_terminal_edit.setPlainText(
+                "Waiting for monitor data...\n\n"
+                "Connect the driver, press Refresh Snapshot, then copy the text here."
+            )
+            return
+        self.debug_terminal_edit.setPlainText(self._format_debug_terminal_text(snapshot))
+
     def _clear_monitor_display(self) -> None:
         for label in self.monitor_labels.values():
             label.setText("-")
@@ -1866,6 +2176,8 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setStyleSheet("")
         self.monitor_labels["enable_run"].setText("OFF")
         self.monitor_labels["run_mode"].setText("Idle")
+        self.monitor_labels["control_timing_mode"].setText(self._timing_mode_text(self._active_timing_mode))
+        self.monitor_labels["effective_loop_hz"].setText(f"{self._active_control_loop_hz:.0f} Hz")
         self.monitor_labels["fault_occurred"].setText("OK")
         self.monitor_labels["fault_occurred"].setStyleSheet(
             "color: #6aa84f; font-weight: 600;"
@@ -1888,6 +2200,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_monitor(self, snapshot) -> None:
         self.monitor_labels["enable_run"].setText("ON" if snapshot.enable_run else "OFF")
         self.monitor_labels["run_mode"].setText(self._run_mode_text(snapshot.run_mode))
+        self.monitor_labels["control_timing_mode"].setText(self._timing_mode_text(snapshot.control_timing_mode))
+        self.monitor_labels["effective_loop_hz"].setText(f"{snapshot.control_loop_frequency_hz:.0f} Hz")
         self._set_fault_label(snapshot.fault_occurred)
         self.monitor_labels["vdc"].setText(f"{snapshot.vdc:.3f} V")
         self.monitor_labels["temperature"].setText(f"{snapshot.temperature:.3f} C")
@@ -1918,6 +2232,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._append_error_snapshot_to_trend_buffer(snapshot)
         self.monitor_labels["enable_run"].setText("OFF")
         self.monitor_labels["run_mode"].setText("FAULT")
+        self.monitor_labels["control_timing_mode"].setText(self._timing_mode_text(self._active_timing_mode))
+        self.monitor_labels["effective_loop_hz"].setText(f"{self._active_control_loop_hz:.0f} Hz")
         self.monitor_labels["vdc"].setText(f"{snapshot.vdc:.3f} V")
         self.monitor_labels["temperature"].setText(f"{snapshot.temperature:.3f} C")
         self.monitor_labels["cmd_speed"].setText(f"{snapshot.cmd_speed:.3f}")

@@ -46,11 +46,31 @@ extern volatile float gTargetSpeedRpm;
 extern volatile uint8_t gRunMode;
 extern volatile float gVfFrequencyHz;
 extern volatile float gVfVoltageV;
+extern volatile float gDebugSpeedRawRpm;
+extern volatile float gDebugSpeedRawRpmAvg;
+extern volatile float gDebugObservedElectricalHz;
+extern volatile float gDebugObservedElectricalHzAvg;
+extern volatile float gDebugOpenLoopElectricalHzCmd;
+extern volatile float gDebugOpenLoopSyncRpmCmd;
+extern volatile float gDebugExpectedDeltaPosSync;
+extern volatile float gDebugDeltaPosAvg;
+extern volatile float gDebugEncoderTurns;
+extern volatile float gDebugMechanicalAngleRad;
+extern volatile float gDebugElectricalAngleRad;
+extern volatile uint32_t gDebugIsrDeltaCycles;
+extern volatile float gDebugIsrPeriodUs;
+extern volatile float gDebugIsrFrequencyHz;
+extern volatile uint8_t gIsrMeasureOnlyMode;
+extern volatile float gIsrMeasureEdgeFrequencyHz;
+extern volatile uint8_t gControlTimingMode;
+extern volatile float gEffectiveCurrentLoopFrequencyHz;
+extern volatile float gEffectiveSpeedLoopFrequencyHz;
 extern uint16_t FaultCode;
 extern float gTracePosError;
 extern float RecordTable1[TRACE_DATA_LENGTH * 4u];
 extern TraceData Trace_Data;
 extern IdSquareTuning_t IdSquareTuning;
+extern void ApplyControlTimingMode(uint8_t mode);
 
 static void USB_StartServoSequence(void);
 
@@ -227,6 +247,48 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gVfFrequencyHz, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gVfVoltageV, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugOpenLoopElectricalHzCmd, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugOpenLoopSyncRpmCmd, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugObservedElectricalHz, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugSpeedRawRpm, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugExpectedDeltaPosSync, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugDeltaPosAvg, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugEncoderTurns, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugMechanicalAngleRad, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugElectricalAngleRad, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugSpeedRawRpmAvg, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugObservedElectricalHzAvg, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.DeltaPos, sizeof(Parameter.DeltaPos));
+	offset = (uint8_t)(offset + sizeof(Parameter.DeltaPos));
+	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.EncSingleTurn, sizeof(Parameter.EncSingleTurn));
+	offset = (uint8_t)(offset + sizeof(Parameter.EncSingleTurn));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugIsrDeltaCycles, sizeof(gDebugIsrDeltaCycles));
+	offset = (uint8_t)(offset + sizeof(gDebugIsrDeltaCycles));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugIsrPeriodUs, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gDebugIsrFrequencyHz, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gIsrMeasureOnlyMode, sizeof(gIsrMeasureOnlyMode));
+	offset = (uint8_t)(offset + sizeof(gIsrMeasureOnlyMode));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gIsrMeasureEdgeFrequencyHz, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gControlTimingMode, sizeof(gControlTimingMode));
+	offset = (uint8_t)(offset + sizeof(gControlTimingMode));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEffectiveCurrentLoopFrequencyHz, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEffectiveSpeedLoopFrequencyHz, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 
 	SendData(CMD_MONITOR_DATA, offset, USB_Comunicate->TransmitData);
@@ -499,6 +561,9 @@ static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t paylo
 	float frequency = 10.0f;
 	float current_kp;
 	float current_ki;
+	uint8_t electrical_angle_test_mode = 0u;
+	uint8_t current_polarity_invert_test = 0u;
+	uint8_t current_uv_swap_test = 0u;
 
 	if (payload_length < 16u)
 	{
@@ -509,10 +574,29 @@ static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t paylo
 	memcpy(&frequency, &payload[4], sizeof(float));
 	memcpy(&current_kp, &payload[8], sizeof(float));
 	memcpy(&current_ki, &payload[12], sizeof(float));
+	if (payload_length >= 17u)
+	{
+		electrical_angle_test_mode = payload[16];
+	}
+	if (payload_length >= 18u)
+	{
+		current_polarity_invert_test = payload[17];
+	}
+	if (payload_length >= 19u)
+	{
+		current_uv_swap_test = payload[18];
+	}
 
 	IdSquareTuning.fAmplitudeCmd = amplitude;
 	IdSquareTuning.fFrequencyCmd = frequency;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
+	IdSquareTuning.ElectricalAngleTestMode = electrical_angle_test_mode;
+	IdSquareTuning.CurrentPolarityInvertTest = (current_polarity_invert_test != 0u) ? 1u : 0u;
+	IdSquareTuning.CurrentUvSwapTest = (current_uv_swap_test != 0u) ? 1u : 0u;
 	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+	IdSquareTuning.OffsetCaptured = 0;
 
 	MotorParameter[MOTOR_CURRENT_P_GAIN] = current_kp;
 	MotorParameter[MOTOR_CURRENT_I_GAIN] = current_ki;
@@ -524,7 +608,11 @@ static void USB_HandleIdSquareTuningStart(void)
 	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
 	{
 		IdSquareTuning.Enable = 0u;
+		IdSquareTuning.AlignmentDone = 0u;
+		IdSquareTuning.AlignmentCounter = 0u;
 		IdSquareTuning.fPhase = 0.0f;
+		IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+		IdSquareTuning.OffsetCaptured = 0;
 		return;
 	}
 
@@ -535,8 +623,12 @@ static void USB_HandleIdSquareTuningStart(void)
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	IdSquareTuning.Enable = 1u;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+	IdSquareTuning.OffsetCaptured = 0;
 	USB_StartServoSequence();
 	if (Trace_Data.Enable != 0u)
 	{
@@ -547,8 +639,12 @@ static void USB_HandleIdSquareTuningStart(void)
 static void USB_HandleIdSquareTuningStop(void)
 {
 	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+	IdSquareTuning.OffsetCaptured = 0;
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
@@ -713,6 +809,18 @@ static void USB_HandleOpenLoopStop(void)
 	STM_NextState(&StateMachine, STOP);
 }
 
+static void USB_HandleControlTimingMode(const uint8_t *payload, uint8_t payload_length)
+{
+	uint8_t timing_mode = CONTROL_TIMING_MODE_16KHZ;
+
+	if ((payload != 0) && (payload_length > 0u))
+	{
+		timing_mode = payload[0];
+	}
+
+	ApplyControlTimingMode(timing_mode);
+}
+
 static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t command, const uint8_t *payload, uint8_t payload_length)
 {
 	switch (command)
@@ -773,6 +881,11 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 		case CMD_STOP_ID_SQUARE_TUNING:
 			USB_SendAckPacket(ACK, command, payload, payload_length);
 			USB_HandleIdSquareTuningStop();
+			break;
+
+		case CMD_SET_CONTROL_TIMING_MODE:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleControlTimingMode(payload, payload_length);
 			break;
 
 		case CMD_UPDATE_MONITOR:

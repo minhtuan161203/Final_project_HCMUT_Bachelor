@@ -7,6 +7,7 @@
 
 extern uint16_t FaultCode;
 extern CurrentSensor_t Current_Sensor;
+extern volatile float gEffectiveCurrentLoopFrequencyHz;
 
 void GetParameter(Parameterhandle_t *pHandle, float *MotorParam)
 {
@@ -200,13 +201,18 @@ void Init_Parameter(Parameterhandle_t *pHandle)
 {
 	pHandle->EncRes = MOTOR_ENC_RES;
 	pHandle->Ui8ServoOn = 0;
-	pHandle->Ui16ControlFrequency = 16000;	
-	pHandle->u8PolePair = 4;
+	pHandle->Ui16ControlFrequency = (uint16_t)USER_EFFECTIVE_CURRENT_LOOP_FREQUENCY;
+	pHandle->u8PolePair = INITIAL_MOTOR_POLE_PAIRS;
 	pHandle->u16Offset_Ia=0x7fff;
 	pHandle->u16Offset_Ib=0x7fff;
 	pHandle->Pulse = pHandle->Offset_Enc;
 	pHandle->DeltaPos = 0;
 	pHandle->PrevDeltaPos = 0;
+	pHandle->fActSpeed = 0.0f;
+	pHandle->fActSpeedFilter = 0.0f;
+	pHandle->fPosition = 0.0f;
+	pHandle->fPrePosition = 0.0f;
+	pHandle->fTheta = 0.0f;
 	pHandle->bInitPos = 0;
 	pHandle->PreEncSingleTurn = 0;
 	pHandle->EncSingleTurn = 0;
@@ -293,6 +299,7 @@ uint16_t CalibrateCurrentSensor(CurrentSensor_t *pHandle, Parameterhandle_t *par
 	uint16_t raw_ib;
 	uint16_t avg_ia;
 	uint16_t avg_ib;
+	uint32_t calib_timeout_ticks;
 	int32_t offset_error_ia;
 	int32_t offset_error_ib;
 
@@ -306,7 +313,15 @@ uint16_t CalibrateCurrentSensor(CurrentSensor_t *pHandle, Parameterhandle_t *par
 		return NO_ERROR;
 	}
 
-	if (++pHandle->CalibTimeoutCounter > CURRENT_SENSOR_CALIB_TIMEOUT_TICKS)
+	calib_timeout_ticks = (uint32_t)(((gEffectiveCurrentLoopFrequencyHz > 1.0f) ?
+		gEffectiveCurrentLoopFrequencyHz : USER_ISR_FREQUENCY_16KHZ) *
+		CURRENT_SENSOR_CALIB_TIMEOUT_SECONDS);
+	if (calib_timeout_ticks < CURRENT_SENSOR_CALIB_SAMPLES)
+	{
+		calib_timeout_ticks = CURRENT_SENSOR_CALIB_SAMPLES;
+	}
+
+	if (++pHandle->CalibTimeoutCounter > calib_timeout_ticks)
 	{
 		pHandle->CalibFinish = -1;
 		return ERROR_CALIB_TIMEOUT;

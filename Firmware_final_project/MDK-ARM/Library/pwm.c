@@ -6,15 +6,15 @@
 extern TIM_HandleTypeDef htim8;
 
 // --- V/f Control Constants ---
-#define NOMINAL_FREQ    50.0f    // Rated motor frequency (Hz)
 #define NOMINAL_V       0.90f    // Max duty cycle limit (0.0 to 1.0)
 #define V_OFFSET        0.05f    // Voltage boost for low-speed torque
-#define VF_SAMPLING_TIME_S (1.0f / CURRENT_LOOP_FREQUENCY)
 #define TWO_PI_F  (2.0f * PI)
 #define SQRT3_BY_2_F 0.86602540378f
 
 // --- Global State Variables ---
 static float current_phase = 0.0f; 
+extern volatile float gEffectiveCurrentLoopFrequencyHz;
+extern volatile float gOpenLoopFrequencyLimitHz;
 
 void ResetControl_V_over_F(void)
 {
@@ -68,14 +68,16 @@ PWM_Phases_t Control_V_over_F(float TargetFreq,  float TargetVol)
 {
     float limited_frequency = TargetFreq;
     float modulation = TargetVol;
+    float effective_loop_hz;
+    float sampling_time_s;
     float sin_theta;
     float cos_theta;
     PWM_Phases_t output;
 
-    if (limited_frequency > NOMINAL_FREQ) {
-        limited_frequency = NOMINAL_FREQ;
-    } else if (limited_frequency < -NOMINAL_FREQ) {
-        limited_frequency = -NOMINAL_FREQ;
+    if (limited_frequency > gOpenLoopFrequencyLimitHz) {
+        limited_frequency = gOpenLoopFrequencyLimitHz;
+    } else if (limited_frequency < -gOpenLoopFrequencyLimitHz) {
+        limited_frequency = -gOpenLoopFrequencyLimitHz;
     }
 
     if (modulation < 0.0f) {
@@ -92,9 +94,10 @@ PWM_Phases_t Control_V_over_F(float TargetFreq,  float TargetVol)
         return output;
     }
 
-    /* FPGA interrupt drives this function at 16 kHz, so phase is integrated
-       from the measured ISR period instead of a magic literal. */
-    current_phase += TWO_PI_F * limited_frequency * VF_SAMPLING_TIME_S;
+    effective_loop_hz = (gEffectiveCurrentLoopFrequencyHz > 1.0f) ?
+        gEffectiveCurrentLoopFrequencyHz : USER_ISR_FREQUENCY_16KHZ;
+    sampling_time_s = 1.0f / effective_loop_hz;
+    current_phase += TWO_PI_F * limited_frequency * sampling_time_s;
 
     if (current_phase >= TWO_PI_F) {
         current_phase -= TWO_PI_F;
