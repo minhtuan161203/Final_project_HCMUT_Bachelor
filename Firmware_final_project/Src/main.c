@@ -231,15 +231,12 @@ static float ClampFloat(float value, float lower, float upper)
 
 static float WrapAngle(float angle)
 {
-	while (angle >= (2.0f * PI))
-	{
-		angle -= (2.0f * PI);
-	}
-	while (angle < 0.0f)
-	{
-		angle += (2.0f * PI);
-	}
-	return angle;
+    angle = fmodf(angle, 2.0f * PI);
+    if (angle < 0.0f)
+    {
+        angle += (2.0f * PI);
+    }
+    return angle;
 }
 
 static void ResetDebugAveraging(void)
@@ -1297,7 +1294,9 @@ static void RunFocLoop(void)
 			current_phase_v = -current_phase_v;
 		}
 	}
-
+	
+	// Run Park Clarke conversion
+	
 	gClarke.fA = current_phase_u;
 	gClarke.fB = current_phase_v;
 	gClarke.m_ab2albe(&gClarke);
@@ -1311,16 +1310,19 @@ static void RunFocLoop(void)
 	Parameter.fIdq[0] = gPark.fD;
 	Parameter.fIdq[1] = gPark.fQ;
 
+	// This section divide to 2 branch --> Tunning MODE & Normal Operation MODE
 	if (IdSquareTuning.Enable != 0u)
 	{
 		gTargetSpeedRpm = 0.0f;
 		gIqRefA = 0.0f;
 		if ((alignment_active != 0u) || (alignment_hold_mode != 0u))
 		{
+			// Clamp safety for encoder alignment (inject Id to align zero point)
 			gIdRefA = CalcIdSquareTuningAlignmentCurrent();
 			IdSquareTuning.fFrequencyApplied = 0.0f;
 			IdSquareTuning.fPhase = 0.0f;
 		}
+			// If align zero point of encoder is DONE --> run tunning Id square wave
 		else
 		{
 			gIdRefA = CalcIdSquareTuningReference();
@@ -1332,6 +1334,8 @@ static void RunFocLoop(void)
 	{
 		IdSquareTuning.fVoltageLimitApplied = 0.0f;
 		IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+		
+		// Divide speed frequency control by 2 (e.g: current loop is 16kHz --> enter interupt loop 2 times --> start calculate speed
 		gSpeedLoopDivider++;
 		if (gSpeedLoopDivider >= 2u)
 		{
@@ -1351,6 +1355,8 @@ static void RunFocLoop(void)
 
 	gIdPi.fIn = gIdRefA - gPark.fD;
 	gIdPi.m_calc(&gIdPi);
+	
+	// If in tunning mode --> isolate and reset PI control Q - axis
 	if (IdSquareTuning.Enable != 0u)
 	{
 		/* Keep the Id square-wave / alignment experiment on the d-axis only.
@@ -1362,13 +1368,15 @@ static void RunFocLoop(void)
 		gIqPi.fPout = 0.0f;
 		gIdPi.fOut = ClampFloat(gIdPi.fOut, -voltage_limit, voltage_limit);
 	}
+	// If not in Id tuning mode --> calculate PI control Q - axis
 	else
 	{
 		gIqPi.fIn = gIqRefA - gPark.fQ;
 		gIqPi.m_calc(&gIqPi);
 		LimitDqVoltageVector(&gIdPi.fOut, &gIqPi.fOut, voltage_limit);
 	}
-
+	
+	// Inverse convert ==> DQ to A B C phase supply to motor
 	Parameter.fVdq[0] = gIdPi.fOut;
 	Parameter.fVdq[1] = gIqPi.fOut;
 
@@ -1376,11 +1384,11 @@ static void RunFocLoop(void)
 	gInvPark.fQ = gIqPi.fOut;
 	gInvPark.fSinAng = sin_theta;
 	gInvPark.fCosAng = cos_theta;
-	gInvPark.m_dq2albe(&gInvPark);
+	gInvPark.m_dq2albe(&gInvPark); // Vd, Vq -> V_alpha, V_beta
 
 	gInvClarke.fAl = gInvPark.fAl;
 	gInvClarke.fBe = gInvPark.fBe;
-	gInvClarke.m_albe2abc(&gInvClarke);
+	gInvClarke.m_albe2abc(&gInvClarke); // V_alpha, V_beta -> V_u, V_v, V_w
 
 	Parameter.fVabc[0] = gInvClarke.fA;
 	Parameter.fVabc[1] = gInvClarke.fB;
@@ -1979,6 +1987,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 
 	GetParameter(&Parameter, MotorParameter);
+	
+	// Calculate speed and Parameter.ftheta for FOC control
 	UpdateMeasuredSpeedAndTheta();
 
 	if ((StateMachine.bState == FAULT_NOW) || (StateMachine.bState == FAULT_OVER))
