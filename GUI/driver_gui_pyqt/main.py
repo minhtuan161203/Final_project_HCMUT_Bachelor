@@ -14,7 +14,16 @@ from protocol import (
     ACK_NOERROR,
     CONTROL_TIMING_MODE_16KHZ,
     CONTROL_TIMING_MODE_3KHZ,
+    ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE,
+    ENCODER_ALIGNMENT_POLICY_POWER_ON,
+    ENCODER_ALIGNMENT_STATUS_DONE,
+    ENCODER_ALIGNMENT_STATUS_FAULT,
+    ENCODER_ALIGNMENT_STATUS_IDLE,
+    ENCODER_ALIGNMENT_STATUS_REQUESTED,
+    ENCODER_ALIGNMENT_STATUS_RUNNING,
     CURRENT_LOOP_FREQUENCY_HZ,
+    ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
+    ID_SQUARE_TUNING_MODE_SQUARE_WAVE,
     CURRENT_TUNING_TOTAL_SAMPLES,
     DEFAULT_MOTOR_MAXIMUM_POWER,
     DEFAULT_MOTOR_MAXIMUM_VOLTAGE,
@@ -27,6 +36,9 @@ from protocol import (
     ID_SQUARE_ANGLE_TEST_NONE,
     ID_SQUARE_ANGLE_TEST_PLUS_90,
     ID_SQUARE_ANGLE_TEST_PLUS_180,
+    RUN_MODE_ALIGNMENT_ONLY,
+    RUN_MODE_FOC,
+    RUN_MODE_OPEN_LOOP_VF,
     Command,
     DRIVER_PARAMETER_NAMES,
     MOTOR_PARAMETER_NAMES,
@@ -112,6 +124,7 @@ TRACE_CHANNEL_META = {
 }
 
 TRACE_PRESETS = {
+    "Encoder Alignment": [12, 11, 4, 14],
     "Id Tuning": [12, 11, 13, 14],
     "Current Loop": [3, 4, 11, 14],
     "Phase Currents": [3, 5, 6, 7],
@@ -684,7 +697,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("ASD04 Driver GUI (Python)")
+        self.setWindowTitle("ASD04 Servo Commissioning Console")
         self.resize(1220, 800)
 
         self._worker = SerialWorker(FrameStreamParser(), self)
@@ -782,9 +795,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.connection_state_label = QtWidgets.QLabel("Disconnected")
         self.timing_mode_state_label = QtWidgets.QLabel("Active: 3 kHz (3000 Hz)")
         self.open_parameters_button = QtWidgets.QPushButton("Parameters...")
-        self.open_trends_button = QtWidgets.QPushButton("Trends...")
-        self.open_tuning_button = QtWidgets.QPushButton("Tuning / Scope...")
-        self.open_debug_terminal_button = QtWidgets.QPushButton("Debug Terminal...")
+        self.open_trends_button = QtWidgets.QPushButton("Trend Charts...")
+        self.open_tuning_button = QtWidgets.QPushButton("Commissioning...")
+        self.open_debug_terminal_button = QtWidgets.QPushButton("Snapshot...")
         self.open_log_button = QtWidgets.QPushButton("Log...")
 
         layout.addWidget(QtWidgets.QLabel("Port"), 0, 0)
@@ -811,44 +824,38 @@ class MainWindow(QtWidgets.QMainWindow):
         return box
 
     def _build_monitor_group(self) -> QtWidgets.QGroupBox:
-        box = QtWidgets.QGroupBox("Monitor")
+        box = QtWidgets.QGroupBox("Drive Monitor")
         layout = QtWidgets.QVBoxLayout(box)
         self.monitor_labels: dict[str, QtWidgets.QLabel] = {}
 
         status_fields = [
-            ("enable_run", "Enable Run"),
+            ("enable_run", "Servo"),
             ("run_mode", "Run Mode"),
-            ("control_timing_mode", "Timing Mode"),
+            ("control_timing_mode", "Timing"),
             ("effective_loop_hz", "Loop Freq"),
             ("fault_occurred", "Fault"),
             ("vdc", "Vdc"),
-            ("temperature", "Temperature"),
-            ("motor_power", "Motor Power"),
+            ("temperature", "Temp"),
         ]
         motion_fields = [
             ("cmd_speed", "Cmd Speed"),
             ("act_speed", "Act Speed"),
             ("speed_error", "Speed Error"),
-            ("cmd_position", "Cmd Position"),
             ("act_position", "Act Position"),
             ("position_error", "Position Error"),
         ]
         current_fields = [
             ("id_ref", "Id Ref"),
+            ("id_current", "Id"),
             ("iq_ref", "Iq Ref"),
+            ("iq_current", "Iq"),
             ("phase_u", "Iu"),
             ("phase_v", "Iv"),
             ("phase_w", "Iw"),
-            ("id_current", "Id"),
-            ("iq_current", "Iq"),
         ]
         voltage_fields = [
             ("vd", "Vd"),
             ("vq", "Vq"),
-            ("v_phase_u", "Vu"),
-            ("v_phase_v", "Vv"),
-            ("v_phase_w", "Vw"),
-            ("theta", "Theta"),
             ("vf_frequency", "V/F Freq"),
             ("vf_voltage", "V/F Volt"),
         ]
@@ -868,7 +875,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._build_monitor_dashboard_section("Currents", current_fields, columns=2), 1, 0
         )
         dashboard_layout.addWidget(
-            self._build_monitor_dashboard_section("Voltage && Debug", voltage_fields, columns=2),
+            self._build_monitor_dashboard_section("Voltages", voltage_fields, columns=2),
             1,
             1,
         )
@@ -877,10 +884,10 @@ class MainWindow(QtWidgets.QMainWindow):
         dashboard_layout.setRowStretch(2, 1)
 
         trend_note = QtWidgets.QLabel(
-            "Full-size trend charts are available in the separate Trends window."
+            "Main monitor shows the commissioning essentials. Use Trend Charts and Snapshot for deeper traces and debug detail."
         )
         trend_note.setWordWrap(True)
-        open_trends_inline_button = QtWidgets.QPushButton("Open Trends Window")
+        open_trends_inline_button = QtWidgets.QPushButton("Open Trend Charts")
         open_trends_inline_button.clicked.connect(
             lambda: self._show_auxiliary_window(self._trend_window)
         )
@@ -948,13 +955,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_tuning_window(self) -> QtWidgets.QDialog:
         dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Current Tuning / Scope")
-        dialog.resize(1280, 900)
+        dialog.setWindowTitle("Commissioning / Scope")
+        dialog.resize(1280, 920)
         dialog.setModal(False)
 
         layout = QtWidgets.QVBoxLayout(dialog)
         tabs = QtWidgets.QTabWidget(dialog)
-        tabs.addTab(self._build_current_tuning_tab(), "Current Tuning")
+        tabs.addTab(self._build_current_tuning_tab(), "Commissioning")
         tabs.addTab(self._build_trace_scope_tab(), "Trace Scope")
         layout.addWidget(tabs)
         return dialog
@@ -963,18 +970,52 @@ class MainWindow(QtWidgets.QMainWindow):
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
 
-        control_group = QtWidgets.QGroupBox("Id Square-Wave Current Loop Tuning")
+        alignment_group = QtWidgets.QGroupBox("Encoder Alignment")
+        alignment_layout = QtWidgets.QGridLayout(alignment_group)
+        self.alignment_policy_value_label = QtWidgets.QLabel("Waiting for monitor data")
+        self.alignment_status_value_label = QtWidgets.QLabel("Idle")
+        self.alignment_active_offset_value_label = QtWidgets.QLabel("0 counts")
+        self.alignment_captured_offset_value_label = QtWidgets.QLabel("0 counts")
+        self.alignment_save_state_value_label = QtWidgets.QLabel("No pending save")
+        self.run_alignment_button = QtWidgets.QPushButton("Run Encoder Alignment Only")
+        self.save_alignment_flash_button = QtWidgets.QPushButton("Save Offset to Flash")
+        alignment_hint = QtWidgets.QLabel(
+            "Incremental encoders align on every servo start because position is lost at power-up. Absolute encoders use the stored offset immediately, so alignment is normally a commissioning step that you run once and then save to flash."
+        )
+        alignment_hint.setWordWrap(True)
+        alignment_layout.addWidget(QtWidgets.QLabel("Policy"), 0, 0)
+        alignment_layout.addWidget(self.alignment_policy_value_label, 0, 1)
+        alignment_layout.addWidget(QtWidgets.QLabel("Status"), 0, 2)
+        alignment_layout.addWidget(self.alignment_status_value_label, 0, 3)
+        alignment_layout.addWidget(QtWidgets.QLabel("Active Offset"), 1, 0)
+        alignment_layout.addWidget(self.alignment_active_offset_value_label, 1, 1)
+        alignment_layout.addWidget(QtWidgets.QLabel("Captured Offset"), 1, 2)
+        alignment_layout.addWidget(self.alignment_captured_offset_value_label, 1, 3)
+        alignment_layout.addWidget(QtWidgets.QLabel("Flash Save"), 2, 0)
+        alignment_layout.addWidget(self.alignment_save_state_value_label, 2, 1, 1, 3)
+        alignment_layout.addWidget(self.run_alignment_button, 3, 0, 1, 2)
+        alignment_layout.addWidget(self.save_alignment_flash_button, 3, 2, 1, 2)
+        alignment_layout.addWidget(alignment_hint, 4, 0, 1, 4)
+
+        control_group = QtWidgets.QGroupBox("Id Current Loop Tuning")
         control_layout = QtWidgets.QGridLayout(control_group)
+
+        self.ctuning_mode_combo = QtWidgets.QComboBox()
+        self.ctuning_mode_combo.addItem("Id Square Wave", ID_SQUARE_TUNING_MODE_SQUARE_WAVE)
+        self.ctuning_mode_combo.addItem("Alignment Hold (advanced)", ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD)
+
         self.ctuning_ref1_spin = QtWidgets.QDoubleSpinBox()
         self.ctuning_ref1_spin.setRange(0.0, 20.0)
         self.ctuning_ref1_spin.setDecimals(3)
         self.ctuning_ref1_spin.setValue(0.5)
         self.ctuning_ref1_spin.setSuffix(" A")
+
         self.ctuning_ref2_spin = QtWidgets.QDoubleSpinBox()
         self.ctuning_ref2_spin.setRange(0.5, 50.0)
         self.ctuning_ref2_spin.setDecimals(3)
         self.ctuning_ref2_spin.setValue(10.0)
         self.ctuning_ref2_spin.setSuffix(" Hz")
+
         self.ctuning_rate_combo = QtWidgets.QComboBox()
         self.ctuning_rate_combo.addItem("16 kHz", 0)
         self.ctuning_rate_combo.addItem("8 kHz", 1)
@@ -982,71 +1023,80 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_rate_combo.addItem("2 kHz", 7)
         self.ctuning_rate_combo.addItem("1 kHz", 15)
         self.ctuning_rate_combo.setCurrentIndex(2)
+
         self.ctuning_kp_spin = QtWidgets.QDoubleSpinBox()
         self.ctuning_kp_spin.setRange(0.0, 10000.0)
         self.ctuning_kp_spin.setDecimals(5)
         self.ctuning_kp_spin.setSingleStep(0.001)
+
         self.ctuning_ki_spin = QtWidgets.QDoubleSpinBox()
         self.ctuning_ki_spin.setRange(0.0, 10000.0)
         self.ctuning_ki_spin.setDecimals(5)
         self.ctuning_ki_spin.setSingleStep(0.001)
+
         self.ctuning_angle_test_combo = QtWidgets.QComboBox()
         self.ctuning_angle_test_combo.addItem("None", ID_SQUARE_ANGLE_TEST_NONE)
         self.ctuning_angle_test_combo.addItem("+90e", ID_SQUARE_ANGLE_TEST_PLUS_90)
         self.ctuning_angle_test_combo.addItem("-90e", ID_SQUARE_ANGLE_TEST_MINUS_90)
         self.ctuning_angle_test_combo.addItem("+180e", ID_SQUARE_ANGLE_TEST_PLUS_180)
         self.ctuning_angle_test_combo.setToolTip(
-            "Apply a temporary electrical angle shift only during Id tuning after alignment. Use this to test whether the dq frame is off by +90e, -90e, or +180e."
+            "Apply a temporary electrical angle shift only during commissioning tests. Use this only if you are validating dq-frame alignment with the rotor mechanically locked."
         )
+
         self.ctuning_invert_current_checkbox = QtWidgets.QCheckBox("Invert Current")
         self.ctuning_invert_current_checkbox.setToolTip(
-            "Invert U/V current polarity only during Id tuning."
+            "Invert U/V current polarity only for this commissioning experiment."
         )
         self.ctuning_swap_uv_checkbox = QtWidgets.QCheckBox("Swap U/V")
         self.ctuning_swap_uv_checkbox.setToolTip(
-            "Swap U/V current channels only during Id tuning."
+            "Swap U/V current channels only for this commissioning experiment."
         )
-        ctuning_test_flags_widget = QtWidgets.QWidget()
-        ctuning_test_flags_layout = QtWidgets.QHBoxLayout(ctuning_test_flags_widget)
-        ctuning_test_flags_layout.setContentsMargins(0, 0, 0, 0)
-        ctuning_test_flags_layout.setSpacing(10)
-        ctuning_test_flags_layout.addWidget(QtWidgets.QLabel("Angle Test"))
-        ctuning_test_flags_layout.addWidget(self.ctuning_angle_test_combo)
-        ctuning_test_flags_layout.addWidget(self.ctuning_invert_current_checkbox)
-        ctuning_test_flags_layout.addWidget(self.ctuning_swap_uv_checkbox)
-        ctuning_test_flags_layout.addStretch(1)
 
-        self.apply_ctuning_button = QtWidgets.QPushButton("Apply Id Tune Config")
+        advanced_group = QtWidgets.QGroupBox("Advanced Validation")
+        advanced_layout = QtWidgets.QHBoxLayout(advanced_group)
+        advanced_layout.addWidget(QtWidgets.QLabel("Angle Test"))
+        advanced_layout.addWidget(self.ctuning_angle_test_combo)
+        advanced_layout.addWidget(self.ctuning_invert_current_checkbox)
+        advanced_layout.addWidget(self.ctuning_swap_uv_checkbox)
+        advanced_layout.addStretch(1)
+
+        self.ctuning_mode_note_label = QtWidgets.QLabel()
+        self.ctuning_mode_note_label.setWordWrap(True)
+        self.ctuning_window_label = QtWidgets.QLabel("")
+        self.ctuning_status_label = QtWidgets.QLabel("Ready")
+
+        self.apply_ctuning_button = QtWidgets.QPushButton("Apply Setup")
         self.start_ctuning_button = QtWidgets.QPushButton("Start Id Tune + Scope")
-        self.stop_ctuning_button = QtWidgets.QPushButton("Stop Id Tune")
-        self.ctuning_status_label = QtWidgets.QLabel("Idle")
+        self.stop_ctuning_button = QtWidgets.QPushButton("Stop")
 
-        control_layout.addWidget(QtWidgets.QLabel("Id Amplitude"), 0, 0)
-        control_layout.addWidget(self.ctuning_ref1_spin, 0, 1)
-        control_layout.addWidget(QtWidgets.QLabel("Square Frequency"), 0, 2)
-        control_layout.addWidget(self.ctuning_ref2_spin, 0, 3)
-        control_layout.addWidget(QtWidgets.QLabel("Capture Rate"), 1, 0)
-        control_layout.addWidget(self.ctuning_rate_combo, 1, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Mode"), 0, 0)
+        control_layout.addWidget(self.ctuning_mode_combo, 0, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Current Level"), 0, 2)
+        control_layout.addWidget(self.ctuning_ref1_spin, 0, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Capture Rate"), 0, 4)
+        control_layout.addWidget(self.ctuning_rate_combo, 0, 5)
+        control_layout.addWidget(QtWidgets.QLabel("Square Frequency"), 1, 0)
+        control_layout.addWidget(self.ctuning_ref2_spin, 1, 1)
         control_layout.addWidget(QtWidgets.QLabel("Current Kp"), 1, 2)
         control_layout.addWidget(self.ctuning_kp_spin, 1, 3)
-        control_layout.addWidget(QtWidgets.QLabel("Current Ki"), 2, 0)
-        control_layout.addWidget(self.ctuning_ki_spin, 2, 1)
-        control_layout.addWidget(ctuning_test_flags_widget, 2, 2, 1, 2)
-        self.ctuning_window_label = QtWidgets.QLabel("")
-        control_layout.addWidget(QtWidgets.QLabel("Capture Window"), 3, 2)
-        control_layout.addWidget(self.ctuning_window_label, 3, 3)
-        control_layout.addWidget(self.apply_ctuning_button, 4, 0, 1, 2)
-        control_layout.addWidget(self.start_ctuning_button, 4, 2)
-        control_layout.addWidget(self.stop_ctuning_button, 4, 3)
-        control_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
-        control_layout.addWidget(self.ctuning_status_label, 5, 1, 1, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Current Ki"), 1, 4)
+        control_layout.addWidget(self.ctuning_ki_spin, 1, 5)
+        control_layout.addWidget(self.ctuning_mode_note_label, 2, 0, 1, 6)
+        control_layout.addWidget(advanced_group, 3, 0, 1, 6)
+        control_layout.addWidget(QtWidgets.QLabel("Capture Window"), 4, 0)
+        control_layout.addWidget(self.ctuning_window_label, 4, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Status"), 4, 2)
+        control_layout.addWidget(self.ctuning_status_label, 4, 3, 1, 3)
+        control_layout.addWidget(self.apply_ctuning_button, 5, 0, 1, 2)
+        control_layout.addWidget(self.start_ctuning_button, 5, 2, 1, 2)
+        control_layout.addWidget(self.stop_ctuning_button, 5, 4, 1, 2)
 
         scope_toolbar = QtWidgets.QHBoxLayout()
         self.ctuning_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
         self.ctuning_auto_scale_checkbox.setChecked(True)
         self.ctuning_clear_button = QtWidgets.QPushButton("Clear Capture")
         scope_hint = QtWidgets.QLabel(
-            "Lock the rotor mechanically before use. Start from 5-10% rated current, keep the square-wave frequency low, and only increase amplitude after the trace is stable. Use a lower capture rate if you want a longer time window to see more than one pulse. Firmware clamps Id amplitude, limits the current-loop voltage to a safe fraction of Vdc, keeps Iq at zero, and records Id_ref / Id / Vd / Vq using the active timing profile."
+            "Recommended order: run Encoder Alignment Only first, save the offset if the encoder is absolute, then use Alignment Hold or Id Square Wave for dq validation and PI tuning. Keep the rotor mechanically locked and start from 5-10% rated current."
         )
         scope_hint.setWordWrap(True)
         scope_toolbar.addWidget(self.ctuning_auto_scale_checkbox)
@@ -1055,7 +1105,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.ctuning_scope_view = ScopeCaptureView()
         self._update_current_tuning_capture_window_label()
+        self._update_current_tuning_mode_ui()
+        self._refresh_alignment_panel(None)
 
+        layout.addWidget(alignment_group)
         layout.addWidget(control_group)
         layout.addLayout(scope_toolbar)
         layout.addWidget(self.ctuning_scope_view, 1)
@@ -1127,7 +1180,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.servo_on_button = QtWidgets.QPushButton("Servo ON")
         self.servo_off_button = QtWidgets.QPushButton("Servo OFF")
         self.ack_fault_button = QtWidgets.QPushButton("ACK Fault")
-        self.save_flash_button = QtWidgets.QPushButton("Write To Flash")
+        self.save_flash_button = QtWidgets.QPushButton("Save Params to Flash")
         self.refresh_monitor_button = QtWidgets.QPushButton("Refresh Monitor")
 
         tabs = QtWidgets.QTabWidget()
@@ -1290,7 +1343,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_debug_terminal_window(self) -> QtWidgets.QDialog:
         dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Drive Debug Terminal")
+        dialog.setWindowTitle("Drive Snapshot")
         dialog.resize(760, 560)
         dialog.setModal(False)
         layout = QtWidgets.QVBoxLayout(dialog)
@@ -1360,7 +1413,11 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: self._enqueue_command(Command.CMD_ACK_FAULT, b"", "ACK Fault")
         )
         self.save_flash_button.clicked.connect(
-            lambda: self._enqueue_command(Command.CMD_WRITE_TO_FLASH, b"", "Write To Flash")
+            lambda: self._enqueue_command(Command.CMD_WRITE_TO_FLASH, b"", "Save Parameters to Flash")
+        )
+        self.run_alignment_button.clicked.connect(self._start_encoder_alignment_only)
+        self.save_alignment_flash_button.clicked.connect(
+            lambda: self._enqueue_command(Command.CMD_WRITE_TO_FLASH, b"", "Save Encoder Offset to Flash")
         )
         self.read_driver_button.clicked.connect(self._read_driver_parameters)
         self.read_motor_button.clicked.connect(self._read_motor_parameters)
@@ -1375,6 +1432,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_rate_combo.currentIndexChanged.connect(
             self._update_current_tuning_capture_window_label
         )
+        self.ctuning_mode_combo.currentIndexChanged.connect(self._update_current_tuning_mode_ui)
         self.trace_preset_combo.currentTextChanged.connect(self._apply_trace_preset)
         self.trace_start_button.clicked.connect(self._start_trace_capture)
         self.trace_stop_button.clicked.connect(self._stop_trace_capture)
@@ -1474,6 +1532,111 @@ class MainWindow(QtWidgets.QMainWindow):
         window_ms = TRACE_TOTAL_SAMPLES * self._current_tuning_sample_period_s() * 1000.0
         self.ctuning_window_label.setText(f"{window_ms:.1f} ms")
 
+    def _current_tuning_mode(self) -> int:
+        return int(self.ctuning_mode_combo.currentData() or ID_SQUARE_TUNING_MODE_SQUARE_WAVE)
+
+    def _build_current_tuning_payload(self, tuning_mode: int | None = None) -> bytes:
+        selected_mode = self._current_tuning_mode() if tuning_mode is None else int(tuning_mode)
+        return struct.pack(
+            "<4fBBBB",
+            float(self.ctuning_ref1_spin.value()),
+            float(self.ctuning_ref2_spin.value()),
+            float(self.ctuning_kp_spin.value()),
+            float(self.ctuning_ki_spin.value()),
+            int(self.ctuning_angle_test_combo.currentData() or 0),
+            1 if self.ctuning_invert_current_checkbox.isChecked() else 0,
+            1 if self.ctuning_swap_uv_checkbox.isChecked() else 0,
+            selected_mode,
+        )
+
+    def _alignment_policy_text(self, policy: int) -> str:
+        if int(policy) == ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE:
+            return "Manual save (absolute encoder)"
+        if int(policy) == ENCODER_ALIGNMENT_POLICY_POWER_ON:
+            return "Auto align on servo start (incremental encoder)"
+        return f"Unknown ({policy})"
+
+    def _alignment_status_text(self, status: int) -> str:
+        if int(status) == ENCODER_ALIGNMENT_STATUS_IDLE:
+            return "Idle"
+        if int(status) == ENCODER_ALIGNMENT_STATUS_REQUESTED:
+            return "Requested"
+        if int(status) == ENCODER_ALIGNMENT_STATUS_RUNNING:
+            return "Running"
+        if int(status) == ENCODER_ALIGNMENT_STATUS_DONE:
+            return "Done"
+        if int(status) == ENCODER_ALIGNMENT_STATUS_FAULT:
+            return "Fault"
+        return f"Unknown ({status})"
+
+    def _alignment_save_state_text(self, policy: int, status: int, needs_flash_save: int) -> str:
+        if int(needs_flash_save) != 0:
+            return "Pending flash save"
+        if int(policy) == ENCODER_ALIGNMENT_POLICY_POWER_ON:
+            return "No flash save required"
+        if int(status) == ENCODER_ALIGNMENT_STATUS_DONE:
+            return "Saved or ready to reuse"
+        return "Waiting for commissioning alignment"
+
+    def _refresh_alignment_panel(self, snapshot) -> None:
+        if not hasattr(self, "alignment_policy_value_label"):
+            return
+        if snapshot is None:
+            self.alignment_policy_value_label.setText("Waiting for monitor data")
+            self.alignment_status_value_label.setText("Idle")
+            self.alignment_active_offset_value_label.setText("0 counts")
+            self.alignment_captured_offset_value_label.setText("0 counts")
+            self.alignment_save_state_value_label.setText("No pending save")
+            self.save_alignment_flash_button.setEnabled(False)
+            self.run_alignment_button.setEnabled(True)
+            return
+
+        policy = int(snapshot.debug_alignment_policy)
+        status = int(snapshot.debug_alignment_status)
+        needs_flash_save = int(snapshot.debug_alignment_needs_flash_save)
+        self.alignment_policy_value_label.setText(self._alignment_policy_text(policy))
+        self.alignment_status_value_label.setText(self._alignment_status_text(status))
+        self.alignment_active_offset_value_label.setText(f"{snapshot.debug_encoder_offset_counts:d} counts")
+        self.alignment_captured_offset_value_label.setText(
+            f"{snapshot.debug_alignment_captured_offset_counts:d} counts"
+        )
+        self.alignment_save_state_value_label.setText(
+            self._alignment_save_state_text(policy, status, needs_flash_save)
+        )
+        self.run_alignment_button.setEnabled(status != ENCODER_ALIGNMENT_STATUS_RUNNING)
+        self.save_alignment_flash_button.setEnabled(
+            (status != ENCODER_ALIGNMENT_STATUS_RUNNING)
+            and (
+                (needs_flash_save != 0)
+                or (
+                    (policy == ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE)
+                    and (status == ENCODER_ALIGNMENT_STATUS_DONE)
+                )
+            )
+        )
+
+    def _update_current_tuning_mode_ui(self) -> None:
+        is_alignment = self._current_tuning_mode() == ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD
+        self.ctuning_ref2_spin.setEnabled(not is_alignment)
+        self.ctuning_ref2_spin.setToolTip(
+            "Not used in Alignment Hold mode."
+            if is_alignment
+            else "Square-wave frequency used for the Id tuning experiment."
+        )
+        self.apply_ctuning_button.setText(
+            "Apply Alignment Hold Setup" if is_alignment else "Apply Id Tune Setup"
+        )
+        self.start_ctuning_button.setText(
+            "Start Alignment Hold + Scope"
+            if is_alignment
+            else "Start Id Tune + Scope"
+        )
+        self.ctuning_mode_note_label.setText(
+            "Alignment Hold is the advanced follow-up step: after the capture phase it keeps a steady d-axis current applied so you can verify electrical zero, Iq, and Vq before tuning gains."
+            if is_alignment
+            else "Id Square Wave runs a bipolar d-axis current command after alignment so you can tune Kp/Ki from the locked-rotor step response."
+        )
+
     def _apply_trace_preset(self, preset_name: str) -> None:
         channels = TRACE_PRESETS.get(preset_name)
         if channels is None:
@@ -1482,9 +1645,9 @@ class MainWindow(QtWidgets.QMainWindow):
             combo.setCurrentIndex(combo.findData(channel_code))
 
     def _clear_current_tuning_capture(self) -> None:
-        self._current_tuning_capture = _empty_scope_state("Current Tuning Response")
+        self._current_tuning_capture = _empty_scope_state("Commissioning Scope")
         self.ctuning_scope_view.clear()
-        self.ctuning_status_label.setText("Idle")
+        self.ctuning_status_label.setText("Ready")
         if self._active_trace_target == "current_tuning":
             self._active_trace_target = None
 
@@ -1496,20 +1659,65 @@ class MainWindow(QtWidgets.QMainWindow):
             self._active_trace_target = None
 
     def _apply_current_tuning_parameters(self) -> None:
-        payload = struct.pack(
-            "<4fBBB",
-            float(self.ctuning_ref1_spin.value()),
-            float(self.ctuning_ref2_spin.value()),
-            float(self.ctuning_kp_spin.value()),
-            float(self.ctuning_ki_spin.value()),
-            int(self.ctuning_angle_test_combo.currentData() or 0),
-            1 if self.ctuning_invert_current_checkbox.isChecked() else 0,
-            1 if self.ctuning_swap_uv_checkbox.isChecked() else 0,
+        tuning_mode = self._current_tuning_mode()
+        description = (
+            "Apply Alignment Hold Setup"
+            if tuning_mode == ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD
+            else "Apply Id Square Tuning"
         )
         self._enqueue_command(
             Command.CMD_APPLY_ID_SQUARE_TUNING,
-            payload,
-            "Apply Id Square Tuning",
+            self._build_current_tuning_payload(),
+            description,
+        )
+
+    def _start_encoder_alignment_only(self) -> None:
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None and (
+            last_monitor.enable_run or abs(float(last_monitor.act_speed)) > 1.0
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Encoder Alignment Safety",
+                "Stop the drive and lock the rotor before running encoder alignment. This commissioning step assumes the motor is stationary while the driver captures the electrical-zero offset.",
+            )
+            return
+
+        alignment_index = self.ctuning_mode_combo.findData(ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD)
+        if alignment_index >= 0:
+            self.ctuning_mode_combo.setCurrentIndex(alignment_index)
+
+        channel_codes = [12, 11, 4, 14]
+        sample_period_s = self._current_tuning_sample_period_s()
+        decimation = int(self.ctuning_rate_combo.currentData() or 0)
+        window_ms = TRACE_TOTAL_SAMPLES * sample_period_s * 1000.0
+
+        self._enqueue_command(
+            Command.CMD_APPLY_ID_SQUARE_TUNING,
+            self._build_current_tuning_payload(ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD),
+            "Apply Encoder Alignment Setup",
+        )
+        self._clear_current_tuning_capture()
+        self._current_tuning_capture = ScopeCaptureState(
+            title="Encoder Alignment Commissioning",
+            sample_period_s=sample_period_s,
+            total_samples=TRACE_TOTAL_SAMPLES,
+            series_defs=[dict(TRACE_CHANNEL_META[channel]) for channel in channel_codes],
+            series_data=[[], [], [], []],
+            source_indices=[0, 1, 2, 3],
+            active=True,
+            received_samples=0,
+        )
+        self._active_trace_target = "current_tuning"
+        self.ctuning_status_label.setText(
+            f"Arming trace and starting encoder alignment ({window_ms:.1f} ms window)..."
+        )
+        trace_payload = bytes([1, 0, *channel_codes, decimation])
+        self._enqueue_command(Command.CMD_APPLY_TRACE, trace_payload, "Start Encoder Alignment Trace")
+        self._enqueue_command(
+            Command.CMD_START_ENCODER_ALIGNMENT,
+            b"",
+            "Run Encoder Alignment Only",
         )
 
     def _start_current_tuning(self) -> None:
@@ -1520,23 +1728,30 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Current Tuning Safety",
-                "Stop the drive and lock the rotor before starting Id tuning. This mode is intended for a stationary rotor with Iq = 0.",
+                "Stop the drive and lock the rotor before starting this commissioning experiment. Alignment Hold and Id tuning both assume a stationary rotor with Iq forced to zero.",
             )
             return
-        self._apply_current_tuning_parameters()
+
+        tuning_mode = self._current_tuning_mode()
+        is_alignment = tuning_mode == ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD
+        channel_codes = [12, 11, 4, 14] if is_alignment else [12, 11, 13, 14]
+        title = "Alignment Hold Response" if is_alignment else "Id Square-Wave Tuning Response"
+        start_description = "Start Alignment Hold" if is_alignment else "Start Id Square-Wave Tuning"
+        trace_description = "Start Alignment Hold Trace" if is_alignment else "Start Id Tuning Trace"
+
+        self._enqueue_command(
+            Command.CMD_APPLY_ID_SQUARE_TUNING,
+            self._build_current_tuning_payload(),
+            "Apply Alignment Hold Setup" if is_alignment else "Apply Id Square Tuning",
+        )
         self._clear_current_tuning_capture()
         sample_period_s = self._current_tuning_sample_period_s()
         decimation = int(self.ctuning_rate_combo.currentData() or 0)
         self._current_tuning_capture = ScopeCaptureState(
-            title="Id Square-Wave Tuning Response",
+            title=title,
             sample_period_s=sample_period_s,
             total_samples=TRACE_TOTAL_SAMPLES,
-            series_defs=[
-                dict(TRACE_CHANNEL_META[12]),
-                dict(TRACE_CHANNEL_META[11]),
-                dict(TRACE_CHANNEL_META[13]),
-                dict(TRACE_CHANNEL_META[14]),
-            ],
+            series_defs=[dict(TRACE_CHANNEL_META[channel]) for channel in channel_codes],
             series_data=[[], [], [], []],
             source_indices=[0, 1, 2, 3],
             active=True,
@@ -1545,23 +1760,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self._active_trace_target = "current_tuning"
         window_ms = TRACE_TOTAL_SAMPLES * sample_period_s * 1000.0
         self.ctuning_status_label.setText(
-            f"Arming trace and starting Id square-wave tuning ({window_ms:.1f} ms window)..."
+            (
+                f"Arming trace and starting alignment hold ({window_ms:.1f} ms window)..."
+                if is_alignment
+                else f"Arming trace and starting Id square-wave tuning ({window_ms:.1f} ms window)..."
+            )
         )
-        trace_payload = bytes([1, 0, 12, 11, 13, 14, decimation])
-        self._enqueue_command(Command.CMD_APPLY_TRACE, trace_payload, "Start Id Tuning Trace")
+        trace_payload = bytes([1, 0, *channel_codes, decimation])
+        self._enqueue_command(Command.CMD_APPLY_TRACE, trace_payload, trace_description)
         self._enqueue_command(
             Command.CMD_START_ID_SQUARE_TUNING,
             b"",
-            "Start Id Square-Wave Tuning",
+            start_description,
         )
 
     def _stop_current_tuning(self) -> None:
         self._enqueue_command(
             Command.CMD_STOP_ID_SQUARE_TUNING,
             b"",
-            "Stop Id Square-Wave Tuning",
+            "Stop Alignment / Id Test",
         )
-        self._enqueue_command(Command.CMD_APPLY_TRACE, bytes([0, 0, 0, 0, 0, 0, 0]), "Stop Id Tuning Trace")
+        self._enqueue_command(
+            Command.CMD_APPLY_TRACE,
+            bytes([0, 0, 0, 0, 0, 0, 0]),
+            "Stop Current Tuning Trace",
+        )
         self._current_tuning_capture.active = False
         self.ctuning_status_label.setText("Stopped")
         if self._active_trace_target == "current_tuning":
@@ -2068,29 +2291,16 @@ class MainWindow(QtWidgets.QMainWindow):
             panel.refresh()
 
     def _run_mode_text(self, run_mode: int) -> str:
-        if run_mode == 1:
+        if run_mode == RUN_MODE_ALIGNMENT_ONLY:
+            return "Encoder Alignment / Hold"
+        if run_mode == RUN_MODE_OPEN_LOOP_VF:
             return "Open Loop V/F"
-        if run_mode == 0:
+        if run_mode == RUN_MODE_FOC:
             return "FOC"
         return f"Unknown ({run_mode})"
 
     def _format_debug_terminal_text(self, snapshot) -> str:
         timestamp = QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz")
-        expected_delta = float(snapshot.debug_expected_delta_pos_sync)
-        actual_delta = float(snapshot.debug_delta_pos)
-        delta_ratio = actual_delta / expected_delta if abs(expected_delta) > 1e-6 else 0.0
-        delta_ratio_avg = (
-            float(snapshot.debug_delta_pos_avg) / expected_delta
-            if abs(expected_delta) > 1e-6
-            else 0.0
-        )
-        sync_rpm = float(snapshot.debug_open_loop_sync_rpm_cmd)
-        speed_ratio = float(snapshot.act_speed) / sync_rpm if abs(sync_rpm) > 1e-6 else 0.0
-        speed_ratio_raw_avg = (
-            float(snapshot.debug_speed_raw_rpm_avg) / sync_rpm
-            if abs(sync_rpm) > 1e-6
-            else 0.0
-        )
         theta_deg = float(snapshot.theta) * 180.0 / 3.141592653589793
         mechanical_deg = (
             float(snapshot.debug_mechanical_angle_rad) * 180.0 / 3.141592653589793
@@ -2100,64 +2310,80 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         lines = [
-            f"Timestamp: {timestamp}",
+            f"Snapshot: {timestamp}",
+            "",
+            "[Drive]",
             f"Port: {self._current_port or '-'}",
-            f"RunMode: {self._run_mode_text(snapshot.run_mode)}",
-            f"ControlTimingMode: {self._timing_mode_text(snapshot.control_timing_mode)}",
-            f"ControlLoopHz: {snapshot.control_loop_frequency_hz:.6f}",
-            f"SpeedLoopHz: {snapshot.speed_loop_frequency_hz:.6f}",
-            f"EnableRun: {'ON' if snapshot.enable_run else 'OFF'}",
+            f"Run Mode: {self._run_mode_text(snapshot.run_mode)}",
+            f"Servo: {'ON' if snapshot.enable_run else 'OFF'}",
             f"Fault: {format_fault_text(snapshot.fault_occurred)}",
+            f"Timing: {self._timing_mode_text(snapshot.control_timing_mode)} | Control {snapshot.control_loop_frequency_hz:.1f} Hz | Speed {snapshot.speed_loop_frequency_hz:.1f} Hz",
             "",
-            "[OpenLoopCommand]",
-            f"OpenLoopElectricalHzCmd: {snapshot.debug_open_loop_electrical_hz_cmd:.6f}",
-            f"OpenLoopSyncRpmCmd: {snapshot.debug_open_loop_sync_rpm_cmd:.6f}",
-            f"ExpectedDeltaPosSync: {snapshot.debug_expected_delta_pos_sync:.6f}",
-            f"IsrDeltaCycles: {snapshot.debug_isr_delta_cycles}",
-            f"IsrPeriodUs: {snapshot.debug_isr_period_us:.6f}",
-            f"IsrFrequencyHz: {snapshot.debug_isr_frequency_hz:.6f}",
-            f"IsrMeasureOnlyMode: {snapshot.debug_isr_measure_only_mode}",
-            f"IsrMeasureEdgeFrequencyHz: {snapshot.debug_isr_measure_edge_frequency_hz:.6f}",
+            "[Encoder Alignment]",
+            f"Policy: {self._alignment_policy_text(snapshot.debug_alignment_policy)}",
+            f"Status: {self._alignment_status_text(snapshot.debug_alignment_status)}",
+            f"Active Offset: {snapshot.debug_encoder_offset_counts:d} counts",
+            f"Captured Offset: {snapshot.debug_alignment_captured_offset_counts:d} counts",
+            f"Flash Save: {self._alignment_save_state_text(snapshot.debug_alignment_policy, snapshot.debug_alignment_status, snapshot.debug_alignment_needs_flash_save)}",
             "",
-            "[ObservedFeedback]",
-            f"ActSpeedFilteredRpm: {snapshot.act_speed:.6f}",
-            f"SpeedRawRpm: {snapshot.debug_speed_raw_rpm:.6f}",
-            f"SpeedRawRpmAvg: {snapshot.debug_speed_raw_rpm_avg:.6f}",
-            f"ObservedElectricalHz: {snapshot.debug_observed_electrical_hz:.6f}",
-            f"ObservedElectricalHzAvg: {snapshot.debug_observed_electrical_hz_avg:.6f}",
-            f"DeltaPos: {snapshot.debug_delta_pos}",
-            f"DeltaPosAvg: {snapshot.debug_delta_pos_avg:.6f}",
-            f"EncSingleTurn: {snapshot.debug_enc_single_turn}",
-            f"EncoderTurns: {snapshot.debug_encoder_turns:.6f}",
+            "[Motion]",
+            f"Cmd Speed: {snapshot.cmd_speed:.3f}",
+            f"Act Speed: {snapshot.act_speed:.3f}",
+            f"Speed Error: {snapshot.speed_error:.3f}",
+            f"Act Position: {snapshot.act_position:.3f}",
+            "",
+            "[Currents]",
+            f"Id Ref / Id: {snapshot.id_ref:.3f} A / {snapshot.id_current:.3f} A",
+            f"Iq Ref / Iq: {snapshot.iq_ref:.3f} A / {snapshot.iq_current:.3f} A",
+            f"Phase Currents: Iu={snapshot.phase_u:.3f} A, Iv={snapshot.phase_v:.3f} A, Iw={snapshot.phase_w:.3f} A",
+            "",
+            "[Voltages]",
+            f"Vdc: {snapshot.vdc:.3f} V",
+            f"Vd / Vq: {snapshot.vd:.3f} V / {snapshot.vq:.3f} V",
+            f"Phase Voltages: Vu={snapshot.v_phase_u:.3f} V, Vv={snapshot.v_phase_v:.3f} V, Vw={snapshot.v_phase_w:.3f} V",
             "",
             "[Angles]",
-            f"ThetaRad: {snapshot.theta:.6f}",
-            f"ThetaDeg: {theta_deg:.6f}",
-            f"MechanicalAngleRad: {snapshot.debug_mechanical_angle_rad:.6f}",
-            f"MechanicalAngleDeg: {mechanical_deg:.6f}",
-            f"ElectricalAngleRad: {snapshot.debug_electrical_angle_rad:.6f}",
-            f"ElectricalAngleDeg: {electrical_deg:.6f}",
-            "",
-            "[Ratios]",
-            f"DeltaPosRatioActualOverExpected: {delta_ratio:.6f}",
-            f"DeltaPosAvgRatioOverExpected: {delta_ratio_avg:.6f}",
-            f"SpeedRatioActualOverSync: {speed_ratio:.6f}",
-            f"SpeedRawAvgRatioOverSync: {speed_ratio_raw_avg:.6f}",
-            "",
-            "[Monitor]",
-            f"Vdc: {snapshot.vdc:.6f}",
-            f"Temperature: {snapshot.temperature:.6f}",
-            f"IdRef: {snapshot.id_ref:.6f}",
-            f"IqRef: {snapshot.iq_ref:.6f}",
-            f"Iu: {snapshot.phase_u:.6f}",
-            f"Iv: {snapshot.phase_v:.6f}",
-            f"Iw: {snapshot.phase_w:.6f}",
-            f"Id: {snapshot.id_current:.6f}",
-            f"Iq: {snapshot.iq_current:.6f}",
-            f"Vd: {snapshot.vd:.6f}",
-            f"Vq: {snapshot.vq:.6f}",
-            f"ActPosition: {snapshot.act_position:.6f}",
+            f"Theta: {snapshot.theta:.6f} rad ({theta_deg:.2f} deg)",
+            f"Mechanical: {snapshot.debug_mechanical_angle_rad:.6f} rad ({mechanical_deg:.2f} deg)",
+            f"Electrical: {snapshot.debug_electrical_angle_rad:.6f} rad ({electrical_deg:.2f} deg)",
         ]
+
+        if (
+            abs(float(snapshot.vf_frequency)) > 1e-6
+            or abs(float(snapshot.vf_voltage)) > 1e-6
+            or abs(float(snapshot.debug_open_loop_electrical_hz_cmd)) > 1e-6
+            or snapshot.run_mode == RUN_MODE_OPEN_LOOP_VF
+        ):
+            lines.extend(
+                [
+                    "",
+                    "[Open Loop]",
+                    f"Cmd Electrical Hz: {snapshot.debug_open_loop_electrical_hz_cmd:.6f}",
+                    f"Sync RPM Command: {snapshot.debug_open_loop_sync_rpm_cmd:.6f}",
+                    f"Observed Electrical Hz: {snapshot.debug_observed_electrical_hz:.6f}",
+                    f"Raw Speed RPM: {snapshot.debug_speed_raw_rpm:.6f}",
+                    f"Expected DeltaPos: {snapshot.debug_expected_delta_pos_sync:.6f}",
+                    f"Measured DeltaPos: {snapshot.debug_delta_pos}",
+                ]
+            )
+
+        if (
+            snapshot.debug_isr_delta_cycles != 0
+            or abs(float(snapshot.debug_isr_frequency_hz)) > 1e-6
+            or snapshot.debug_isr_measure_only_mode != 0
+        ):
+            lines.extend(
+                [
+                    "",
+                    "[ISR Debug]",
+                    f"Isr Delta Cycles: {snapshot.debug_isr_delta_cycles}",
+                    f"Isr Period: {snapshot.debug_isr_period_us:.6f} us",
+                    f"Isr Frequency: {snapshot.debug_isr_frequency_hz:.6f} Hz",
+                    f"Measure Only Mode: {snapshot.debug_isr_measure_only_mode}",
+                    f"Measure Edge Frequency: {snapshot.debug_isr_measure_edge_frequency_hz:.6f} Hz",
+                ]
+            )
+
         return "\n".join(lines)
 
     def _refresh_debug_terminal(self, snapshot) -> None:
@@ -2169,26 +2395,37 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.debug_terminal_edit.setPlainText(self._format_debug_terminal_text(snapshot))
 
+    def _set_monitor_value(self, key: str, text: str, tooltip: str | None = None) -> None:
+        label = self.monitor_labels.get(key)
+        if label is None:
+            return
+        label.setText(text)
+        if tooltip is not None:
+            label.setToolTip(tooltip)
+
     def _clear_monitor_display(self) -> None:
         for label in self.monitor_labels.values():
             label.setText("-")
             label.setToolTip("")
             label.setStyleSheet("")
-        self.monitor_labels["enable_run"].setText("OFF")
-        self.monitor_labels["run_mode"].setText("Idle")
-        self.monitor_labels["control_timing_mode"].setText(self._timing_mode_text(self._active_timing_mode))
-        self.monitor_labels["effective_loop_hz"].setText(f"{self._active_control_loop_hz:.0f} Hz")
-        self.monitor_labels["fault_occurred"].setText("OK")
-        self.monitor_labels["fault_occurred"].setStyleSheet(
-            "color: #6aa84f; font-weight: 600;"
-        )
+        self._set_monitor_value("enable_run", "OFF")
+        self._set_monitor_value("run_mode", "Idle")
+        self._set_monitor_value("control_timing_mode", self._timing_mode_text(self._active_timing_mode))
+        self._set_monitor_value("effective_loop_hz", f"{self._active_control_loop_hz:.0f} Hz")
+        fault_label = self.monitor_labels.get("fault_occurred")
+        if fault_label is not None:
+            fault_label.setText("OK")
+            fault_label.setStyleSheet("color: #6aa84f; font-weight: 600;")
+        self._refresh_alignment_panel(None)
 
     def _fault_summary_text(self, fault_code: int) -> str:
         labels = decode_fault_flags(int(fault_code))
         return ", ".join(labels)
 
     def _set_fault_label(self, fault_code: int) -> None:
-        label = self.monitor_labels["fault_occurred"]
+        label = self.monitor_labels.get("fault_occurred")
+        if label is None:
+            return
         summary = self._fault_summary_text(fault_code)
         label.setText(summary)
         label.setToolTip(format_fault_text(fault_code))
@@ -2198,56 +2435,49 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setStyleSheet("color: #d9534f; font-weight: 600;")
 
     def _update_monitor(self, snapshot) -> None:
-        self.monitor_labels["enable_run"].setText("ON" if snapshot.enable_run else "OFF")
-        self.monitor_labels["run_mode"].setText(self._run_mode_text(snapshot.run_mode))
-        self.monitor_labels["control_timing_mode"].setText(self._timing_mode_text(snapshot.control_timing_mode))
-        self.monitor_labels["effective_loop_hz"].setText(f"{snapshot.control_loop_frequency_hz:.0f} Hz")
+        self._set_monitor_value("enable_run", "ON" if snapshot.enable_run else "OFF")
+        self._set_monitor_value("run_mode", self._run_mode_text(snapshot.run_mode))
+        self._set_monitor_value("control_timing_mode", self._timing_mode_text(snapshot.control_timing_mode))
+        self._set_monitor_value("effective_loop_hz", f"{snapshot.control_loop_frequency_hz:.0f} Hz")
         self._set_fault_label(snapshot.fault_occurred)
-        self.monitor_labels["vdc"].setText(f"{snapshot.vdc:.3f} V")
-        self.monitor_labels["temperature"].setText(f"{snapshot.temperature:.3f} C")
-        self.monitor_labels["motor_power"].setText(str(snapshot.motor_power))
-        self.monitor_labels["cmd_speed"].setText(f"{snapshot.cmd_speed:.3f}")
-        self.monitor_labels["act_speed"].setText(f"{snapshot.act_speed:.3f}")
-        self.monitor_labels["speed_error"].setText(f"{snapshot.speed_error:.3f}")
-        self.monitor_labels["cmd_position"].setText(f"{snapshot.cmd_position:.3f}")
-        self.monitor_labels["act_position"].setText(f"{snapshot.act_position:.3f}")
-        self.monitor_labels["position_error"].setText(f"{snapshot.position_error:.3f}")
-        self.monitor_labels["id_ref"].setText(f"{snapshot.id_ref:.3f} A")
-        self.monitor_labels["iq_ref"].setText(f"{snapshot.iq_ref:.3f} A")
-        self.monitor_labels["phase_u"].setText(f"{snapshot.phase_u:.3f} A")
-        self.monitor_labels["phase_v"].setText(f"{snapshot.phase_v:.3f} A")
-        self.monitor_labels["phase_w"].setText(f"{snapshot.phase_w:.3f} A")
-        self.monitor_labels["id_current"].setText(f"{snapshot.id_current:.3f} A")
-        self.monitor_labels["iq_current"].setText(f"{snapshot.iq_current:.3f} A")
-        self.monitor_labels["vd"].setText(f"{snapshot.vd:.3f} V")
-        self.monitor_labels["vq"].setText(f"{snapshot.vq:.3f} V")
-        self.monitor_labels["v_phase_u"].setText(f"{snapshot.v_phase_u:.3f} V")
-        self.monitor_labels["v_phase_v"].setText(f"{snapshot.v_phase_v:.3f} V")
-        self.monitor_labels["v_phase_w"].setText(f"{snapshot.v_phase_w:.3f} V")
-        self.monitor_labels["theta"].setText(f"{snapshot.theta:.3f} rad")
-        self.monitor_labels["vf_frequency"].setText(f"{snapshot.vf_frequency:.3f} Hz")
-        self.monitor_labels["vf_voltage"].setText(f"{snapshot.vf_voltage:.3f} V")
+        self._refresh_alignment_panel(snapshot)
+        self._set_monitor_value("vdc", f"{snapshot.vdc:.3f} V")
+        self._set_monitor_value("temperature", f"{snapshot.temperature:.3f} C")
+        self._set_monitor_value("cmd_speed", f"{snapshot.cmd_speed:.3f}")
+        self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
+        self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
+        self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
+        self._set_monitor_value("position_error", f"{snapshot.position_error:.3f}")
+        self._set_monitor_value("id_ref", f"{snapshot.id_ref:.3f} A")
+        self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
+        self._set_monitor_value("phase_u", f"{snapshot.phase_u:.3f} A")
+        self._set_monitor_value("phase_v", f"{snapshot.phase_v:.3f} A")
+        self._set_monitor_value("phase_w", f"{snapshot.phase_w:.3f} A")
+        self._set_monitor_value("id_current", f"{snapshot.id_current:.3f} A")
+        self._set_monitor_value("iq_current", f"{snapshot.iq_current:.3f} A")
+        self._set_monitor_value("vd", f"{snapshot.vd:.3f} V")
+        self._set_monitor_value("vq", f"{snapshot.vq:.3f} V")
+        self._set_monitor_value("vf_frequency", f"{snapshot.vf_frequency:.3f} Hz")
+        self._set_monitor_value("vf_voltage", f"{snapshot.vf_voltage:.3f} V")
 
     def _update_error_snapshot(self, snapshot) -> None:
         self._append_error_snapshot_to_trend_buffer(snapshot)
-        self.monitor_labels["enable_run"].setText("OFF")
-        self.monitor_labels["run_mode"].setText("FAULT")
-        self.monitor_labels["control_timing_mode"].setText(self._timing_mode_text(self._active_timing_mode))
-        self.monitor_labels["effective_loop_hz"].setText(f"{self._active_control_loop_hz:.0f} Hz")
-        self.monitor_labels["vdc"].setText(f"{snapshot.vdc:.3f} V")
-        self.monitor_labels["temperature"].setText(f"{snapshot.temperature:.3f} C")
-        self.monitor_labels["cmd_speed"].setText(f"{snapshot.cmd_speed:.3f}")
-        self.monitor_labels["act_speed"].setText(f"{snapshot.act_speed:.3f}")
-        self.monitor_labels["speed_error"].setText(f"{snapshot.speed_error:.3f}")
-        self.monitor_labels["cmd_position"].setText(f"{snapshot.cmd_position:.3f}")
-        self.monitor_labels["act_position"].setText(f"{snapshot.act_position:.3f}")
-        self.monitor_labels["position_error"].setText(f"{snapshot.position_error:.3f}")
-        self.monitor_labels["iq_ref"].setText(f"{snapshot.iq_ref:.3f} A")
-        self.monitor_labels["motor_power"].setText(str(snapshot.motor_power))
+        self._set_monitor_value("enable_run", "OFF")
+        self._set_monitor_value("run_mode", "FAULT")
+        self._set_monitor_value("control_timing_mode", self._timing_mode_text(self._active_timing_mode))
+        self._set_monitor_value("effective_loop_hz", f"{self._active_control_loop_hz:.0f} Hz")
+        self._set_monitor_value("vdc", f"{snapshot.vdc:.3f} V")
+        self._set_monitor_value("temperature", f"{snapshot.temperature:.3f} C")
+        self._set_monitor_value("cmd_speed", f"{snapshot.cmd_speed:.3f}")
+        self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
+        self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
+        self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
+        self._set_monitor_value("position_error", f"{snapshot.position_error:.3f}")
+        self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
         self._set_fault_label(snapshot.fault_code)
-        self.monitor_labels["phase_u"].setText(f"{snapshot.phase_u:.3f} A")
-        self.monitor_labels["phase_v"].setText(f"{snapshot.phase_v:.3f} A")
-        self.monitor_labels["phase_w"].setText(f"{snapshot.phase_w:.3f} A")
+        self._set_monitor_value("phase_u", f"{snapshot.phase_u:.3f} A")
+        self._set_monitor_value("phase_v", f"{snapshot.phase_v:.3f} A")
+        self._set_monitor_value("phase_w", f"{snapshot.phase_w:.3f} A")
         self._append_log(
             "Driver error packet: "
             f"{format_fault_text(snapshot.fault_code)}, "

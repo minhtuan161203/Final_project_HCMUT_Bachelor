@@ -114,6 +114,13 @@ volatile uint8_t gControlTimingMode = USER_DEFAULT_CONTROL_TIMING_MODE;
 volatile float gEffectiveCurrentLoopFrequencyHz = USER_SELECTED_ISR_FREQUENCY;
 volatile float gEffectiveSpeedLoopFrequencyHz = USER_EFFECTIVE_SPEED_LOOP_FREQUENCY;
 float gTracePosError = 0.0f;
+volatile uint8_t gEncoderAlignmentPolicy = ENCODER_ALIGNMENT_POLICY_POWER_ON;
+volatile uint8_t gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+volatile uint8_t gEncoderAlignmentNeedsFlashSave = 0u;
+volatile int32_t gEncoderAlignmentLastCapturedOffset = 0;
+volatile uint8_t gEncoderAlignmentRequested = 0u;
+volatile uint8_t gEncoderAlignmentContinueToRun = 0u;
+volatile uint8_t gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
 float RecordTable1[TRACE_DATA_LENGTH * 4u];
 TraceData Trace_Data;
 IdSquareTuning_t IdSquareTuning;
@@ -172,7 +179,13 @@ static void UpdateIsrDebugPeriod(void);
 static void UpdateIsrMeasureOnlyFrequency(void);
 static float GetEffectiveCurrentLoopFrequency(void);
 static float GetEffectiveSpeedLoopFrequency(void);
+static uint8_t IsAbsoluteEncoderId(uint32_t encoder_id);
+static void RefreshEncoderAlignmentPolicy(void);
+static void FinalizeEncoderAlignment(uint8_t alignment_successful);
+static uint8_t LoadParametersFromFlashIfAvailable(void);
 void ApplyControlTimingMode(uint8_t mode);
+void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode);
+uint8_t SaveParametersToFlash(void);
 
 /* USER CODE END PFP */
 
@@ -190,6 +203,8 @@ void ApplyControlTimingMode(uint8_t mode);
 #define ID_SQUARE_ANGLE_TEST_PLUS_180 3u
 #define SPEED_ESTIMATE_LPF_ALPHA 0.1f
 #define DEBUG_AVG_SAMPLES 256u
+#define DRIVER_PARAMETER_COUNT 16u
+#define MOTOR_PARAMETER_COUNT 32u
 
 static float sDebugDeltaPosAccum = 0.0f;
 static float sDebugSpeedRawAccum = 0.0f;
@@ -236,6 +251,250 @@ static void ResetDebugAveraging(void)
 	gDebugDeltaPosAvg = 0.0f;
 	gDebugSpeedRawRpmAvg = 0.0f;
 	gDebugObservedElectricalHzAvg = 0.0f;
+}
+
+static uint8_t IsAbsoluteEncoderId(uint32_t encoder_id)
+{
+	switch (encoder_id)
+	{
+		case TAMAGAWA_SERIAL_ABS_SINGLE_TURN:
+		case TAMAGAWA_SERIAL_ABS_MULTI_TURN:
+		case TAMAGAWA_SERIAL_ABS_MULTI_TURN_23BIT:
+		case PANASONIC_MINAS_A5_SERIAL_ABS:
+		case PANASONIC_MINAS_A6_SERIAL_ABS:
+		case YASKAWA_SIGMA_5_ABS_SINGLE_TURN:
+			return 1u;
+		default:
+			return 0u;
+	}
+}
+
+static void RefreshEncoderAlignmentPolicy(void)
+{
+	gEncoderAlignmentPolicy = (IsAbsoluteEncoderId((uint32_t)MotorParameter[MOTOR_ENCODER_ID]) != 0u) ?
+		ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE : ENCODER_ALIGNMENT_POLICY_POWER_ON;
+	if (gEncoderAlignmentPolicy == ENCODER_ALIGNMENT_POLICY_POWER_ON)
+	{
+		gEncoderAlignmentNeedsFlashSave = 0u;
+	}
+}
+
+void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode)
+{
+	gEncoderAlignmentRequested = 1u;
+	gEncoderAlignmentContinueToRun = (continue_to_run != 0u) ? 1u : 0u;
+	gEncoderAlignmentResumeRunMode = resume_run_mode;
+	gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_REQUESTED;
+	gRunMode = RUN_MODE_ALIGNMENT_ONLY;
+	gTargetSpeedRpm = 0.0f;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	IdSquareTuning.Enable = 1u;
+	IdSquareTuning.Mode = ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+	IdSquareTuning.OffsetCaptured = 0;
+}
+
+static void FinalizeEncoderAlignment(uint8_t alignment_successful)
+{
+	uint8_t continue_to_run = gEncoderAlignmentContinueToRun;
+	uint8_t resume_run_mode = gEncoderAlignmentResumeRunMode;
+
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+
+	if (alignment_successful != 0u)
+	{
+		gEncoderAlignmentLastCapturedOffset = Parameter.Offset_Enc;
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_DONE;
+		if (gEncoderAlignmentPolicy == ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE)
+		{
+			gEncoderAlignmentNeedsFlashSave = 1u;
+		}
+		else
+		{
+			gEncoderAlignmentNeedsFlashSave = 0u;
+		}
+	}
+	else
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_FAULT;
+	}
+
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
+	ResetControlLoops();
+
+	if ((alignment_successful != 0u) && (continue_to_run != 0u))
+	{
+		gRunMode = resume_run_mode;
+		STM_NextState(&StateMachine, START);
+	}
+	else
+	{
+		gRunMode = RUN_MODE_FOC;
+		STM_NextState(&StateMachine, STOP);
+	}
+}
+
+static uint32_t FlashAddressToSector(uint32_t address)
+{
+	if (address < 0x08004000u)
+	{
+		return FLASH_SECTOR_0;
+	}
+	if (address < 0x08008000u)
+	{
+		return FLASH_SECTOR_1;
+	}
+	if (address < 0x0800C000u)
+	{
+		return FLASH_SECTOR_2;
+	}
+	if (address < 0x08010000u)
+	{
+		return FLASH_SECTOR_3;
+	}
+	if (address < 0x08020000u)
+	{
+		return FLASH_SECTOR_4;
+	}
+	if (address < 0x08040000u)
+	{
+		return FLASH_SECTOR_5;
+	}
+	if (address < 0x08060000u)
+	{
+		return FLASH_SECTOR_6;
+	}
+	if (address < 0x08080000u)
+	{
+		return FLASH_SECTOR_7;
+	}
+	return FLASH_SECTOR_11;
+}
+
+static uint8_t FlashRegionHasData(uint32_t address, uint32_t word_count)
+{
+	uint32_t index;
+
+	for (index = 0u; index < word_count; index++)
+	{
+		if (*((__IO uint32_t *)(address + (index * 4u))) != 0xFFFFFFFFu)
+		{
+			return 1u;
+		}
+	}
+
+	return 0u;
+}
+
+static void LoadFloatArrayFromFlash(uint32_t address, float *destination, uint32_t count)
+{
+	uint32_t index;
+	union
+	{
+		uint32_t u32;
+		float f32;
+	} value;
+
+	for (index = 0u; index < count; index++)
+	{
+		value.u32 = *((__IO uint32_t *)(address + (index * 4u)));
+		destination[index] = value.f32;
+	}
+}
+
+static uint8_t FlashWriteFloatArray(uint32_t address, const float *source, uint32_t count)
+{
+	FLASH_EraseInitTypeDef erase_init;
+	uint32_t sector_error = 0u;
+	uint32_t index;
+	union
+	{
+		uint32_t u32;
+		float f32;
+	} value;
+
+	memset(&erase_init, 0, sizeof(erase_init));
+	erase_init.TypeErase = FLASH_TYPEERASE_SECTORS;
+	erase_init.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+	erase_init.Sector = FlashAddressToSector(address);
+	erase_init.NbSectors = 1u;
+
+	__HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR |
+		FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
+	if (HAL_FLASHEx_Erase(&erase_init, &sector_error) != HAL_OK)
+	{
+		return 0u;
+	}
+
+	for (index = 0u; index < count; index++)
+	{
+		value.f32 = source[index];
+		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, address + (index * 4u), value.u32) != HAL_OK)
+		{
+			return 0u;
+		}
+	}
+
+	return 1u;
+}
+
+static uint8_t LoadParametersFromFlashIfAvailable(void)
+{
+	uint8_t loaded = 0u;
+
+	if (FlashRegionHasData(PAGE_ADDRESS_DRIVER_PARAMETER, DRIVER_PARAMETER_COUNT) != 0u)
+	{
+		LoadFloatArrayFromFlash(PAGE_ADDRESS_DRIVER_PARAMETER, DriverParameter, DRIVER_PARAMETER_COUNT);
+		loaded = 1u;
+	}
+	if (FlashRegionHasData(PAGE_ADDRESS_MOTOR_PARAMETER, MOTOR_PARAMETER_COUNT) != 0u)
+	{
+		LoadFloatArrayFromFlash(PAGE_ADDRESS_MOTOR_PARAMETER, MotorParameter, MOTOR_PARAMETER_COUNT);
+		loaded = 1u;
+	}
+
+	return loaded;
+}
+
+uint8_t SaveParametersToFlash(void)
+{
+	uint8_t success;
+
+	if ((StateMachine.bState == RUN) || (StateMachine.bState == ENCODER_ALIGN) ||
+		(StateMachine.bState == OFFSET_CALIB) || (StateMachine.bState == START))
+	{
+		return 0u;
+	}
+
+	HAL_FLASH_Unlock();
+	success = FlashWriteFloatArray(PAGE_ADDRESS_DRIVER_PARAMETER, DriverParameter, DRIVER_PARAMETER_COUNT);
+	if (success != 0u)
+	{
+		success = FlashWriteFloatArray(PAGE_ADDRESS_MOTOR_PARAMETER, MotorParameter, MOTOR_PARAMETER_COUNT);
+	}
+	HAL_FLASH_Lock();
+
+	if (success != 0u)
+	{
+		gEncoderAlignmentNeedsFlashSave = 0u;
+		gEncoderAlignmentLastCapturedOffset = Parameter.Offset_Enc;
+	}
+
+	return success;
 }
 
 static float GetEffectiveCurrentLoopFrequency(void)
@@ -730,6 +989,7 @@ void UpdateMotorParameter(float *motor_parameter)
 	gIqPi.fLowOutLim = 0.0f;
 
 	*(__IO uint16_t*)(REG_ENCODER_ID) = (uint16_t)motor_parameter[MOTOR_ENCODER_ID];
+	RefreshEncoderAlignmentPolicy();
 	UpdateDriverParameter(DriverParameter);
 }
 
@@ -755,6 +1015,10 @@ static void LoadDefaultParameters(void)
 	MotorParameter[MOTOR_CURRENT_P_GAIN] = 1.0f;
 	MotorParameter[MOTOR_CURRENT_I_GAIN] = 150.0f;
 	MotorParameter[MOTOR_CURRENT_CTRL_DIRECTION] = 1.0f;
+	IdSquareTuning.Mode = ID_SQUARE_TUNING_MODE_SQUARE_WAVE;
+	gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+	gEncoderAlignmentNeedsFlashSave = 0u;
+	gEncoderAlignmentLastCapturedOffset = 0;
 
 	UpdateMotorParameter(MotorParameter);
 	UpdateDriverParameter(DriverParameter);
@@ -948,6 +1212,14 @@ static void ReportFault(uint16_t fault)
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
 	IdSquareTuning.OffsetCaptured = 0;
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
+		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_FAULT;
+	}
 	STM_FaultProcessing(&StateMachine, fault, 0xFFFFFFFFu);
 	ResetControlLoops();
 	SetPwmEnabled(0u);
@@ -968,6 +1240,7 @@ static void RunFocLoop(void)
 	float current_temp;
 	float encoder_resolution;
 	uint8_t alignment_active = 0u;
+	uint8_t alignment_hold_mode = 0u;
 
 	if (Parameter.fVdc < 1.0f)
 	{
@@ -977,6 +1250,9 @@ static void RunFocLoop(void)
 
 	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
 		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
+	alignment_hold_mode = ((IdSquareTuning.Enable != 0u) &&
+		(IdSquareTuning.Mode == ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD) &&
+		(IdSquareTuning.AlignmentDone != 0u)) ? 1u : 0u;
 	control_theta = Parameter.fTheta;
 	if ((IdSquareTuning.Enable != 0u) && (IdSquareTuning.AlignmentDone == 0u))
 	{
@@ -1039,7 +1315,16 @@ static void RunFocLoop(void)
 	{
 		gTargetSpeedRpm = 0.0f;
 		gIqRefA = 0.0f;
-		gIdRefA = (alignment_active != 0u) ? CalcIdSquareTuningAlignmentCurrent() : CalcIdSquareTuningReference();
+		if ((alignment_active != 0u) || (alignment_hold_mode != 0u))
+		{
+			gIdRefA = CalcIdSquareTuningAlignmentCurrent();
+			IdSquareTuning.fFrequencyApplied = 0.0f;
+			IdSquareTuning.fPhase = 0.0f;
+		}
+		else
+		{
+			gIdRefA = CalcIdSquareTuningReference();
+		}
 		IdSquareTuning.fVoltageLimitApplied = CalcIdSquareTuningVoltageLimit();
 		voltage_limit = IdSquareTuning.fVoltageLimitApplied;
 	}
@@ -1065,10 +1350,24 @@ static void RunFocLoop(void)
 	gIqPi.fLowOutLim = -voltage_limit;
 
 	gIdPi.fIn = gIdRefA - gPark.fD;
-	gIqPi.fIn = gIqRefA - gPark.fQ;
 	gIdPi.m_calc(&gIdPi);
-	gIqPi.m_calc(&gIqPi);
-	LimitDqVoltageVector(&gIdPi.fOut, &gIqPi.fOut, voltage_limit);
+	if (IdSquareTuning.Enable != 0u)
+	{
+		/* Keep the Id square-wave / alignment experiment on the d-axis only.
+		   The q-axis PI is reset and forced to zero so Vq/Iq coupling does not
+		   pollute the locked-rotor response while we validate alignment or tune Id. */
+		gIqPi.m_rst(&gIqPi);
+		gIqPi.fIn = 0.0f;
+		gIqPi.fOut = 0.0f;
+		gIqPi.fPout = 0.0f;
+		gIdPi.fOut = ClampFloat(gIdPi.fOut, -voltage_limit, voltage_limit);
+	}
+	else
+	{
+		gIqPi.fIn = gIqRefA - gPark.fQ;
+		gIqPi.m_calc(&gIqPi);
+		LimitDqVoltageVector(&gIdPi.fOut, &gIqPi.fOut, voltage_limit);
+	}
 
 	Parameter.fVdq[0] = gIdPi.fOut;
 	Parameter.fVdq[1] = gIqPi.fOut;
@@ -1164,10 +1463,14 @@ int main(void)
 	STM_Init(&StateMachine);
 	memset(&USB_Comm, 0, sizeof(USB_Comm));
 	LoadDefaultParameters();
+	(void)LoadParametersFromFlashIfAvailable();
+	UpdateDriverParameter(DriverParameter);
+	UpdateMotorParameter(MotorParameter);
+	gEncoderAlignmentLastCapturedOffset = Parameter.Offset_Enc;
 	ApplyControlTimingMode(USER_DEFAULT_CONTROL_TIMING_MODE);
 	HAL_GPIO_WritePin(oEnableReadADC_GPIO_Port, oEnableReadADC_Pin, GPIO_PIN_SET); //==> required for current reading value
 	
-	// Keep FPGA encoder parser aligned with the active motor parameter set.
+	// Keep FPGA encoder parser aligned with the active motor parameter set ==> with this driver required for reading encoder value.
 	*(__IO uint16_t*)(REG_ENCODER_ID) = (uint16_t)MotorParameter[MOTOR_ENCODER_ID];
 
   /* USER CODE END 2 */
@@ -1646,10 +1949,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	uint16_t fault = NO_ERROR;
 	uint16_t calib_fault = NO_ERROR;
 
-//	if (GPIO_Pin != iMeasureIsr_Pin)
-//	{
-//		return;
-//	}
+	if (GPIO_Pin != iMeasureIsr_Pin)
+	{
+		return;
+	}
 
 	UpdateIsrDebugPeriod();
 	gIsrMeasureEdgeCount++;
@@ -1663,7 +1966,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	fault = CheckVbusFault(&Parameter);
 	fault |= CheckTempFault(&Parameter);
 
-	if ((Current_Sensor.CalibFinish > 0) && (StateMachine.bState == RUN))
+	if ((Current_Sensor.CalibFinish > 0) && ((StateMachine.bState == RUN) || (StateMachine.bState == ENCODER_ALIGN)))
 	{
 		// OR Current fault when running (Just in state RUNNING) after calib prior to this state
 		fault |= CheckCurrentPhaseFault(&Current_Sensor, Parameter.fIabc[0], Parameter.fIabc[1], Parameter.fIabc[2]);
@@ -1705,10 +2008,31 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		if (Current_Sensor.CalibFinish > 0)
 		{
 			ResetControlLoops();
-			STM_NextState(&StateMachine, START);
+			if (gEncoderAlignmentRequested != 0u)
+			{
+				STM_NextState(&StateMachine, ENCODER_ALIGN);
+			}
+			else
+			{
+				STM_NextState(&StateMachine, START);
+			}
 		}
 
 		system_on = 0u;
+		return;
+	}
+
+	if (StateMachine.bState == ENCODER_ALIGN)
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_RUNNING;
+		SetPwmEnabled(1u);
+		RunFocLoop();
+		UpdateTraceCapture();
+		if (IdSquareTuning.AlignmentDone != 0u)
+		{
+			FinalizeEncoderAlignment(1u);
+		}
+		system_on = 1u;
 		return;
 	}
 
@@ -1721,6 +2045,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		IdSquareTuning.fVoltageLimitApplied = 0.0f;
 		IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
 		IdSquareTuning.OffsetCaptured = 0;
+		if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
+			(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
+		{
+			gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+		}
+		gEncoderAlignmentRequested = 0u;
+		gEncoderAlignmentContinueToRun = 0u;
+		gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
 		ResetControlLoops();
 		SetPwmEnabled(0u);
 		if (StateMachine.bState == STOP)

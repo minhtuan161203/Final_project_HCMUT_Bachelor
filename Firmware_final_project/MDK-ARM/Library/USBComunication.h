@@ -67,6 +67,7 @@ typedef enum
 		CMD_START_ID_SQUARE_TUNING = 0x58,
 		CMD_STOP_ID_SQUARE_TUNING = 0x59,
 		CMD_SET_CONTROL_TIMING_MODE = 0x5A,
+		CMD_START_ENCODER_ALIGNMENT = 0x5B,
 }Command_e;
 
 typedef enum
@@ -86,8 +87,30 @@ typedef enum
 typedef enum
 {
 	RUN_MODE_FOC = 0u,
-	RUN_MODE_OPEN_LOOP_VF = 1u
+	RUN_MODE_OPEN_LOOP_VF = 1u,
+	RUN_MODE_ALIGNMENT_ONLY = 2u
 }RunMode_e;
+
+typedef enum
+{
+	ID_SQUARE_TUNING_MODE_SQUARE_WAVE = 0u,
+	ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD = 1u
+}IdSquareTuningMode_e;
+
+typedef enum
+{
+	ENCODER_ALIGNMENT_POLICY_POWER_ON = 0u,
+	ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE = 1u
+}EncoderAlignmentPolicy_e;
+
+typedef enum
+{
+	ENCODER_ALIGNMENT_STATUS_IDLE = 0u,
+	ENCODER_ALIGNMENT_STATUS_REQUESTED = 1u,
+	ENCODER_ALIGNMENT_STATUS_RUNNING = 2u,
+	ENCODER_ALIGNMENT_STATUS_DONE = 3u,
+	ENCODER_ALIGNMENT_STATUS_FAULT = 4u
+}EncoderAlignmentStatus_e;
 
 typedef struct
 {
@@ -124,6 +147,7 @@ typedef struct
 typedef struct
 {
 	uint8_t Enable;
+	uint8_t Mode;
 	uint8_t AlignmentDone;
 	uint8_t ElectricalAngleTestMode;
 	uint8_t CurrentPolarityInvertTest;

@@ -24,10 +24,22 @@ TRACE_TOTAL_SAMPLES = 1000
 
 CONTROL_TIMING_MODE_16KHZ = 0
 CONTROL_TIMING_MODE_3KHZ = 1
+RUN_MODE_FOC = 0
+RUN_MODE_OPEN_LOOP_VF = 1
+RUN_MODE_ALIGNMENT_ONLY = 2
+ENCODER_ALIGNMENT_POLICY_POWER_ON = 0
+ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE = 1
+ENCODER_ALIGNMENT_STATUS_IDLE = 0
+ENCODER_ALIGNMENT_STATUS_REQUESTED = 1
+ENCODER_ALIGNMENT_STATUS_RUNNING = 2
+ENCODER_ALIGNMENT_STATUS_DONE = 3
+ENCODER_ALIGNMENT_STATUS_FAULT = 4
 ID_SQUARE_ANGLE_TEST_NONE = 0
 ID_SQUARE_ANGLE_TEST_PLUS_90 = 1
 ID_SQUARE_ANGLE_TEST_MINUS_90 = 2
 ID_SQUARE_ANGLE_TEST_PLUS_180 = 3
+ID_SQUARE_TUNING_MODE_SQUARE_WAVE = 0
+ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD = 1
 
 DEFAULT_MOTOR_RATED_CURRENT_RMS = 1.6
 DEFAULT_MOTOR_PEAK_CURRENT_RMS = 3.2
@@ -97,6 +109,7 @@ class Command(IntEnum):
     CMD_START_ID_SQUARE_TUNING = 0x58
     CMD_STOP_ID_SQUARE_TUNING = 0x59
     CMD_SET_CONTROL_TIMING_MODE = 0x5A
+    CMD_START_ENCODER_ALIGNMENT = 0x5B
 
 
 class UpdateCode(IntEnum):
@@ -257,6 +270,11 @@ class MonitorSnapshot:
     control_timing_mode: int = CONTROL_TIMING_MODE_16KHZ
     control_loop_frequency_hz: float = CURRENT_LOOP_FREQUENCY_HZ
     speed_loop_frequency_hz: float = CURRENT_LOOP_FREQUENCY_HZ * 0.5
+    debug_encoder_offset_counts: int = 0
+    debug_alignment_captured_offset_counts: int = 0
+    debug_alignment_policy: int = ENCODER_ALIGNMENT_POLICY_POWER_ON
+    debug_alignment_status: int = ENCODER_ALIGNMENT_STATUS_IDLE
+    debug_alignment_needs_flash_save: int = 0
 
 
 @dataclass(slots=True)
@@ -445,6 +463,16 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
             snapshot.control_loop_frequency_hz,
             snapshot.speed_loop_frequency_hz,
         ) = struct.unpack_from("<B2f", payload, offset)
+        offset += struct.calcsize("<B2f")
+
+    if len(payload) >= offset + struct.calcsize("<2i3B"):
+        (
+            snapshot.debug_encoder_offset_counts,
+            snapshot.debug_alignment_captured_offset_counts,
+            snapshot.debug_alignment_policy,
+            snapshot.debug_alignment_status,
+            snapshot.debug_alignment_needs_flash_save,
+        ) = struct.unpack_from("<2i3B", payload, offset)
 
     return snapshot
 

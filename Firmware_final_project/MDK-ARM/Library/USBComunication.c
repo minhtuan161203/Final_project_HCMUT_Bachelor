@@ -71,8 +71,17 @@ extern float RecordTable1[TRACE_DATA_LENGTH * 4u];
 extern TraceData Trace_Data;
 extern IdSquareTuning_t IdSquareTuning;
 extern void ApplyControlTimingMode(uint8_t mode);
+extern volatile uint8_t gEncoderAlignmentPolicy;
+extern volatile uint8_t gEncoderAlignmentStatus;
+extern volatile uint8_t gEncoderAlignmentNeedsFlashSave;
+extern volatile int32_t gEncoderAlignmentLastCapturedOffset;
+extern volatile uint8_t gEncoderAlignmentRequested;
+extern volatile uint8_t gEncoderAlignmentContinueToRun;
+extern volatile uint8_t gEncoderAlignmentResumeRunMode;
+extern void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode);
+extern uint8_t SaveParametersToFlash(void);
 
-static void USB_StartServoSequence(void);
+static void USB_StartServoSequence(uint8_t allow_auto_encoder_alignment);
 
 static uint8_t USB_RingPush(uint8_t byte)
 {
@@ -189,7 +198,7 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	float cmd_position = 0.0f;
 	float position_error = 0.0f;
 	int16_t motor_power = (int16_t)(Parameter.fVdc * gIqRefA);
-	uint8_t enable_run = (uint8_t)((StateMachine.bState == RUN) ? 1u : 0u);
+	uint8_t enable_run = (uint8_t)(((StateMachine.bState == RUN) || (StateMachine.bState == ENCODER_ALIGN)) ? 1u : 0u);
 	uint16_t fault = FaultCode;
 	uint8_t run_mode = (uint8_t)gRunMode;
 	float id_ref = gIdRefA;
@@ -290,6 +299,16 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEffectiveSpeedLoopFrequencyHz, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.Offset_Enc, sizeof(Parameter.Offset_Enc));
+	offset = (uint8_t)(offset + sizeof(Parameter.Offset_Enc));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEncoderAlignmentLastCapturedOffset, sizeof(gEncoderAlignmentLastCapturedOffset));
+	offset = (uint8_t)(offset + sizeof(gEncoderAlignmentLastCapturedOffset));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEncoderAlignmentPolicy, sizeof(gEncoderAlignmentPolicy));
+	offset = (uint8_t)(offset + sizeof(gEncoderAlignmentPolicy));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEncoderAlignmentStatus, sizeof(gEncoderAlignmentStatus));
+	offset = (uint8_t)(offset + sizeof(gEncoderAlignmentStatus));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEncoderAlignmentNeedsFlashSave, sizeof(gEncoderAlignmentNeedsFlashSave));
+	offset = (uint8_t)(offset + sizeof(gEncoderAlignmentNeedsFlashSave));
 
 	SendData(CMD_MONITOR_DATA, offset, USB_Comunicate->TransmitData);
 	USB_Comunicate->ReadMotionMonitorData = 0u;
@@ -564,6 +583,7 @@ static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t paylo
 	uint8_t electrical_angle_test_mode = 0u;
 	uint8_t current_polarity_invert_test = 0u;
 	uint8_t current_uv_swap_test = 0u;
+	uint8_t tuning_mode = ID_SQUARE_TUNING_MODE_SQUARE_WAVE;
 
 	if (payload_length < 16u)
 	{
@@ -586,6 +606,10 @@ static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t paylo
 	{
 		current_uv_swap_test = payload[18];
 	}
+	if (payload_length >= 20u)
+	{
+		tuning_mode = payload[19];
+	}
 
 	IdSquareTuning.fAmplitudeCmd = amplitude;
 	IdSquareTuning.fFrequencyCmd = frequency;
@@ -594,6 +618,8 @@ static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t paylo
 	IdSquareTuning.ElectricalAngleTestMode = electrical_angle_test_mode;
 	IdSquareTuning.CurrentPolarityInvertTest = (current_polarity_invert_test != 0u) ? 1u : 0u;
 	IdSquareTuning.CurrentUvSwapTest = (current_uv_swap_test != 0u) ? 1u : 0u;
+	IdSquareTuning.Mode = (tuning_mode == ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD) ?
+		ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD : ID_SQUARE_TUNING_MODE_SQUARE_WAVE;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
 	IdSquareTuning.OffsetCaptured = 0;
@@ -616,7 +642,8 @@ static void USB_HandleIdSquareTuningStart(void)
 		return;
 	}
 
-	gRunMode = RUN_MODE_FOC;
+	gRunMode = (IdSquareTuning.Mode == ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD) ?
+		RUN_MODE_ALIGNMENT_ONLY : RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
 	gTargetSpeedRpm = 0.0f;
@@ -629,7 +656,7 @@ static void USB_HandleIdSquareTuningStart(void)
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
 	IdSquareTuning.OffsetCaptured = 0;
-	USB_StartServoSequence();
+	USB_StartServoSequence(0u);
 	if (Trace_Data.Enable != 0u)
 	{
 		USB_ResetTraceCaptureState();
@@ -645,18 +672,57 @@ static void USB_HandleIdSquareTuningStop(void)
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
 	IdSquareTuning.OffsetCaptured = 0;
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
+		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+	}
 	STM_NextState(&StateMachine, STOP);
 }
 
-static void USB_StartServoSequence(void)
+static void USB_StartServoSequence(uint8_t allow_auto_encoder_alignment)
 {
 	Reset_CurrentSensor(&Current_Sensor);
 	FaultCode = NO_ERROR;
 	USB_Comm.SendError = false;
+	if ((allow_auto_encoder_alignment != 0u) &&
+		(IdSquareTuning.Enable == 0u) &&
+		(gEncoderAlignmentRequested == 0u) &&
+		(gEncoderAlignmentPolicy == ENCODER_ALIGNMENT_POLICY_POWER_ON))
+	{
+		PrepareEncoderAlignment(1u, gRunMode);
+	}
 	STM_NextState(&StateMachine, OFFSET_CALIB);
+}
+
+static uint8_t USB_HandleStartEncoderAlignment(void)
+{
+	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
+	{
+		return USB_COMM_FAIL;
+	}
+
+	PrepareEncoderAlignment(0u, RUN_MODE_FOC);
+	USB_StartServoSequence(0u);
+	if (Trace_Data.Enable != 0u)
+	{
+		USB_ResetTraceCaptureState();
+	}
+	return USB_COMM_OK;
+}
+
+static uint8_t USB_HandleWriteToFlash(void)
+{
+	return (SaveParametersToFlash() != 0u) ? USB_COMM_OK : USB_COMM_FAIL;
 }
 
 static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_length)
@@ -764,6 +830,14 @@ static void USB_HandleFaultAck(void)
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	ResetControl_V_over_F();
 	STM_FaultProcessing(&StateMachine, 0u, 0u);
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
+		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+	}
 	STM_NextState(&StateMachine, IDLE);
 }
 
@@ -775,8 +849,11 @@ static void USB_HandleServoOn(void)
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
 	ResetControl_V_over_F();
-	USB_StartServoSequence();
+	USB_StartServoSequence(1u);
 }
 
 static void USB_HandleServoOff(void)
@@ -791,6 +868,14 @@ static void USB_HandleServoOff(void)
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
+		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+	}
 	STM_NextState(&StateMachine, STOP);
 }
 
@@ -806,6 +891,14 @@ static void USB_HandleOpenLoopStop(void)
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
+		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+	}
 	STM_NextState(&StateMachine, STOP);
 }
 
@@ -840,7 +933,7 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 			USB_HandleSpeedCommand(payload, payload_length);
 			if ((StateMachine.bState == IDLE) || (StateMachine.bState == STOP))
 			{
-				USB_StartServoSequence();
+				USB_StartServoSequence(1u);
 			}
 			break;
 
@@ -854,7 +947,7 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 			USB_HandleOpenLoopVfCommand(payload, payload_length);
 			if ((StateMachine.bState == IDLE) || (StateMachine.bState == STOP))
 			{
-				USB_StartServoSequence();
+				USB_StartServoSequence(0u);
 			}
 			break;
 
@@ -886,6 +979,28 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 		case CMD_SET_CONTROL_TIMING_MODE:
 			USB_SendAckPacket(ACK, command, payload, payload_length);
 			USB_HandleControlTimingMode(payload, payload_length);
+			break;
+
+		case CMD_START_ENCODER_ALIGNMENT:
+			if (USB_HandleStartEncoderAlignment() == USB_COMM_OK)
+			{
+				USB_SendAckPacket(ACK, command, payload, payload_length);
+			}
+			else
+			{
+				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
+			}
+			break;
+
+		case CMD_WRITE_TO_FLASH:
+			if (USB_HandleWriteToFlash() == USB_COMM_OK)
+			{
+				USB_SendAckPacket(ACK, command, payload, payload_length);
+			}
+			else
+			{
+				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
+			}
 			break;
 
 		case CMD_UPDATE_MONITOR:

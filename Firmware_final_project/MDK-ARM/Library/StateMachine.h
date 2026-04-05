@@ -7,6 +7,7 @@
 typedef enum {
     IDLE = 0,           // Waiting for command, PWM off
     OFFSET_CALIB,       // Current sensor zero-offset calibration
+    ENCODER_ALIGN,      // Encoder electrical-zero alignment and offset capture
     START,              // Soft start sequence
     RUN,                // Main execution (FOC, Tuning, JOG)
     STOP,               // Stop motor, reset PI controllers
