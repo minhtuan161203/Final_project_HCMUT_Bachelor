@@ -285,10 +285,12 @@ uint16_t CheckVbusFault(Parameterhandle_t *pHandle)
 
 uint16_t CheckTempFault(Parameterhandle_t *pHandle)
 {
-	uint16_t fault;
+	uint16_t fault = NO_ERROR;
 	if(pHandle->fTemparature > OVER_TEMPERATURE_THRESHOLD_DEGREE_UNIT)
 		fault = ERROR_OVER_TEMPERATURE;
 	else if(pHandle->fTemparature < OVER_TEMPERATURE_DEADBAND_DEGREE_UNIT)
+		fault = NO_ERROR;
+	else
 		fault = NO_ERROR;
 	return fault;
 }

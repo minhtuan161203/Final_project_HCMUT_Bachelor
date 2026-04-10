@@ -88,7 +88,8 @@ typedef enum
 {
 	RUN_MODE_FOC = 0u,
 	RUN_MODE_OPEN_LOOP_VF = 1u,
-	RUN_MODE_ALIGNMENT_ONLY = 2u
+	RUN_MODE_ALIGNMENT_ONLY = 2u,
+	RUN_MODE_AUTOTUNE = 3u
 }RunMode_e;
 
 typedef enum
@@ -96,6 +97,14 @@ typedef enum
 	ID_SQUARE_TUNING_MODE_SQUARE_WAVE = 0u,
 	ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD = 1u
 }IdSquareTuningMode_e;
+
+typedef enum
+{
+	ID_SQUARE_ANGLE_TEST_NONE = 0u,
+	ID_SQUARE_ANGLE_TEST_PLUS_90 = 1u,
+	ID_SQUARE_ANGLE_TEST_MINUS_90 = 2u,
+	ID_SQUARE_ANGLE_TEST_PLUS_180 = 3u
+}IdSquareAngleTest_e;
 
 typedef enum
 {
@@ -155,6 +164,8 @@ typedef struct
 	uint16_t AlignmentCounter;
 	float fAmplitudeCmd;
 	float fFrequencyCmd;
+	float fCurrentKpCmd;
+	float fCurrentKiCmd;
 	float fAmplitudeApplied;
 	float fFrequencyApplied;
 	float fPhase;

@@ -659,6 +659,16 @@
               <FileType>5</FileType>
               <FilePath>.\Library\vector_transfs.h</FilePath>
             </File>
+            <File>
+              <FileName>motor_autotune.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\motor_autotune.c</FilePath>
+            </File>
+            <File>
+              <FileName>motor_autotune.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Library\motor_autotune.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

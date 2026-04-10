@@ -64,15 +64,10 @@
 #define SPEED_LOOP_FREQUENCY				(float)8000.0f 		//Hz	//8000
 #define CURRENT_LOOP_FREQUENCY			(float)16000.0f		//Hz
 #define CONTROL_TIMING_MODE_16KHZ		0u
-#define CONTROL_TIMING_MODE_3KHZ		1u
-#define USER_ISR_FREQUENCY_3KHZ			(float)3000.0f
 #define USER_ISR_FREQUENCY_16KHZ		CURRENT_LOOP_FREQUENCY
-/*
- * Compile-time default for the runtime-selectable timing profile.
- * GUI/USB can switch between 3 kHz and 16 kHz later without rebuilding.
- */
-#define USER_DEFAULT_CONTROL_TIMING_MODE	CONTROL_TIMING_MODE_3KHZ
-#define USER_SELECTED_ISR_FREQUENCY		USER_ISR_FREQUENCY_3KHZ
+/* Runtime control is fixed at 16 kHz across firmware and GUI. */
+#define USER_DEFAULT_CONTROL_TIMING_MODE	CONTROL_TIMING_MODE_16KHZ
+#define USER_SELECTED_ISR_FREQUENCY		USER_ISR_FREQUENCY_16KHZ
 #define USER_EFFECTIVE_CURRENT_LOOP_FREQUENCY	USER_SELECTED_ISR_FREQUENCY
 #define USER_EFFECTIVE_SPEED_LOOP_FREQUENCY		(USER_EFFECTIVE_CURRENT_LOOP_FREQUENCY * 0.5f)
 #define POS_MAX_CNT									1
@@ -121,10 +116,11 @@
 #define INITIAL_MOTOR_POLE_PAIRS 	4
 /*
  * Empirical electrical zero compensation captured during Id tuning/alignment.
- * Positive value advances the encoder electrical frame.
- * Change back to 0.0f if later verification shows no permanent +90e offset.
+ * Encoder alignment should capture the rotor electrical zero directly.
+ * Keep this at 0 deg unless hardware verification proves a fixed phase
+ * compensation is required across every motor/driver pairing.
  */
-#define DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG	90.0f
+#define DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG	0.0f
 typedef enum
 {
 	DEVICE_ID,															/*00:						32 bit*/

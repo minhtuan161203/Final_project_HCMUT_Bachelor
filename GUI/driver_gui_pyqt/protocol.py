@@ -15,18 +15,21 @@ ACK_ERROR = 0xFF
 HEADER_SIZE = 2
 CRC_SIZE = 1
 REG_SIZE = 1
-CURRENT_LOOP_FREQUENCY_HZ = 3000.0
+CURRENT_LOOP_FREQUENCY_HZ = 16000.0
 TRACE_SAMPLES_PER_CHUNK = 10
 TRACE_CHANNELS_PER_SAMPLE = 4
 CURRENT_TUNING_SAMPLES_PER_CHUNK = 20
 CURRENT_TUNING_TOTAL_SAMPLES = 600
 TRACE_TOTAL_SAMPLES = 1000
+AUTOTUNE_SAMPLES_PER_CHUNK = 8
 
 CONTROL_TIMING_MODE_16KHZ = 0
-CONTROL_TIMING_MODE_3KHZ = 1
+SPEED_CONTROL_MODE = 1
+POSITION_CONTROL_MODE = 2
 RUN_MODE_FOC = 0
 RUN_MODE_OPEN_LOOP_VF = 1
 RUN_MODE_ALIGNMENT_ONLY = 2
+RUN_MODE_AUTOTUNE = 3
 ENCODER_ALIGNMENT_POLICY_POWER_ON = 0
 ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE = 1
 ENCODER_ALIGNMENT_STATUS_IDLE = 0
@@ -40,6 +43,20 @@ ID_SQUARE_ANGLE_TEST_MINUS_90 = 2
 ID_SQUARE_ANGLE_TEST_PLUS_180 = 3
 ID_SQUARE_TUNING_MODE_SQUARE_WAVE = 0
 ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD = 1
+MOTOR_AUTOTUNE_STATE_IDLE = 0
+MOTOR_AUTOTUNE_STATE_RS = 1
+MOTOR_AUTOTUNE_STATE_LS = 2
+MOTOR_AUTOTUNE_STATE_FLUX = 3
+MOTOR_AUTOTUNE_STATE_DONE = 4
+MOTOR_AUTOTUNE_STATE_ERROR = 5
+MOTOR_AUTOTUNE_ERROR_NONE = 0
+MOTOR_AUTOTUNE_ERROR_OVERCURRENT = 1
+MOTOR_AUTOTUNE_ERROR_STALL = 2
+MOTOR_AUTOTUNE_ERROR_INVALID_CONFIG = 3
+MOTOR_AUTOTUNE_ERROR_SIGNAL = 4
+MOTOR_AUTOTUNE_CHART_NONE = 0
+MOTOR_AUTOTUNE_CHART_RS = 1
+MOTOR_AUTOTUNE_CHART_LS = 2
 
 DEFAULT_MOTOR_RATED_CURRENT_RMS = 1.6
 DEFAULT_MOTOR_PEAK_CURRENT_RMS = 3.2
@@ -275,6 +292,20 @@ class MonitorSnapshot:
     debug_alignment_policy: int = ENCODER_ALIGNMENT_POLICY_POWER_ON
     debug_alignment_status: int = ENCODER_ALIGNMENT_STATUS_IDLE
     debug_alignment_needs_flash_save: int = 0
+    autotune_state: int = MOTOR_AUTOTUNE_STATE_IDLE
+    autotune_error: int = MOTOR_AUTOTUNE_ERROR_NONE
+    autotune_progress_percent: int = 0
+    autotune_data_ready: int = 0
+    autotune_measured_rs: float = 0.0
+    autotune_measured_ls: float = 0.0
+    autotune_measured_ke: float = 0.0
+    autotune_measured_flux: float = 0.0
+    autotune_measured_pole_pairs: float = 0.0
+    autotune_current_kp: float = 0.0
+    autotune_current_ki: float = 0.0
+    autotune_speed_kp: float = 0.0
+    autotune_speed_ki: float = 0.0
+    autotune_position_kp: float = 0.0
 
 
 @dataclass(slots=True)
@@ -306,6 +337,18 @@ class CurrentTuningChunk:
     chunk_index: int
     reference: list[float]
     feedback: list[float]
+
+
+@dataclass(slots=True)
+class AutoTuneChunk:
+    stage: int
+    sample_start: int
+    sample_count: int
+    total_samples: int
+    sample_period_s: float
+    primary: list[float]
+    secondary: list[float]
+    tertiary: list[float]
 
 
 def calc_crc(u_code: int, u_size: int, buffer: bytes) -> int:
@@ -473,6 +516,25 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
             snapshot.debug_alignment_status,
             snapshot.debug_alignment_needs_flash_save,
         ) = struct.unpack_from("<2i3B", payload, offset)
+        offset += struct.calcsize("<2i3B")
+
+    if len(payload) >= offset + struct.calcsize("<4B10f"):
+        (
+            snapshot.autotune_state,
+            snapshot.autotune_error,
+            snapshot.autotune_progress_percent,
+            snapshot.autotune_data_ready,
+            snapshot.autotune_measured_rs,
+            snapshot.autotune_measured_ls,
+            snapshot.autotune_measured_ke,
+            snapshot.autotune_measured_flux,
+            snapshot.autotune_measured_pole_pairs,
+            snapshot.autotune_current_kp,
+            snapshot.autotune_current_ki,
+            snapshot.autotune_speed_kp,
+            snapshot.autotune_speed_ki,
+            snapshot.autotune_position_kp,
+        ) = struct.unpack_from("<4B10f", payload, offset)
 
     return snapshot
 
@@ -559,6 +621,39 @@ def parse_current_tuning_payload(payload: bytes) -> CurrentTuningChunk:
         chunk_index=chunk_index,
         reference=reference,
         feedback=feedback,
+    )
+
+
+def parse_autotune_payload(payload: bytes) -> AutoTuneChunk:
+    expected_header = struct.calcsize("<BHBHf")
+    expected_total = expected_header + (AUTOTUNE_SAMPLES_PER_CHUNK * 3 * 4)
+    if len(payload) < expected_total:
+        raise ValueError(f"Autotune payload too short: {len(payload)}")
+
+    stage, sample_start, sample_count, total_samples, sample_period_s = struct.unpack_from(
+        "<BHBHf", payload, 0
+    )
+    offset = expected_header
+    primary: list[float] = []
+    secondary: list[float] = []
+    tertiary: list[float] = []
+    for _ in range(AUTOTUNE_SAMPLES_PER_CHUNK):
+        a, b, c = struct.unpack_from("<3f", payload, offset)
+        offset += 12
+        primary.append(a)
+        secondary.append(b)
+        tertiary.append(c)
+
+    valid_count = max(0, min(int(sample_count), AUTOTUNE_SAMPLES_PER_CHUNK))
+    return AutoTuneChunk(
+        stage=int(stage),
+        sample_start=int(sample_start),
+        sample_count=valid_count,
+        total_samples=int(total_samples),
+        sample_period_s=float(sample_period_s),
+        primary=primary[:valid_count],
+        secondary=secondary[:valid_count],
+        tertiary=tertiary[:valid_count],
     )
 
 

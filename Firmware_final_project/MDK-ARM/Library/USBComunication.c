@@ -5,6 +5,7 @@
 #include "Parameter.h"
 #include "StateMachine.h"
 #include "define.h"
+#include "motor_autotune.h"
 #include "pwm.h"
 #include "usbd_cdc_if.h"
 
@@ -43,6 +44,8 @@ extern float MotorParameter[32];
 extern float gIdRefA;
 extern float gIqRefA;
 extern volatile float gTargetSpeedRpm;
+extern volatile float gTargetPositionCounts;
+extern volatile float gCommandedSpeedRpm;
 extern volatile uint8_t gRunMode;
 extern volatile float gVfFrequencyHz;
 extern volatile float gVfVoltageV;
@@ -57,6 +60,9 @@ extern volatile float gDebugDeltaPosAvg;
 extern volatile float gDebugEncoderTurns;
 extern volatile float gDebugMechanicalAngleRad;
 extern volatile float gDebugElectricalAngleRad;
+extern volatile float gFaultPhaseU;
+extern volatile float gFaultPhaseV;
+extern volatile float gFaultPhaseW;
 extern volatile uint32_t gDebugIsrDeltaCycles;
 extern volatile float gDebugIsrPeriodUs;
 extern volatile float gDebugIsrFrequencyHz;
@@ -70,6 +76,7 @@ extern float gTracePosError;
 extern float RecordTable1[TRACE_DATA_LENGTH * 4u];
 extern TraceData Trace_Data;
 extern IdSquareTuning_t IdSquareTuning;
+extern MotorAutoTune_t gMotorAutoTune;
 extern void ApplyControlTimingMode(uint8_t mode);
 extern volatile uint8_t gEncoderAlignmentPolicy;
 extern volatile uint8_t gEncoderAlignmentStatus;
@@ -78,10 +85,15 @@ extern volatile int32_t gEncoderAlignmentLastCapturedOffset;
 extern volatile uint8_t gEncoderAlignmentRequested;
 extern volatile uint8_t gEncoderAlignmentContinueToRun;
 extern volatile uint8_t gEncoderAlignmentResumeRunMode;
+extern volatile uint8_t gServoArmOnlyRequested;
+extern volatile uint8_t gFocElectricalAngleTestMode;
+extern volatile uint8_t gFocCurrentUvSwapTest;
 extern void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode);
 extern uint8_t SaveParametersToFlash(void);
 
 static void USB_StartServoSequence(uint8_t allow_auto_encoder_alignment);
+static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_length);
+static void USB_HandleFocControlStop(void);
 
 static uint8_t USB_RingPush(uint8_t byte)
 {
@@ -194,7 +206,8 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 {
 	uint8_t offset = 0u;
 	float vdc_scaled = Parameter.fVdc * 0.1f;
-	float speed_error = gTargetSpeedRpm - Parameter.fActSpeed;
+	float cmd_speed = gCommandedSpeedRpm;
+	float speed_error = cmd_speed - Parameter.fActSpeed;
 	float cmd_position = 0.0f;
 	float position_error = 0.0f;
 	int16_t motor_power = (int16_t)(Parameter.fVdc * gIqRefA);
@@ -202,6 +215,17 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	uint16_t fault = FaultCode;
 	uint8_t run_mode = (uint8_t)gRunMode;
 	float id_ref = gIdRefA;
+	uint8_t autotune_state = (uint8_t)gMotorAutoTune.state;
+	uint8_t autotune_error = (uint8_t)gMotorAutoTune.error;
+	uint8_t autotune_progress = gMotorAutoTune.progress_percent;
+	uint8_t autotune_data_ready = gMotorAutoTune.tuning_data_ready;
+
+	if ((((uint8_t)DriverParameter[CONTROL_MODE]) == POSITION_CONTROL_MODE) &&
+		(run_mode == RUN_MODE_FOC))
+	{
+		cmd_position = gTargetPositionCounts;
+		position_error = gTracePosError;
+	}
 
 	memcpy(&USB_Comunicate->TransmitData[offset], &enable_run, sizeof(enable_run));
 	offset = (uint8_t)(offset + sizeof(enable_run));
@@ -209,7 +233,7 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	offset = (uint8_t)(offset + sizeof(vdc_scaled));
 	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fTemparature, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
-	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gTargetSpeedRpm, sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], &cmd_speed, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fActSpeed, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
@@ -309,6 +333,34 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	offset = (uint8_t)(offset + sizeof(gEncoderAlignmentStatus));
 	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gEncoderAlignmentNeedsFlashSave, sizeof(gEncoderAlignmentNeedsFlashSave));
 	offset = (uint8_t)(offset + sizeof(gEncoderAlignmentNeedsFlashSave));
+	memcpy(&USB_Comunicate->TransmitData[offset], &autotune_state, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &autotune_error, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &autotune_progress, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &autotune_data_ready, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.measured_Rs, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.measured_Ls, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.measured_Ke, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.measured_Flux, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.measured_PolePairs, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_current_kp, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_current_ki, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_speed_kp, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_speed_ki, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_position_kp, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
 
 	SendData(CMD_MONITOR_DATA, offset, USB_Comunicate->TransmitData);
 	USB_Comunicate->ReadMotionMonitorData = 0u;
@@ -318,6 +370,16 @@ static void USB_SendErrorPacket(USB_Comunication_t *USB_Comunicate)
 {
 	uint8_t offset = 0u;
 	int16_t motor_power = (int16_t)(Parameter.fVdc * gIqRefA);
+	float cmd_speed = gCommandedSpeedRpm;
+	float cmd_position = 0.0f;
+	float position_error = 0.0f;
+
+	if ((((uint8_t)DriverParameter[CONTROL_MODE]) == POSITION_CONTROL_MODE) &&
+		(gRunMode == RUN_MODE_FOC))
+	{
+		cmd_position = gTargetPositionCounts;
+		position_error = gTracePosError;
+	}
 
 	memcpy(&USB_Comunicate->TransmitData[offset], &FaultCode, sizeof(FaultCode));
 	offset = (uint8_t)(offset + sizeof(FaultCode));
@@ -325,36 +387,30 @@ static void USB_SendErrorPacket(USB_Comunication_t *USB_Comunicate)
 	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fTemparature, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
-	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gTargetSpeedRpm, sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], &cmd_speed, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fActSpeed, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 	{
-		float speed_error = gTargetSpeedRpm - Parameter.fActSpeed;
+		float speed_error = cmd_speed - Parameter.fActSpeed;
 		memcpy(&USB_Comunicate->TransmitData[offset], &speed_error, sizeof(float));
 		offset = (uint8_t)(offset + sizeof(float));
 	}
-	{
-		float cmd_position = 0.0f;
-		memcpy(&USB_Comunicate->TransmitData[offset], &cmd_position, sizeof(float));
-		offset = (uint8_t)(offset + sizeof(float));
-	}
+	memcpy(&USB_Comunicate->TransmitData[offset], &cmd_position, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fPosition, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
-	{
-		float position_error = 0.0f;
-		memcpy(&USB_Comunicate->TransmitData[offset], &position_error, sizeof(float));
-		offset = (uint8_t)(offset + sizeof(float));
-	}
+	memcpy(&USB_Comunicate->TransmitData[offset], &position_error, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], &gIqRefA, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], &motor_power, sizeof(motor_power));
 	offset = (uint8_t)(offset + sizeof(motor_power));
-	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fIabc[0], sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gFaultPhaseU, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
-	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fIabc[1], sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gFaultPhaseV, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
-	memcpy(&USB_Comunicate->TransmitData[offset], &Parameter.fIabc[2], sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gFaultPhaseW, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 
 SendData(MTR_CODE_ERROR, offset, USB_Comunicate->TransmitData);
@@ -411,6 +467,73 @@ static void USB_SendTraceChunk(USB_Comunication_t *USB_Comunicate)
 	{
 		Trace_Data.Counter = 0u;
 		Trace_Data.u8CntSample = Trace_Data.u8MaxCntSample;
+	}
+}
+
+static void USB_SendAutoTuneChunk(USB_Comunication_t *USB_Comunicate)
+{
+	uint16_t start_index;
+	uint16_t remaining;
+	uint8_t valid_samples;
+	uint8_t offset = 0u;
+	uint16_t sample_index;
+	static const uint8_t samples_per_chunk = 8u;
+
+	if ((gMotorAutoTune.tuning_data_ready == 0u) ||
+		(gMotorAutoTune.chart_transfer_active == 0u) ||
+		(gMotorAutoTune.chart_length == 0u))
+	{
+		return;
+	}
+
+	start_index = gMotorAutoTune.chart_send_index;
+	if (start_index >= gMotorAutoTune.chart_length)
+	{
+		gMotorAutoTune.chart_transfer_active = 0u;
+		return;
+	}
+
+	remaining = (uint16_t)(gMotorAutoTune.chart_length - start_index);
+	valid_samples = (remaining > samples_per_chunk) ? samples_per_chunk : (uint8_t)remaining;
+
+	memcpy(&USB_Comunicate->TransmitData[offset], &gMotorAutoTune.chart_stage, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &gMotorAutoTune.chart_send_index, sizeof(uint16_t));
+	offset = (uint8_t)(offset + sizeof(uint16_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &valid_samples, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &gMotorAutoTune.chart_length, sizeof(uint16_t));
+	offset = (uint8_t)(offset + sizeof(uint16_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &gMotorAutoTune.chart_sample_period_s, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+
+	for (sample_index = 0u; sample_index < samples_per_chunk; sample_index++)
+	{
+		float primary = 0.0f;
+		float secondary = 0.0f;
+		float tertiary = 0.0f;
+		uint16_t data_index = (uint16_t)(start_index + sample_index);
+
+		if (data_index < gMotorAutoTune.chart_length)
+		{
+			primary = gMotorAutoTune.chart_primary[data_index];
+			secondary = gMotorAutoTune.chart_secondary[data_index];
+			tertiary = gMotorAutoTune.chart_tertiary[data_index];
+		}
+
+		memcpy(&USB_Comunicate->TransmitData[offset], &primary, sizeof(float));
+		offset = (uint8_t)(offset + sizeof(float));
+		memcpy(&USB_Comunicate->TransmitData[offset], &secondary, sizeof(float));
+		offset = (uint8_t)(offset + sizeof(float));
+		memcpy(&USB_Comunicate->TransmitData[offset], &tertiary, sizeof(float));
+		offset = (uint8_t)(offset + sizeof(float));
+	}
+
+	SendData(CMD_AUTOTUNING_DATA_THINH, offset, USB_Comunicate->TransmitData);
+	gMotorAutoTune.chart_send_index = (uint16_t)(gMotorAutoTune.chart_send_index + valid_samples);
+	if (gMotorAutoTune.chart_send_index >= gMotorAutoTune.chart_length)
+	{
+		gMotorAutoTune.chart_transfer_active = 0u;
 	}
 }
 
@@ -613,6 +736,8 @@ static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t paylo
 
 	IdSquareTuning.fAmplitudeCmd = amplitude;
 	IdSquareTuning.fFrequencyCmd = frequency;
+	IdSquareTuning.fCurrentKpCmd = current_kp;
+	IdSquareTuning.fCurrentKiCmd = current_ki;
 	IdSquareTuning.AlignmentDone = 0u;
 	IdSquareTuning.AlignmentCounter = 0u;
 	IdSquareTuning.ElectricalAngleTestMode = electrical_angle_test_mode;
@@ -623,14 +748,12 @@ static void USB_HandleIdSquareTuningConfig(const uint8_t *payload, uint8_t paylo
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
 	IdSquareTuning.OffsetCaptured = 0;
-
-	MotorParameter[MOTOR_CURRENT_P_GAIN] = current_kp;
-	MotorParameter[MOTOR_CURRENT_I_GAIN] = current_ki;
-	UpdateMotorParameter(MotorParameter);
 }
 
 static void USB_HandleIdSquareTuningStart(void)
 {
+	uint8_t reuse_completed_alignment = 0u;
+
 	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
 	{
 		IdSquareTuning.Enable = 0u;
@@ -649,13 +772,19 @@ static void USB_HandleIdSquareTuningStart(void)
 	gTargetSpeedRpm = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
+	if ((IdSquareTuning.Mode == ID_SQUARE_TUNING_MODE_SQUARE_WAVE) &&
+		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_DONE))
+	{
+		reuse_completed_alignment = 1u;
+	}
 	IdSquareTuning.Enable = 1u;
-	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentDone = reuse_completed_alignment;
 	IdSquareTuning.AlignmentCounter = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	IdSquareTuning.fAlignmentCurrentApplied = 0.0f;
-	IdSquareTuning.OffsetCaptured = 0;
+	IdSquareTuning.OffsetCaptured = reuse_completed_alignment ? Parameter.Offset_Enc : 0;
+	gServoArmOnlyRequested = 0u;
 	USB_StartServoSequence(0u);
 	if (Trace_Data.Enable != 0u)
 	{
@@ -712,6 +841,7 @@ static uint8_t USB_HandleStartEncoderAlignment(void)
 	}
 
 	PrepareEncoderAlignment(0u, RUN_MODE_FOC);
+	gServoArmOnlyRequested = 0u;
 	USB_StartServoSequence(0u);
 	if (Trace_Data.Enable != 0u)
 	{
@@ -727,18 +857,44 @@ static uint8_t USB_HandleWriteToFlash(void)
 
 static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_length)
 {
+	uint8_t foc_angle_test_mode = ID_SQUARE_ANGLE_TEST_NONE;
+	uint8_t foc_current_uv_swap_test = 0u;
+
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	DriverParameter[CONTROL_MODE] = (float)SPEED_CONTROL_MODE;
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	ResetControl_V_over_F();
+	gServoArmOnlyRequested = 0u;
 
 	if (payload_length >= sizeof(float))
 	{
 		memcpy((void *)&gTargetSpeedRpm, payload, sizeof(float));
 	}
+	if (payload_length >= 12u)
+	{
+		memcpy(&DriverParameter[SPEED_P_GAIN], &payload[4], sizeof(float));
+		memcpy(&DriverParameter[SPEED_I_GAIN], &payload[8], sizeof(float));
+	}
+	if (payload_length >= 20u)
+	{
+		memcpy(&DriverParameter[ACCELERATION_TIME], &payload[12], sizeof(float));
+		memcpy(&DriverParameter[DECELERATION_TIME], &payload[16], sizeof(float));
+	}
+	if (payload_length >= 21u)
+	{
+		foc_angle_test_mode = payload[20];
+	}
+	if (payload_length >= 22u)
+	{
+		foc_current_uv_swap_test = payload[21];
+	}
+	UpdateDriverParameter(DriverParameter);
+	gFocElectricalAngleTestMode = foc_angle_test_mode;
+	gFocCurrentUvSwapTest = (foc_current_uv_swap_test != 0u) ? 1u : 0u;
 
 	if (DriverParameter[MAXIMUM_SPEED] > 0.0f)
 	{
@@ -751,6 +907,103 @@ static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_lengt
 			gTargetSpeedRpm = -DriverParameter[MAXIMUM_SPEED];
 		}
 	}
+
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = Parameter.fActSpeed;
+	gTracePosError = 0.0f;
+}
+
+static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_length)
+{
+	float requested_position = Parameter.fPosition;
+	float speed_limit_rpm = DriverParameter[MAXIMUM_SPEED];
+	uint8_t foc_angle_test_mode = ID_SQUARE_ANGLE_TEST_NONE;
+	uint8_t foc_current_uv_swap_test = 0u;
+
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	DriverParameter[CONTROL_MODE] = (float)POSITION_CONTROL_MODE;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	ResetControl_V_over_F();
+	gServoArmOnlyRequested = 0u;
+
+	if (payload_length >= 4u)
+	{
+		memcpy(&requested_position, &payload[0], sizeof(float));
+	}
+	if (payload_length >= 8u)
+	{
+		memcpy(&speed_limit_rpm, &payload[4], sizeof(float));
+	}
+	if (payload_length >= 12u)
+	{
+		memcpy(&DriverParameter[POSITION_P_GAIN], &payload[8], sizeof(float));
+	}
+	if (payload_length >= 20u)
+	{
+		memcpy(&DriverParameter[SPEED_P_GAIN], &payload[12], sizeof(float));
+		memcpy(&DriverParameter[SPEED_I_GAIN], &payload[16], sizeof(float));
+	}
+	if (payload_length >= 28u)
+	{
+		memcpy(&DriverParameter[ACCELERATION_TIME], &payload[20], sizeof(float));
+		memcpy(&DriverParameter[DECELERATION_TIME], &payload[24], sizeof(float));
+	}
+	if (payload_length >= 29u)
+	{
+		foc_angle_test_mode = payload[28];
+	}
+	if (payload_length >= 30u)
+	{
+		foc_current_uv_swap_test = payload[29];
+	}
+
+	if (speed_limit_rpm < 0.0f)
+	{
+		speed_limit_rpm = -speed_limit_rpm;
+	}
+	if (speed_limit_rpm > 0.0f)
+	{
+		DriverParameter[MAXIMUM_SPEED] = speed_limit_rpm;
+	}
+	UpdateDriverParameter(DriverParameter);
+	gFocElectricalAngleTestMode = foc_angle_test_mode;
+	gFocCurrentUvSwapTest = (foc_current_uv_swap_test != 0u) ? 1u : 0u;
+
+	gTargetPositionCounts = requested_position;
+	gTargetSpeedRpm = DriverParameter[MAXIMUM_SPEED];
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = gTargetPositionCounts - Parameter.fPosition;
+}
+
+static void USB_HandleFocControlStop(void)
+{
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	ResetControl_V_over_F();
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gEncoderAlignmentRequested = 0u;
+	gEncoderAlignmentContinueToRun = 0u;
+	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	gServoArmOnlyRequested = 0u;
+	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
+		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
+	{
+		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
+	}
+	STM_NextState(&StateMachine, STOP);
 }
 
 static void USB_HandleSpeedTuning(const uint8_t *payload, uint8_t payload_length)
@@ -809,12 +1062,16 @@ static void USB_HandleOpenLoopVfCommand(const uint8_t *payload, uint8_t payload_
 	gVfFrequencyHz = requested_frequency;
 	gVfVoltageV = requested_voltage;
 	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	gRunMode = RUN_MODE_OPEN_LOOP_VF;
+	gServoArmOnlyRequested = 0u;
 	ResetControl_V_over_F();
 }
 
@@ -825,6 +1082,12 @@ static void USB_HandleFaultAck(void)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
@@ -833,6 +1096,7 @@ static void USB_HandleFaultAck(void)
 	gEncoderAlignmentRequested = 0u;
 	gEncoderAlignmentContinueToRun = 0u;
 	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	gServoArmOnlyRequested = 0u;
 	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
 		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
 	{
@@ -846,72 +1110,133 @@ static void USB_HandleServoOn(void)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	gEncoderAlignmentRequested = 0u;
 	gEncoderAlignmentContinueToRun = 0u;
 	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
+	gServoArmOnlyRequested = 1u;
 	ResetControl_V_over_F();
-	USB_StartServoSequence(1u);
+	USB_StartServoSequence(0u);
 }
 
 static void USB_HandleServoOff(void)
 {
-	gRunMode = RUN_MODE_FOC;
-	gVfFrequencyHz = 0.0f;
-	gVfVoltageV = 0.0f;
-	ResetControl_V_over_F();
-	IdSquareTuning.Enable = 0u;
-	IdSquareTuning.fPhase = 0.0f;
-	IdSquareTuning.fVoltageLimitApplied = 0.0f;
-	gTargetSpeedRpm = 0.0f;
-	gIdRefA = 0.0f;
-	gIqRefA = 0.0f;
-	gEncoderAlignmentRequested = 0u;
-	gEncoderAlignmentContinueToRun = 0u;
-	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
-	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
-		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
-	{
-		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
-	}
-	STM_NextState(&StateMachine, STOP);
+	USB_HandleFocControlStop();
 }
 
 static void USB_HandleOpenLoopStop(void)
 {
-	gRunMode = RUN_MODE_FOC;
-	gVfFrequencyHz = 0.0f;
-	gVfVoltageV = 0.0f;
-	ResetControl_V_over_F();
-	IdSquareTuning.Enable = 0u;
-	IdSquareTuning.fPhase = 0.0f;
-	IdSquareTuning.fVoltageLimitApplied = 0.0f;
-	gTargetSpeedRpm = 0.0f;
-	gIdRefA = 0.0f;
-	gIqRefA = 0.0f;
-	gEncoderAlignmentRequested = 0u;
-	gEncoderAlignmentContinueToRun = 0u;
-	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
-	if ((gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_REQUESTED) ||
-		(gEncoderAlignmentStatus == ENCODER_ALIGNMENT_STATUS_RUNNING))
-	{
-		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
-	}
-	STM_NextState(&StateMachine, STOP);
+	USB_HandleFocControlStop();
 }
 
 static void USB_HandleControlTimingMode(const uint8_t *payload, uint8_t payload_length)
 {
-	uint8_t timing_mode = CONTROL_TIMING_MODE_16KHZ;
+	(void)payload;
+	(void)payload_length;
+	ApplyControlTimingMode(CONTROL_TIMING_MODE_16KHZ);
+}
 
-	if ((payload != 0) && (payload_length > 0u))
+static uint8_t USB_HandleAutoTuneStart(USB_Comunication_t *USB_Comunicate, const uint8_t *payload, uint8_t payload_length)
+{
+	MotorAutoTuneConfig_t config;
+
+	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
 	{
-		timing_mode = payload[0];
+		return USB_COMM_FAIL;
 	}
 
-	ApplyControlTimingMode(timing_mode);
+	MotorAutoTune_SetDefaultConfig(&config);
+	if (payload_length >= 32u)
+	{
+		memcpy(&config.rs_current_low_a, &payload[0], sizeof(float));
+		memcpy(&config.rs_current_high_a, &payload[4], sizeof(float));
+		memcpy(&config.ls_step_voltage_v, &payload[8], sizeof(float));
+		memcpy(&config.flux_frequency_hz, &payload[12], sizeof(float));
+		memcpy(&config.flux_voltage_v, &payload[16], sizeof(float));
+		memcpy(&config.current_bandwidth_hz, &payload[20], sizeof(float));
+		memcpy(&config.speed_bandwidth_hz, &payload[24], sizeof(float));
+		memcpy(&config.position_bandwidth_hz, &payload[28], sizeof(float));
+	}
+
+	if (MotorAutoTune_Start(
+		&gMotorAutoTune,
+		&config,
+		gEffectiveCurrentLoopFrequencyHz,
+		Current_Sensor.OverCurrentThreshold) == 0u)
+	{
+		return USB_COMM_FAIL;
+	}
+
+	gRunMode = RUN_MODE_AUTOTUNE;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	gServoArmOnlyRequested = 0u;
+	ResetControl_V_over_F();
+	USB_Comunicate->ReadAutoTuningData_T = 0u;
+	if (Trace_Data.Enable != 0u)
+	{
+		USB_ResetTraceCaptureState();
+	}
+	USB_StartServoSequence(1u);
+	return USB_COMM_OK;
+}
+
+static void USB_HandleAutoTuneStop(USB_Comunication_t *USB_Comunicate)
+{
+	MotorAutoTune_Stop(&gMotorAutoTune);
+	USB_Comunicate->ReadAutoTuningData_T = 0u;
+	gRunMode = RUN_MODE_FOC;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	ResetControl_V_over_F();
+	STM_NextState(&StateMachine, STOP);
+}
+
+static uint8_t USB_HandleAutoTuneApplyGains(void)
+{
+	if (MotorAutoTune_ApplyEstimatedParameters(
+		&gMotorAutoTune,
+		DriverParameter,
+		16u,
+		MotorParameter,
+		32u) == 0u)
+	{
+		return USB_COMM_FAIL;
+	}
+
+	UpdateDriverParameter(DriverParameter);
+	UpdateMotorParameter(MotorParameter);
+	return USB_COMM_OK;
+}
+
+static void USB_HandleAutoTuneContinue(void)
+{
+	MotorAutoTune_ClearDataReady(&gMotorAutoTune);
 }
 
 static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t command, const uint8_t *payload, uint8_t payload_length)
@@ -933,8 +1258,27 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 			USB_HandleSpeedCommand(payload, payload_length);
 			if ((StateMachine.bState == IDLE) || (StateMachine.bState == STOP))
 			{
-				USB_StartServoSequence(1u);
+				USB_StartServoSequence(0u);
 			}
+			break;
+
+		case CMD_STOP_SPEEDCONTROL:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleFocControlStop();
+			break;
+
+		case CMD_START_POSITIONCONTROL:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandlePositionCommand(payload, payload_length);
+			if ((StateMachine.bState == IDLE) || (StateMachine.bState == STOP))
+			{
+				USB_StartServoSequence(0u);
+			}
+			break;
+
+		case CMD_STOP_POSITIONCONTROL:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleFocControlStop();
 			break;
 
 		case CMD_APPLY_STUNING:
@@ -979,6 +1323,38 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 		case CMD_SET_CONTROL_TIMING_MODE:
 			USB_SendAckPacket(ACK, command, payload, payload_length);
 			USB_HandleControlTimingMode(payload, payload_length);
+			break;
+
+		case CMD_START_AUTOTUNING_T:
+			if (USB_HandleAutoTuneStart(USB_Comunicate, payload, payload_length) == USB_COMM_OK)
+			{
+				USB_SendAckPacket(ACK, command, payload, payload_length);
+			}
+			else
+			{
+				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
+			}
+			break;
+
+		case CMD_STOP_AUTOTUNING_T:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleAutoTuneStop(USB_Comunicate);
+			break;
+
+		case CMD_UPDATE_TUNING_GAIN:
+			if (USB_HandleAutoTuneApplyGains() == USB_COMM_OK)
+			{
+				USB_SendAckPacket(ACK, command, payload, payload_length);
+			}
+			else
+			{
+				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
+			}
+			break;
+
+		case CMD_CONTINUE_AUTO_TUNING_STATE:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleAutoTuneContinue();
 			break;
 
 		case CMD_START_ENCODER_ALIGNMENT:
@@ -1175,6 +1551,12 @@ int16_t USB_TransmitData(USB_Comunication_t *USB_Comunicate)
 	if ((USB_Comunicate->ReadTraceData == 1u) && (USB_Comunicate->PriorityFlag == 1u))
 	{
 		USB_SendTraceChunk(USB_Comunicate);
+	}
+
+	if ((gMotorAutoTune.tuning_data_ready != 0u) &&
+		(gMotorAutoTune.chart_transfer_active != 0u))
+	{
+		USB_SendAutoTuneChunk(USB_Comunicate);
 	}
 
 	if (USB_Comunicate->ReadMotionMonitorData == 1u)

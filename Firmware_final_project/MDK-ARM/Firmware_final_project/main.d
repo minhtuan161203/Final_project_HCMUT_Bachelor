@@ -50,3 +50,4 @@ firmware_final_project\main.o: ./Library/vector_transfs.h
 firmware_final_project\main.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\math.h
 firmware_final_project\main.o: ./Library/pwm.h
 firmware_final_project\main.o: ./Library/Parameter.h
+firmware_final_project\main.o: ./Library/motor_autotune.h

@@ -6,6 +6,7 @@ firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\A
 firmware_final_project\usbcomunication.o: Library\Parameter.h
 firmware_final_project\usbcomunication.o: Library\StateMachine.h
 firmware_final_project\usbcomunication.o: Library\define.h
+firmware_final_project\usbcomunication.o: Library\motor_autotune.h
 firmware_final_project\usbcomunication.o: Library\pwm.h
 firmware_final_project\usbcomunication.o: ../Inc/usbd_cdc_if.h
 firmware_final_project\usbcomunication.o: ../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc/usbd_cdc.h
