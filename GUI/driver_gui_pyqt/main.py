@@ -23,8 +23,6 @@ from protocol import (
     ENCODER_ALIGNMENT_STATUS_RUNNING,
     CURRENT_LOOP_FREQUENCY_HZ,
     ID_SQUARE_ANGLE_TEST_NONE,
-    ID_SQUARE_ANGLE_TEST_PLUS_90,
-    ID_SQUARE_ANGLE_TEST_MINUS_90,
     ID_SQUARE_ANGLE_TEST_PLUS_180,
     ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
     ID_SQUARE_TUNING_MODE_SQUARE_WAVE,
@@ -1113,28 +1111,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_ki_spin.setSingleStep(0.001)
         self.ctuning_ki_spin.setValue(100.0)
 
-        self.ctuning_angle_test_combo = QtWidgets.QComboBox()
-        self.ctuning_angle_test_combo.addItem("Normal", ID_SQUARE_ANGLE_TEST_NONE)
-        self.ctuning_angle_test_combo.addItem("+180e", ID_SQUARE_ANGLE_TEST_PLUS_180)
-        self.ctuning_angle_test_combo.addItem("+90e", ID_SQUARE_ANGLE_TEST_PLUS_90)
-        self.ctuning_angle_test_combo.addItem("-90e", ID_SQUARE_ANGLE_TEST_MINUS_90)
-        self.ctuning_invert_current_checkbox = QtWidgets.QCheckBox("Invert Current")
-        self.ctuning_invert_current_checkbox.setChecked(True)
-        self.ctuning_invert_current_checkbox.setEnabled(False)
-        self.ctuning_invert_current_checkbox.setToolTip(
-            "Forced by this driver hardware configuration."
+        self.ctuning_theta_mode_value_label = QtWidgets.QLabel("Forced = 0 rad")
+        self.ctuning_theta_mode_value_label.setToolTip(
+            "Id tuning runs in a fixed electrical frame after encoder alignment."
+        )
+        self.ctuning_current_polarity_value_label = QtWidgets.QLabel("Forced by driver")
+        self.ctuning_current_polarity_value_label.setToolTip(
+            "Current polarity inversion is a fixed hardware characteristic on this driver."
         )
         self.ctuning_swap_uv_checkbox = QtWidgets.QCheckBox("Swap U/V")
+        self.ctuning_foc_gain_scale_spin = QtWidgets.QDoubleSpinBox()
+        self.ctuning_foc_gain_scale_spin.setRange(0.10, 1.50)
+        self.ctuning_foc_gain_scale_spin.setDecimals(2)
+        self.ctuning_foc_gain_scale_spin.setSingleStep(0.05)
+        self.ctuning_foc_gain_scale_spin.setValue(0.70)
+        self.ctuning_foc_gain_scale_spin.setSuffix(" x")
 
         self.ctuning_window_label = QtWidgets.QLabel("")
         self.ctuning_status_label = QtWidgets.QLabel("Ready")
         self.ctuning_hint_label = QtWidgets.QLabel(
-            "Flow: run Encoder Alignment first, lock the rotor mechanically, then use a small bipolar Id square wave to tune Kp/Ki. Current polarity inversion is forced by this driver hardware; only Swap U/V remains as a debug override. If the motor still turns, stop immediately and re-check electrical zero."
+            "Flow: run Encoder Alignment first, lock the rotor mechanically, then use a small Id square-wave to tune the d-axis PI. During this test theta is forced to 0 and q-axis is isolated. After the trace is acceptable, copy the same gains into both Id/Iq current PI loops for FOC with a user-defined scale."
         )
         self.ctuning_hint_label.setWordWrap(True)
 
-        self.apply_ctuning_button = QtWidgets.QPushButton("Apply Id Tune Setup")
-        self.apply_ctuning_gains_to_foc_button = QtWidgets.QPushButton("Apply Id Gains To FOC (70%)")
+        self.apply_ctuning_gains_to_foc_button = QtWidgets.QPushButton("Apply Current PI To FOC (Id + Iq)")
         self.start_ctuning_button = QtWidgets.QPushButton("Start Id Tune + Scope")
         self.stop_ctuning_button = QtWidgets.QPushButton("Stop")
 
@@ -1150,17 +1150,19 @@ class MainWindow(QtWidgets.QMainWindow):
         control_layout.addWidget(self.ctuning_ki_spin, 1, 3)
         control_layout.addWidget(QtWidgets.QLabel("Capture Window"), 1, 4)
         control_layout.addWidget(self.ctuning_window_label, 1, 5)
-        control_layout.addWidget(QtWidgets.QLabel("Debug Override"), 2, 0)
-        control_layout.addWidget(self.ctuning_angle_test_combo, 2, 1)
-        control_layout.addWidget(self.ctuning_invert_current_checkbox, 2, 2)
-        control_layout.addWidget(self.ctuning_swap_uv_checkbox, 2, 3)
-        control_layout.addWidget(self.ctuning_hint_label, 3, 0, 1, 6)
-        control_layout.addWidget(QtWidgets.QLabel("Status"), 4, 0)
-        control_layout.addWidget(self.ctuning_status_label, 4, 1, 1, 5)
-        control_layout.addWidget(self.apply_ctuning_button, 5, 0, 1, 2)
-        control_layout.addWidget(self.apply_ctuning_gains_to_foc_button, 5, 2, 1, 2)
-        control_layout.addWidget(self.start_ctuning_button, 6, 0, 1, 3)
-        control_layout.addWidget(self.stop_ctuning_button, 6, 3, 1, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Tuning Theta"), 2, 0)
+        control_layout.addWidget(self.ctuning_theta_mode_value_label, 2, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Current Polarity"), 2, 2)
+        control_layout.addWidget(self.ctuning_current_polarity_value_label, 2, 3)
+        control_layout.addWidget(self.ctuning_swap_uv_checkbox, 2, 4)
+        control_layout.addWidget(QtWidgets.QLabel("FOC Gain Scale"), 3, 0)
+        control_layout.addWidget(self.ctuning_foc_gain_scale_spin, 3, 1)
+        control_layout.addWidget(self.ctuning_hint_label, 4, 0, 1, 6)
+        control_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
+        control_layout.addWidget(self.ctuning_status_label, 5, 1, 1, 5)
+        control_layout.addWidget(self.apply_ctuning_gains_to_foc_button, 6, 0, 1, 3)
+        control_layout.addWidget(self.start_ctuning_button, 6, 3, 1, 2)
+        control_layout.addWidget(self.stop_ctuning_button, 6, 5, 1, 1)
 
         scope_toolbar = QtWidgets.QHBoxLayout()
         self.ctuning_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
@@ -1860,7 +1862,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.write_driver_button.clicked.connect(self._write_driver_parameters)
         self.write_motor_button.clicked.connect(self._write_motor_parameters)
         self.clear_log_button.clicked.connect(self.log_edit.clear)
-        self.apply_ctuning_button.clicked.connect(self._apply_current_tuning_parameters)
         self.apply_ctuning_gains_to_foc_button.clicked.connect(self._apply_current_tuning_gains_to_foc)
         self.start_ctuning_button.clicked.connect(self._start_current_tuning)
         self.stop_ctuning_button.clicked.connect(self._stop_current_tuning)
@@ -2299,8 +2300,6 @@ class MainWindow(QtWidgets.QMainWindow):
         invert_current = 0
         swap_uv = 0
         if selected_mode == ID_SQUARE_TUNING_MODE_SQUARE_WAVE:
-            electrical_angle_test = int(self.ctuning_angle_test_combo.currentData() or ID_SQUARE_ANGLE_TEST_NONE)
-            invert_current = 1 if self.ctuning_invert_current_checkbox.isChecked() else 0
             swap_uv = 1 if self.ctuning_swap_uv_checkbox.isChecked() else 0
         return struct.pack(
             "<4fBBBB",
@@ -2402,17 +2401,21 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._active_trace_target == "trace":
             self._active_trace_target = None
 
-    def _apply_current_tuning_parameters(self) -> None:
+    def _queue_current_tuning_setup(
+        self,
+        description: str = "Configure Id Square Tuning",
+        tuning_mode: int | None = None,
+    ) -> None:
         self._enqueue_command(
             Command.CMD_APPLY_ID_SQUARE_TUNING,
-            self._build_current_tuning_payload(),
-            "Apply Id Square Tuning",
+            self._build_current_tuning_payload(tuning_mode),
+            description,
         )
 
     def _apply_current_tuning_gains_to_foc(self) -> None:
-        safe_ratio = 0.70
-        current_kp = float(self.ctuning_kp_spin.value()) * safe_ratio
-        current_ki = float(self.ctuning_ki_spin.value()) * safe_ratio
+        apply_scale = float(self.ctuning_foc_gain_scale_spin.value())
+        current_kp = float(self.ctuning_kp_spin.value()) * apply_scale
+        current_ki = float(self.ctuning_ki_spin.value()) * apply_scale
 
         self._set_table_float_value(self.motor_table, MOTOR_PARAM_CURRENT_P_GAIN, current_kp)
         self._set_table_float_value(self.motor_table, MOTOR_PARAM_CURRENT_I_GAIN, current_ki)
@@ -2432,7 +2435,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
         self.ctuning_status_label.setText(
-            f"Applied Id gains to FOC with 70% safety derate: Kp={current_kp:.4f}, Ki={current_ki:.4f}"
+            f"Applied scaled current PI to FOC Id/Iq: scale={apply_scale:.2f}x, Kp={current_kp:.4f}, Ki={current_ki:.4f}"
         )
         self._request_monitor_once()
 
@@ -2450,10 +2453,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.auto_poll_checkbox.setChecked(True)
 
-        self._enqueue_command(
-            Command.CMD_APPLY_ID_SQUARE_TUNING,
-            self._build_current_tuning_payload(ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD),
-            "Apply Encoder Alignment Setup",
+        self._queue_current_tuning_setup(
+            "Configure Encoder Alignment Setup",
+            ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
         )
         self._enqueue_command(
             Command.CMD_START_ENCODER_ALIGNMENT,
@@ -2488,11 +2490,7 @@ class MainWindow(QtWidgets.QMainWindow):
         start_description = "Start Id Square-Wave Tuning"
         trace_description = "Start Id Tuning Trace"
 
-        self._enqueue_command(
-            Command.CMD_APPLY_ID_SQUARE_TUNING,
-            self._build_current_tuning_payload(),
-            "Apply Id Square Tuning",
-        )
+        self._queue_current_tuning_setup("Configure Id Square Tuning")
         self._clear_current_tuning_capture()
         sample_period_s = self._current_tuning_sample_period_s()
         decimation = int(self.ctuning_rate_combo.currentData() or 0)
