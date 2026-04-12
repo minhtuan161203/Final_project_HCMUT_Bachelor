@@ -814,13 +814,12 @@ class MainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(self._build_connection_group())
         main_layout.addWidget(self._build_alarm_banner())
         content_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self)
-        content_splitter.addWidget(self._build_monitor_group())
+        content_splitter.addWidget(self._build_monitor_tabs())
         content_splitter.addWidget(self._build_quick_command_group())
         content_splitter.setStretchFactor(0, 5)
         content_splitter.setStretchFactor(1, 2)
         main_layout.addWidget(content_splitter, 1)
 
-        self._parameter_window = self._build_parameter_window()
         self._trend_window = self._build_trend_window()
         self._tuning_window = self._build_tuning_window()
         self._debug_terminal_window = self._build_debug_terminal_window()
@@ -857,14 +856,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.port_combo = QtWidgets.QComboBox()
         self.refresh_ports_button = QtWidgets.QPushButton("Refresh Ports")
         self.connect_button = QtWidgets.QPushButton("Connect")
-        self.disconnect_button = QtWidgets.QPushButton("Disconnect")
-        self.disconnect_button.setEnabled(False)
+        self.connect_button.setCheckable(True)
+        self.connect_button.setStyleSheet("background-color: #2e7d32; color: white; font-weight: 600;")
 
-        self.baud_combo = QtWidgets.QComboBox()
-        self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
-        self.baud_combo.setCurrentText("115200")
-
-        self.auto_poll_checkbox = QtWidgets.QCheckBox("Auto Monitor Poll")
+        self.auto_poll_checkbox = QtWidgets.QCheckBox("Auto Monitor")
         self.auto_poll_checkbox.setChecked(False)
         self.monitor_rate_combo = QtWidgets.QComboBox()
         self.monitor_rate_combo.addItem("4 Hz", 250)
@@ -877,8 +872,8 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Known device VID:PID = {KNOWN_DEVICE_VID:04X}:{KNOWN_DEVICE_PID:04X}"
         )
         self.connection_state_label = QtWidgets.QLabel("Disconnected")
+        self.connection_state_label.setStyleSheet("color: #c62828; font-weight: 600;")
         self.timing_mode_state_label = QtWidgets.QLabel("Fixed: 16 kHz (16000 Hz)")
-        self.open_parameters_button = QtWidgets.QPushButton("Parameters...")
         self.open_trends_button = QtWidgets.QPushButton("Trend Charts...")
         self.open_tuning_button = QtWidgets.QPushButton("Commissioning...")
         self.open_debug_terminal_button = QtWidgets.QPushButton("Snapshot...")
@@ -887,22 +882,18 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(QtWidgets.QLabel("Port"), 0, 0)
         layout.addWidget(self.port_combo, 0, 1)
         layout.addWidget(self.refresh_ports_button, 0, 2)
-        layout.addWidget(QtWidgets.QLabel("Baud"), 0, 3)
-        layout.addWidget(self.baud_combo, 0, 4)
-        layout.addWidget(self.connect_button, 0, 5)
-        layout.addWidget(self.disconnect_button, 0, 6)
-        layout.addWidget(QtWidgets.QLabel("Poll Rate"), 0, 7)
-        layout.addWidget(self.monitor_rate_combo, 0, 8)
-        layout.addWidget(QtWidgets.QLabel("Timing"), 0, 9)
-        layout.addWidget(self.timing_mode_state_label, 0, 10, 1, 2)
-        layout.addWidget(self.auto_poll_checkbox, 1, 0, 1, 2)
-        layout.addWidget(self.device_hint_label, 1, 2, 1, 3)
-        layout.addWidget(self.open_parameters_button, 1, 7)
-        layout.addWidget(self.open_trends_button, 1, 8)
-        layout.addWidget(self.open_tuning_button, 1, 9)
-        layout.addWidget(self.open_debug_terminal_button, 1, 10)
-        layout.addWidget(self.open_log_button, 1, 11)
-        layout.addWidget(self.connection_state_label, 1, 12)
+        layout.addWidget(self.connect_button, 0, 3)
+        layout.addWidget(self.connection_state_label, 0, 4)
+        layout.addWidget(self.auto_poll_checkbox, 0, 5)
+        layout.addWidget(QtWidgets.QLabel("Rate"), 0, 6)
+        layout.addWidget(self.monitor_rate_combo, 0, 7)
+        layout.addWidget(QtWidgets.QLabel("Timing"), 0, 8)
+        layout.addWidget(self.timing_mode_state_label, 0, 9, 1, 2)
+        layout.addWidget(self.device_hint_label, 1, 0, 1, 5)
+        layout.addWidget(self.open_trends_button, 1, 6)
+        layout.addWidget(self.open_tuning_button, 1, 7)
+        layout.addWidget(self.open_debug_terminal_button, 1, 8)
+        layout.addWidget(self.open_log_button, 1, 9)
         return box
 
     def _build_monitor_group(self) -> QtWidgets.QGroupBox:
@@ -921,6 +912,9 @@ class MainWindow(QtWidgets.QMainWindow):
             ("calibration_status", "Cal Status"),
             ("adc_offset_ia", "ADC Offset Ia"),
             ("adc_offset_ib", "ADC Offset Ib"),
+            ("alignment_status", "Align Status"),
+            ("alignment_offset", "Enc Offset"),
+            ("alignment_save", "Align Save"),
         ]
         motion_fields = [
             ("cmd_speed", "Cmd Speed"),
@@ -981,6 +975,12 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(trend_note)
         layout.addWidget(open_trends_inline_button, 0, QtCore.Qt.AlignmentFlag.AlignRight)
         return box
+
+    def _build_monitor_tabs(self) -> QtWidgets.QTabWidget:
+        tabs = QtWidgets.QTabWidget()
+        tabs.addTab(self._build_monitor_group(), "Driver Monitor")
+        tabs.addTab(self._build_parameter_panel(), "Parameters")
+        return tabs
 
     def _build_trend_window(self) -> QtWidgets.QDialog:
         dialog = QtWidgets.QDialog(self)
@@ -1046,7 +1046,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         layout = QtWidgets.QVBoxLayout(dialog)
         tabs = QtWidgets.QTabWidget(dialog)
-        tabs.addTab(self._build_current_tuning_tab(), "Encoder Alignment")
         tabs.addTab(self._build_id_tuning_tab(), "Id Tuning")
         tabs.addTab(self._build_autotune_tab(), "Motor Auto-Tune")
         tabs.addTab(self._build_trace_scope_tab(), "Trace Scope")
@@ -1146,7 +1145,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_window_label = QtWidgets.QLabel("")
         self.ctuning_status_label = QtWidgets.QLabel("Ready")
         self.ctuning_hint_label = QtWidgets.QLabel(
-            "Flow: run Encoder Alignment first, lock the rotor mechanically, then use a small Id square-wave to tune the d-axis PI. During this test theta is forced to 0 and q-axis is isolated. After the trace is acceptable, copy the same gains into both Id/Iq current PI loops for FOC with a user-defined scale."
+            "Flow: confirm Encoder Alignment is done in Driver Monitor, lock the rotor mechanically, then use a small Id square-wave to tune the d-axis PI. During this test theta is forced to 0 and q-axis is isolated. After the trace is acceptable, copy the same gains into both Id/Iq current PI loops for FOC with a user-defined scale."
         )
         self.ctuning_hint_label.setWordWrap(True)
 
@@ -1438,7 +1437,7 @@ class MainWindow(QtWidgets.QMainWindow):
         button_grid.addWidget(self.refresh_monitor_button, 1, 0, 1, 2)
         drive_layout.addLayout(button_grid)
         drive_hint = QtWidgets.QLabel(
-            "Servo ON only performs the safe start sequence: current-sensor offset calibration, zero-current references, and PWM enable with no motion command. It does not auto-run encoder alignment and it does not start speed or position motion. Run Encoder Alignment first when needed, then use the FOC Control tab to start closed-loop motion."
+            "Servo ON only performs the safe arm sequence with no motion command. Watch Driver Monitor for current calibration and encoder alignment status, then use the FOC Control tab to start closed-loop motion when the drive is ready."
         )
         drive_hint.setWordWrap(True)
         drive_layout.addWidget(drive_hint)
@@ -1591,7 +1590,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_mode_description_label = QtWidgets.QLabel()
         self.foc_mode_description_label.setWordWrap(True)
         self.foc_servo_note_label = QtWidgets.QLabel(
-            "Servo ON only runs the safe arm sequence: current-sensor offset calibration, zero-current references, and PWM enable without any motion target. Encoder alignment is now an explicit commissioning step. Start FOC sends the selected mode, target, gains, and ramp limits to the firmware; runtime FOC is locked to the validated +90 electrical frame."
+            "Servo ON only runs the safe arm sequence: current-sensor offset calibration, zero-current references, and PWM enable without any motion target. Watch Driver Monitor for encoder alignment status, then Start FOC sends the selected mode, target, gains, and ramp limits to the firmware; runtime FOC is locked to the validated +90 electrical frame."
         )
         self.foc_servo_note_label.setWordWrap(True)
         note_layout.addWidget(self.foc_mode_description_label)
@@ -1713,26 +1712,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self._populate_default_parameter_tables()
         return tabs
 
-    def _build_parameter_window(self) -> QtWidgets.QDialog:
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Parameters")
-        dialog.resize(920, 700)
-        self._configure_auxiliary_window(dialog)
-
-        layout = QtWidgets.QVBoxLayout(dialog)
+    def _build_parameter_panel(self) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
         toolbar = QtWidgets.QHBoxLayout()
         self.read_driver_button = QtWidgets.QPushButton("Read Driver Params")
         self.read_motor_button = QtWidgets.QPushButton("Read Motor Params")
         self.write_driver_button = QtWidgets.QPushButton("Write Driver Params")
         self.write_motor_button = QtWidgets.QPushButton("Write Motor Params")
+        self.parameter_status_label = QtWidgets.QLabel("Parameter tools are ready.")
         toolbar.addWidget(self.read_driver_button)
         toolbar.addWidget(self.read_motor_button)
         toolbar.addWidget(self.write_driver_button)
         toolbar.addWidget(self.write_motor_button)
         toolbar.addStretch(1)
+        toolbar.addWidget(self.parameter_status_label)
+        self.parameter_status_label.setStyleSheet("color: #bbbbbb; font-weight: 600;")
         layout.addLayout(toolbar)
         layout.addWidget(self._build_parameter_tabs())
-        return dialog
+        return widget
 
     def _create_parameter_table(self, names: list[str]) -> QtWidgets.QTableWidget:
         table = QtWidgets.QTableWidget(len(names), 3)
@@ -1822,11 +1820,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _connect_signals(self) -> None:
         self.refresh_ports_button.clicked.connect(self._refresh_ports)
-        self.connect_button.clicked.connect(self._connect_selected_port)
-        self.disconnect_button.clicked.connect(self._disconnect_port)
-        self.open_parameters_button.clicked.connect(
-            lambda: self._show_auxiliary_window(self._parameter_window)
-        )
+        self.connect_button.clicked.connect(self._toggle_connection)
         self.open_trends_button.clicked.connect(
             lambda: self._show_auxiliary_window(self._trend_window)
         )
@@ -1844,6 +1838,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.monitor_rate_combo.currentIndexChanged.connect(self._update_monitor_poll_interval)
         self.refresh_monitor_button.clicked.connect(self._request_monitor_once)
         self.foc_mode_combo.currentIndexChanged.connect(self._update_foc_mode_ui)
+        self.foc_target_speed_spin.valueChanged.connect(self._on_foc_target_speed_value_changed)
         self.start_foc_direction_test_button.clicked.connect(self._start_foc_direction_test)
         self.start_foc_button.clicked.connect(self._start_foc_control)
         self.stop_foc_button.clicked.connect(self._stop_foc_control)
@@ -1865,10 +1860,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.alarm_clear_history_button.clicked.connect(self._clear_alarm_history)
         self.save_flash_button.clicked.connect(
             lambda: self._enqueue_command(Command.CMD_WRITE_TO_FLASH, b"", "Save Parameters to Flash")
-        )
-        self.run_alignment_button.clicked.connect(self._start_encoder_alignment_only)
-        self.save_alignment_flash_button.clicked.connect(
-            lambda: self._enqueue_command(Command.CMD_WRITE_TO_FLASH, b"", "Save Encoder Offset to Flash")
         )
         self.autotune_start_button.clicked.connect(self._start_motor_autotune)
         self.autotune_stop_button.clicked.connect(self._stop_motor_autotune)
@@ -2048,9 +2039,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_speed_ki_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_SPEED_I_GAIN, 5.0)
         )
-        self._foc_position_speed_limit_rpm = self._table_float_value(
-            self.driver_table, DRIVER_PARAM_MAXIMUM_SPEED, DEFAULT_MOTOR_RATED_SPEED_RPM
-        )
         self.foc_accel_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_ACCEL_TIME_MS, 250.0)
         )
@@ -2058,7 +2046,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._table_float_value(self.driver_table, DRIVER_PARAM_DECEL_TIME_MS, 250.0)
         )
         if self._foc_speed_target_rpm <= 1.0:
-            self._foc_speed_target_rpm = min(self._foc_position_speed_limit_rpm, 300.0)
+            self._foc_speed_target_rpm = 300.0
         self._update_foc_mode_ui()
 
     def _sync_foc_controls_to_driver_table(self) -> None:
@@ -2094,23 +2082,11 @@ class MainWindow(QtWidgets.QMainWindow):
             DRIVER_PARAM_DECEL_TIME_MS,
             float(self.foc_decel_spin.value()),
         )
-        self._set_table_float_value(
-            self.driver_table,
-            DRIVER_PARAM_MAXIMUM_SPEED,
-            float(self._foc_position_speed_limit_rpm),
-        )
 
     def _update_foc_mode_ui(self) -> None:
-        previous_mode = getattr(self, "_last_foc_mode_ui", SPEED_CONTROL_MODE)
-        current_value = float(self.foc_target_speed_spin.value())
-        if previous_mode == POSITION_CONTROL_MODE:
-            self._foc_position_speed_limit_rpm = abs(current_value)
-        else:
-            self._foc_speed_target_rpm = current_value
-
         position_mode = self._current_foc_mode() == POSITION_CONTROL_MODE
         target_value = (
-            self._foc_position_speed_limit_rpm if position_mode else self._foc_speed_target_rpm
+            abs(self._foc_position_speed_limit_rpm) if position_mode else self._foc_speed_target_rpm
         )
         self.foc_target_speed_spin.blockSignals(True)
         self.foc_target_speed_spin.setValue(target_value)
@@ -2139,6 +2115,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
         self._refresh_foc_control_panel(self._latest_monitor_snapshot)
 
+    def _on_foc_target_speed_value_changed(self, value: float) -> None:
+        if self._current_foc_mode() == POSITION_CONTROL_MODE:
+            self._foc_position_speed_limit_rpm = abs(float(value))
+        else:
+            self._foc_speed_target_rpm = float(value)
+
     def _refresh_foc_control_panel(self, snapshot) -> None:
         if not hasattr(self, "foc_status_value_label"):
             return
@@ -2149,7 +2131,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.foc_status_value_label.setText("Idle")
             self.foc_direction_test_status_label.setText("Not run")
             self.foc_live_summary_label.setText(
-                f"{mode_text} is ready. Servo ON only arms the drive; Start FOC sends the selected setpoints and gains after you complete encoder alignment when required.{debug_suffix}"
+                f"{mode_text} is ready. Servo ON runs the arm sequence. Watch Driver Monitor for Cal Status and Align Status, then press Start FOC when the drive is ready.{debug_suffix}"
             )
             return
 
@@ -2220,11 +2202,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.foc_status_value_label.setText(f"{servo_text} | Idle")
             if direction_status == FOC_DIRECTION_TEST_DONE_OK:
                 self.foc_live_summary_label.setText(
-                    "Direction test passed: positive FOC Iq now matches positive open-loop rotation. You can start FOC after encoder alignment stays Done."
+                    "Direction test passed: positive FOC Iq now matches positive open-loop rotation. Keep an eye on Driver Monitor and start FOC once Align Status stays Done."
                 )
             elif direction_status == FOC_DIRECTION_TEST_DONE_FLIPPED:
                 self.foc_live_summary_label.setText(
-                    "Direction test found a sign mismatch and flipped the encoder direction chain to match open-loop positive rotation. Run Encoder Alignment again before Start FOC."
+                    "Direction test found a sign mismatch and flipped the encoder direction chain to match open-loop positive rotation. Toggle Servo ON again and wait for Driver Monitor Align Status = Done before Start FOC."
                 )
             elif direction_status == FOC_DIRECTION_TEST_INCONCLUSIVE:
                 self.foc_live_summary_label.setText(
@@ -2236,7 +2218,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
             else:
                 self.foc_live_summary_label.setText(
-                    f"{mode_text} is configured. Servo ON keeps the drive armed at zero references only. Run Encoder Alignment when required, then press Start FOC to run the selected setpoint.{debug_suffix}"
+                    f"{mode_text} is configured. Servo ON keeps the drive armed at zero references only. Watch Driver Monitor for Cal Status and Align Status, then press Start FOC to run the selected setpoint.{debug_suffix}"
                 )
             return
 
@@ -2253,7 +2235,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if mode == POSITION_CONTROL_MODE:
             self.foc_status_value_label.setText("FOC Position Running")
             self.foc_live_summary_label.setText(
-                f"Target {self.foc_target_position_spin.value():.1f} cnt | "
+                f"Target {snapshot.cmd_position:.1f} cnt | "
                 f"Act {snapshot.act_position:.1f} cnt | "
                 f"Error {snapshot.position_error:.1f} cnt | "
                 f"Cmd Speed {snapshot.cmd_speed:.1f} rpm"
@@ -2275,11 +2257,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
                 and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
             ):
-                self._show_auxiliary_window(self._tuning_window)
                 QtWidgets.QMessageBox.warning(
                     self,
                     "Direction Test Blocked",
-                    "This incremental encoder profile requires Encoder Alignment after every power-up. Run Encoder Alignment until Status = Done, then run the FOC direction test.",
+                    "This incremental encoder profile aligns during Servo ON after every power-up. Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then run the FOC direction test.",
                 )
                 return
 
@@ -2306,11 +2287,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
                 and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
             ):
-                self._show_auxiliary_window(self._tuning_window)
                 QtWidgets.QMessageBox.warning(
                     self,
                     "FOC Start Blocked",
-                    "This incremental encoder profile requires Encoder Alignment after every power-up. Run Encoder Alignment until Status = Done, then start FOC.",
+                    "This incremental encoder profile aligns during Servo ON after every power-up. Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then start FOC.",
                 )
                 return
 
@@ -2446,41 +2426,46 @@ class MainWindow(QtWidgets.QMainWindow):
         return f"Unknown ({code})"
 
     def _refresh_alignment_panel(self, snapshot) -> None:
-        if not hasattr(self, "alignment_policy_value_label"):
-            return
         if snapshot is None:
-            self.alignment_policy_value_label.setText("Waiting for monitor data")
-            self.alignment_status_value_label.setText("Idle")
-            self.alignment_active_offset_value_label.setText("0 counts")
-            self.alignment_captured_offset_value_label.setText("0 counts")
-            self.alignment_save_state_value_label.setText("No pending save")
-            self.save_alignment_flash_button.setEnabled(False)
-            self.run_alignment_button.setEnabled(True)
+            if hasattr(self, "alignment_policy_value_label"):
+                self.alignment_policy_value_label.setText("Waiting for monitor data")
+                self.alignment_status_value_label.setText("Idle")
+                self.alignment_active_offset_value_label.setText("0 counts")
+                self.alignment_captured_offset_value_label.setText("0 counts")
+                self.alignment_save_state_value_label.setText("No pending save")
+                self.save_alignment_flash_button.setEnabled(False)
+                self.run_alignment_button.setEnabled(True)
+            self._set_monitor_value("alignment_status", "Idle")
+            self._set_monitor_value("alignment_offset", "0 counts")
+            self._set_monitor_value("alignment_save", "No pending save")
             return
 
         policy = int(snapshot.debug_alignment_policy)
         status = int(snapshot.debug_alignment_status)
         needs_flash_save = int(snapshot.debug_alignment_needs_flash_save)
-        self.alignment_policy_value_label.setText(self._alignment_policy_text(policy))
-        self.alignment_status_value_label.setText(self._alignment_status_text(status))
-        self.alignment_active_offset_value_label.setText(f"{snapshot.debug_encoder_offset_counts:d} counts")
-        self.alignment_captured_offset_value_label.setText(
-            f"{snapshot.debug_alignment_captured_offset_counts:d} counts"
-        )
-        self.alignment_save_state_value_label.setText(
-            self._alignment_save_state_text(policy, status, needs_flash_save)
-        )
-        self.run_alignment_button.setEnabled(status != ENCODER_ALIGNMENT_STATUS_RUNNING)
-        self.save_alignment_flash_button.setEnabled(
-            (status != ENCODER_ALIGNMENT_STATUS_RUNNING)
-            and (
-                (needs_flash_save != 0)
-                or (
-                    (policy == ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE)
-                    and (status == ENCODER_ALIGNMENT_STATUS_DONE)
+        save_state_text = self._alignment_save_state_text(policy, status, needs_flash_save)
+        if hasattr(self, "alignment_policy_value_label"):
+            self.alignment_policy_value_label.setText(self._alignment_policy_text(policy))
+            self.alignment_status_value_label.setText(self._alignment_status_text(status))
+            self.alignment_active_offset_value_label.setText(f"{snapshot.debug_encoder_offset_counts:d} counts")
+            self.alignment_captured_offset_value_label.setText(
+                f"{snapshot.debug_alignment_captured_offset_counts:d} counts"
+            )
+            self.alignment_save_state_value_label.setText(save_state_text)
+            self.run_alignment_button.setEnabled(status != ENCODER_ALIGNMENT_STATUS_RUNNING)
+            self.save_alignment_flash_button.setEnabled(
+                (status != ENCODER_ALIGNMENT_STATUS_RUNNING)
+                and (
+                    (needs_flash_save != 0)
+                    or (
+                        (policy == ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE)
+                        and (status == ENCODER_ALIGNMENT_STATUS_DONE)
+                    )
                 )
             )
-        )
+        self._set_monitor_value("alignment_status", self._alignment_status_text(status))
+        self._set_monitor_value("alignment_offset", f"{snapshot.debug_encoder_offset_counts:d} counts")
+        self._set_monitor_value("alignment_save", save_state_text)
 
     def _apply_trace_preset(self, preset_name: str) -> None:
         channels = TRACE_PRESETS.get(preset_name)
@@ -2583,7 +2568,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Id Tuning Flow",
-                "Run Encoder Alignment first and wait for Status = Done before starting Id tuning.",
+                "Servo ON first, then wait until Driver Monitor shows Align Status = Done before starting Id tuning.",
             )
             return
 
@@ -2910,8 +2895,11 @@ class MainWindow(QtWidgets.QMainWindow):
         port_name = self.port_combo.currentData()
         if not port_name:
             self._append_log("No serial port selected")
+            self.connect_button.blockSignals(True)
+            self.connect_button.setChecked(False)
+            self.connect_button.blockSignals(False)
             return
-        baudrate = int(self.baud_combo.currentText())
+        baudrate = 115200
         self._pending_frames.clear()
         self._awaiting_ack = False
         self._last_sent = None
@@ -2921,16 +2909,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def _disconnect_port(self) -> None:
         self._worker.request_close()
 
+    def _toggle_connection(self) -> None:
+        if self._connected:
+            self._disconnect_port()
+        else:
+            self._connect_selected_port()
+
     def _handle_connection_status(self, connected: bool, port_name: str) -> None:
         self._connected = connected
         self._current_port = port_name
-        self.connect_button.setEnabled(not connected)
-        self.disconnect_button.setEnabled(connected)
         self.port_combo.setEnabled(not connected)
-        self.baud_combo.setEnabled(not connected)
+        self.refresh_ports_button.setEnabled(not connected)
+        self.connect_button.blockSignals(True)
+        self.connect_button.setChecked(connected)
+        self.connect_button.blockSignals(False)
 
         if connected:
             self.connection_state_label.setText(f"Connected: {port_name}")
+            self.connection_state_label.setStyleSheet("color: #2e7d32; font-weight: 600;")
+            self.connect_button.setText("Disconnect")
+            self.connect_button.setStyleSheet(
+                "background-color: #c62828; color: white; font-weight: 600;"
+            )
             self.statusBar().showMessage(f"Connected to {port_name}")
             self._clear_trend_history()
             self._clear_current_tuning_capture()
@@ -2938,6 +2938,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._try_send_next()
         else:
             self.connection_state_label.setText("Disconnected")
+            self.connection_state_label.setStyleSheet("color: #c62828; font-weight: 600;")
+            self.connect_button.setText("Connect")
+            self.connect_button.setStyleSheet(
+                "background-color: #2e7d32; color: white; font-weight: 600;"
+            )
             self.statusBar().showMessage("Disconnected")
             self._pending_frames.clear()
             self._awaiting_ack = False
@@ -3018,6 +3023,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"ACK timeout for {self._last_sent.description} "
                 f"(0x{self._last_sent.command:02X})"
             )
+            if self._last_sent.command == Command.CMD_READ_DRIVER:
+                self._set_parameter_status("Driver parameter read timed out.", "error")
+            elif self._last_sent.command == Command.CMD_READ_MOTOR:
+                self._set_parameter_status("Motor parameter read timed out.", "error")
+            elif self._last_sent.command == Command.CMD_WRITE_DRIVER:
+                self._set_parameter_status("Driver parameter write timed out.", "error")
+            elif self._last_sent.command == Command.CMD_WRITE_MOTOR:
+                self._set_parameter_status("Motor parameter write timed out.", "error")
         self._awaiting_ack = False
         self._last_sent = None
         self._try_send_next()
@@ -3037,8 +3050,21 @@ class MainWindow(QtWidgets.QMainWindow):
     def _request_monitor_once(self) -> None:
         self._enqueue_command(Command.CMD_UPDATE_MONITOR, b"", "Monitor Poll")
 
+    def _set_parameter_status(self, text: str, severity: str = "info") -> None:
+        if not hasattr(self, "parameter_status_label"):
+            return
+        palette = {
+            "info": "#bbbbbb",
+            "ok": "#2e7d32",
+            "warn": "#b26a00",
+            "error": "#c62828",
+        }
+        color = palette.get(severity, palette["info"])
+        self.parameter_status_label.setText(text)
+        self.parameter_status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+
     def _read_driver_parameters(self) -> None:
-        self._show_auxiliary_window(self._parameter_window)
+        self._set_parameter_status("Reading driver parameters...", "info")
         self._enqueue_command(
             Command.CMD_READ_DRIVER,
             bytes([len(DRIVER_PARAMETER_NAMES)]),
@@ -3046,7 +3072,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _read_motor_parameters(self) -> None:
-        self._show_auxiliary_window(self._parameter_window)
+        self._set_parameter_status("Reading motor parameters...", "info")
         self._enqueue_command(
             Command.CMD_READ_MOTOR,
             bytes([len(MOTOR_PARAMETER_NAMES)]),
@@ -3060,7 +3086,19 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Invalid Driver Parameters", str(exc))
             return
 
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm Driver Parameter Write",
+            "Write the current Driver Parameters table to the drive?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self._set_parameter_status("Driver parameter write cancelled.", "warn")
+            return
+
         self._load_foc_controls_from_driver_table()
+        self._set_parameter_status("Writing driver parameters...", "info")
 
         for payload in build_parameter_write_chunks(values, chunk_size=16):
             self._enqueue_command(
@@ -3076,7 +3114,19 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Invalid Motor Parameters", str(exc))
             return
 
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm Motor Parameter Write",
+            "Write the current Motor Parameters table to the drive?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self._set_parameter_status("Motor parameter write cancelled.", "warn")
+            return
+
         chunks = build_parameter_write_chunks(values, chunk_size=20)
+        self._set_parameter_status("Writing motor parameters...", "info")
         for index, payload in enumerate(chunks, start=1):
             self._enqueue_command(
                 Command.CMD_WRITE_MOTOR,
@@ -3125,12 +3175,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _handle_frame(self, frame: ParsedFrame) -> None:
         if frame.code == ACK_NOERROR:
+            sent_command = self._last_sent.command if self._last_sent is not None else None
             echoed_command = frame.payload[0] if frame.payload else None
             if not (self._last_sent and self._last_sent.quiet):
                 if echoed_command is None:
                     self._append_log("ACK received")
                 else:
                     self._append_log(f"ACK received for command 0x{echoed_command:02X}")
+            if sent_command == Command.CMD_WRITE_DRIVER:
+                self._set_parameter_status("Driver parameter write acknowledged.", "ok")
+            elif sent_command == Command.CMD_WRITE_MOTOR:
+                self._set_parameter_status("Motor parameter write chunk acknowledged.", "ok")
             self._ack_timer.stop()
             self._awaiting_ack = False
             self._last_sent = None
@@ -3138,7 +3193,20 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         if frame.code == ACK_ERROR:
+            sent_command = self._last_sent.command if self._last_sent is not None else None
             self._append_log("Driver returned ACK_ERROR")
+            if sent_command == Command.CMD_READ_DRIVER:
+                self._set_parameter_status("Driver parameter read failed.", "error")
+                QtWidgets.QMessageBox.warning(self, "Read Driver Parameters", "Driver parameter read failed.")
+            elif sent_command == Command.CMD_READ_MOTOR:
+                self._set_parameter_status("Motor parameter read failed.", "error")
+                QtWidgets.QMessageBox.warning(self, "Read Motor Parameters", "Motor parameter read failed.")
+            elif sent_command == Command.CMD_WRITE_DRIVER:
+                self._set_parameter_status("Driver parameter write failed.", "error")
+                QtWidgets.QMessageBox.warning(self, "Write Driver Parameters", "Driver parameter write failed.")
+            elif sent_command == Command.CMD_WRITE_MOTOR:
+                self._set_parameter_status("Motor parameter write failed.", "error")
+                QtWidgets.QMessageBox.warning(self, "Write Motor Parameters", "Motor parameter write failed.")
             self._ack_timer.stop()
             self._awaiting_ack = False
             self._last_sent = None
@@ -3208,12 +3276,22 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_parameter_table(self.driver_table, entries)
             self._load_foc_controls_from_driver_table()
             self._append_log(f"Driver parameter chunk received ({len(entries)} items)")
+            self._set_parameter_status(
+                f"Driver parameters loaded successfully ({len(entries)} items).",
+                "ok",
+            )
+            self.statusBar().showMessage("Driver parameters loaded", 3000)
             return
 
         if subcommand == UpdateCode.CMD_READ_MOTOR_DATA:
             entries = parse_parameter_chunk(body)
             self._update_parameter_table(self.motor_table, entries)
             self._append_log(f"Motor parameter chunk received ({len(entries)} items)")
+            self._set_parameter_status(
+                f"Motor parameters loaded successfully ({len(entries)} items).",
+                "ok",
+            )
+            self.statusBar().showMessage("Motor parameters loaded", 3000)
             return
 
         self._append_log(f"SYN packet received: subcommand 0x{subcommand:02X}, {len(body)} bytes")
@@ -3560,6 +3638,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("calibration_status", "Idle")
         self._set_monitor_value("adc_offset_ia", "0x7FFF (default)")
         self._set_monitor_value("adc_offset_ib", "0x7FFF (default)")
+        self._set_monitor_value("alignment_status", "Idle")
+        self._set_monitor_value("alignment_offset", "0 counts")
+        self._set_monitor_value("alignment_save", "No pending save")
         fault_label = self.monitor_labels.get("fault_occurred")
         if fault_label is not None:
             fault_label.setText("OK")
