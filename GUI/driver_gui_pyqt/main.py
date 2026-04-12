@@ -34,9 +34,6 @@ from protocol import (
     FOC_DIRECTION_TEST_INCONCLUSIVE,
     FOC_DIRECTION_TEST_RUNNING,
     ID_SQUARE_ANGLE_TEST_NONE,
-    ID_SQUARE_ANGLE_TEST_MINUS_90,
-    ID_SQUARE_ANGLE_TEST_PLUS_90,
-    ID_SQUARE_ANGLE_TEST_PLUS_180,
     ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
     ID_SQUARE_TUNING_MODE_SQUARE_WAVE,
     MOTOR_AUTOTUNE_CHART_LS,
@@ -1139,7 +1136,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_current_polarity_value_label.setToolTip(
             "Current polarity inversion is a fixed hardware characteristic on this driver."
         )
-        self.ctuning_swap_uv_checkbox = QtWidgets.QCheckBox("Swap U/V")
         self.ctuning_foc_gain_scale_spin = QtWidgets.QDoubleSpinBox()
         self.ctuning_foc_gain_scale_spin.setRange(0.10, 1.50)
         self.ctuning_foc_gain_scale_spin.setDecimals(2)
@@ -1174,7 +1170,6 @@ class MainWindow(QtWidgets.QMainWindow):
         control_layout.addWidget(self.ctuning_theta_mode_value_label, 2, 1)
         control_layout.addWidget(QtWidgets.QLabel("Current Polarity"), 2, 2)
         control_layout.addWidget(self.ctuning_current_polarity_value_label, 2, 3)
-        control_layout.addWidget(self.ctuning_swap_uv_checkbox, 2, 4)
         control_layout.addWidget(QtWidgets.QLabel("FOC Gain Scale"), 3, 0)
         control_layout.addWidget(self.ctuning_foc_gain_scale_spin, 3, 1)
         control_layout.addWidget(self.ctuning_hint_label, 4, 0, 1, 6)
@@ -1531,24 +1526,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_speed_ki_spin.setSingleStep(0.10)
         self.foc_speed_ki_spin.setValue(5.0)
 
-        self.foc_debug_angle_label = QtWidgets.QLabel("FOC Debug")
-        self.foc_debug_angle_combo = QtWidgets.QComboBox()
-        self.foc_debug_angle_combo.addItem("Normal", ID_SQUARE_ANGLE_TEST_NONE)
-        self.foc_debug_angle_combo.addItem("+90e", ID_SQUARE_ANGLE_TEST_PLUS_90)
-        self.foc_debug_angle_combo.addItem("-90e", ID_SQUARE_ANGLE_TEST_MINUS_90)
-        self.foc_debug_angle_combo.addItem("+180e", ID_SQUARE_ANGLE_TEST_PLUS_180)
-        self.foc_angle_trim_spin = QtWidgets.QDoubleSpinBox()
-        self.foc_angle_trim_spin.setRange(-180.0, 180.0)
-        self.foc_angle_trim_spin.setDecimals(1)
-        self.foc_angle_trim_spin.setSingleStep(5.0)
-        self.foc_angle_trim_spin.setSuffix(" deg")
-        self.foc_angle_trim_spin.setValue(0.0)
-        self.foc_angle_trim_spin.setToolTip(
-            "Fine electrical angle trim applied on top of the selected FOC Debug preset."
-        )
-        self.foc_swap_uv_checkbox = QtWidgets.QCheckBox("Swap U/V")
-        self.foc_swap_uv_checkbox.setToolTip(
-            "Use only as a FOC debug override when 0 rpm / 0 speed gain still overcurrents."
+        self.foc_debug_angle_label = QtWidgets.QLabel("FOC Frame")
+        self.foc_debug_angle_value_label = QtWidgets.QLabel("+90e (Fixed)")
+        self.foc_debug_angle_value_label.setStyleSheet("font-weight: 600;")
+        self.foc_debug_angle_value_label.setToolTip(
+            "Commissioning is locked to the validated +90 electrical offset for runtime FOC."
         )
 
         self.foc_accel_spin = QtWidgets.QDoubleSpinBox()
@@ -1590,29 +1572,26 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(QtWidgets.QLabel("Speed Ki"), 2, 2)
         summary_layout.addWidget(self.foc_speed_ki_spin, 2, 3)
         summary_layout.addWidget(self.foc_debug_angle_label, 3, 0)
-        summary_layout.addWidget(self.foc_debug_angle_combo, 3, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Angle Trim"), 3, 2)
-        summary_layout.addWidget(self.foc_angle_trim_spin, 3, 3)
+        summary_layout.addWidget(self.foc_debug_angle_value_label, 3, 1)
         summary_layout.addWidget(QtWidgets.QLabel("Acceleration"), 4, 0)
         summary_layout.addWidget(self.foc_accel_spin, 4, 1)
-        summary_layout.addWidget(self.foc_swap_uv_checkbox, 4, 2, 1, 2)
-        summary_layout.addWidget(QtWidgets.QLabel("Deceleration"), 5, 0)
-        summary_layout.addWidget(self.foc_decel_spin, 5, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Status"), 5, 2)
-        summary_layout.addWidget(self.foc_status_value_label, 5, 3)
-        summary_layout.addWidget(QtWidgets.QLabel("Dir Test"), 6, 0)
-        summary_layout.addWidget(self.foc_direction_test_status_label, 6, 1)
-        summary_layout.addWidget(self.foc_live_summary_label, 7, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_direction_test_button, 8, 0, 1, 2)
-        summary_layout.addWidget(self.start_foc_button, 8, 2, 1, 1)
-        summary_layout.addWidget(self.stop_foc_button, 8, 3, 1, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Deceleration"), 4, 2)
+        summary_layout.addWidget(self.foc_decel_spin, 4, 3)
+        summary_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
+        summary_layout.addWidget(self.foc_status_value_label, 5, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Dir Test"), 5, 2)
+        summary_layout.addWidget(self.foc_direction_test_status_label, 5, 3)
+        summary_layout.addWidget(self.foc_live_summary_label, 6, 0, 1, 4)
+        summary_layout.addWidget(self.start_foc_direction_test_button, 7, 0, 1, 2)
+        summary_layout.addWidget(self.start_foc_button, 7, 2, 1, 1)
+        summary_layout.addWidget(self.stop_foc_button, 7, 3, 1, 1)
 
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
         self.foc_mode_description_label = QtWidgets.QLabel()
         self.foc_mode_description_label.setWordWrap(True)
         self.foc_servo_note_label = QtWidgets.QLabel(
-            "Servo ON only runs the safe arm sequence: current-sensor offset calibration, zero-current references, and PWM enable without any motion target. Encoder alignment is now an explicit commissioning step. Start FOC sends the selected mode, target, gains, and optional debug overrides to the firmware; if the drive is idle, firmware will first run the safe servo-start sequence and then enter closed-loop control."
+            "Servo ON only runs the safe arm sequence: current-sensor offset calibration, zero-current references, and PWM enable without any motion target. Encoder alignment is now an explicit commissioning step. Start FOC sends the selected mode, target, gains, and ramp limits to the firmware; runtime FOC is locked to the validated +90 electrical frame."
         )
         self.foc_servo_note_label.setWordWrap(True)
         note_layout.addWidget(self.foc_mode_description_label)
@@ -2165,22 +2144,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         preview_mode = self._current_foc_mode()
         mode_text = "Position Mode" if preview_mode == POSITION_CONTROL_MODE else "Speed Mode"
-        debug_parts: list[str] = []
-        foc_debug_angle = int(self.foc_debug_angle_combo.currentData() or ID_SQUARE_ANGLE_TEST_NONE)
-        foc_angle_trim_deg = float(self.foc_angle_trim_spin.value())
-        if foc_debug_angle == ID_SQUARE_ANGLE_TEST_PLUS_90:
-            debug_parts.append("+90e")
-        elif foc_debug_angle == ID_SQUARE_ANGLE_TEST_MINUS_90:
-            debug_parts.append("-90e")
-        elif foc_debug_angle == ID_SQUARE_ANGLE_TEST_PLUS_180:
-            debug_parts.append("+180e")
-        if abs(foc_angle_trim_deg) > 0.05:
-            debug_parts.append(f"trim {foc_angle_trim_deg:+.1f} deg")
-        if self.foc_swap_uv_checkbox.isChecked():
-            debug_parts.append("Swap U/V")
-        debug_suffix = ""
-        if debug_parts:
-            debug_suffix = f" Debug: {', '.join(debug_parts)}."
+        debug_suffix = " Electrical frame: +90e fixed."
         if snapshot is None:
             self.foc_status_value_label.setText("Idle")
             self.foc_direction_test_status_label.setText("Not run")
@@ -2334,9 +2298,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _start_foc_control(self) -> None:
         mode = self._current_foc_mode()
-        foc_debug_angle = int(self.foc_debug_angle_combo.currentData() or ID_SQUARE_ANGLE_TEST_NONE)
-        foc_swap_uv = 1 if self.foc_swap_uv_checkbox.isChecked() else 0
-        foc_angle_trim_deg = float(self.foc_angle_trim_spin.value())
         last_monitor = self._latest_monitor_snapshot
         if last_monitor is not None:
             alignment_policy = int(last_monitor.debug_alignment_policy)
@@ -2362,7 +2323,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if mode == POSITION_CONTROL_MODE:
             payload = struct.pack(
-                "<7fBBf",
+                "<7f",
                 float(self.foc_target_position_spin.value()),
                 float(self._foc_position_speed_limit_rpm),
                 float(self.foc_position_kp_spin.value()),
@@ -2370,37 +2331,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
-                foc_debug_angle,
-                foc_swap_uv,
-                foc_angle_trim_deg,
             )
             description = (
                 f"Start FOC Position Mode "
                 f"(target={self.foc_target_position_spin.value():.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
-                f"debug={self.foc_debug_angle_combo.currentText()}, "
-                f"trim={foc_angle_trim_deg:+.1f} deg, "
-                f"swap_uv={'on' if foc_swap_uv else 'off'})"
+                "frame=+90e fixed)"
             )
             command = Command.CMD_START_POSITIONCONTROL
         else:
             payload = struct.pack(
-                "<5fBBf",
+                "<5f",
                 float(self._foc_speed_target_rpm),
                 float(self.foc_speed_kp_spin.value()),
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
-                foc_debug_angle,
-                foc_swap_uv,
-                foc_angle_trim_deg,
             )
             description = (
                 f"Start FOC Speed Mode "
                 f"(target={self._foc_speed_target_rpm:.1f} rpm, "
-                f"debug={self.foc_debug_angle_combo.currentText()}, "
-                f"trim={foc_angle_trim_deg:+.1f} deg, "
-                f"swap_uv={'on' if foc_swap_uv else 'off'})"
+                "frame=+90e fixed)"
             )
             command = Command.CMD_START_SPEEDCONTROL
 
@@ -2427,9 +2378,6 @@ class MainWindow(QtWidgets.QMainWindow):
         selected_mode = ID_SQUARE_TUNING_MODE_SQUARE_WAVE if tuning_mode is None else int(tuning_mode)
         electrical_angle_test = ID_SQUARE_ANGLE_TEST_NONE
         invert_current = 0
-        swap_uv = 0
-        if selected_mode == ID_SQUARE_TUNING_MODE_SQUARE_WAVE:
-            swap_uv = 1 if self.ctuning_swap_uv_checkbox.isChecked() else 0
         return struct.pack(
             "<4fBBBB",
             float(self.ctuning_ref1_spin.value()),
@@ -2438,7 +2386,7 @@ class MainWindow(QtWidgets.QMainWindow):
             float(self.ctuning_ki_spin.value()),
             electrical_angle_test,
             invert_current,
-            swap_uv,
+            0,
             selected_mode,
         )
 
