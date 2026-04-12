@@ -14,6 +14,11 @@ from protocol import (
     ACK_NOERROR,
     AutoTuneChunk,
     CONTROL_TIMING_MODE_16KHZ,
+    CURRENT_CALIB_STATUS_DONE,
+    CURRENT_CALIB_STATUS_IDLE,
+    CURRENT_CALIB_STATUS_OFFSET_INVALID,
+    CURRENT_CALIB_STATUS_RUNNING,
+    CURRENT_CALIB_STATUS_TIMEOUT,
     ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE,
     ENCODER_ALIGNMENT_POLICY_POWER_ON,
     ENCODER_ALIGNMENT_STATUS_DONE,
@@ -22,7 +27,15 @@ from protocol import (
     ENCODER_ALIGNMENT_STATUS_REQUESTED,
     ENCODER_ALIGNMENT_STATUS_RUNNING,
     CURRENT_LOOP_FREQUENCY_HZ,
+    FOC_DIRECTION_TEST_DONE_FLIPPED,
+    FOC_DIRECTION_TEST_DONE_OK,
+    FOC_DIRECTION_TEST_FAULT,
+    FOC_DIRECTION_TEST_IDLE,
+    FOC_DIRECTION_TEST_INCONCLUSIVE,
+    FOC_DIRECTION_TEST_RUNNING,
     ID_SQUARE_ANGLE_TEST_NONE,
+    ID_SQUARE_ANGLE_TEST_MINUS_90,
+    ID_SQUARE_ANGLE_TEST_PLUS_90,
     ID_SQUARE_ANGLE_TEST_PLUS_180,
     ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
     ID_SQUARE_TUNING_MODE_SQUARE_WAVE,
@@ -86,7 +99,9 @@ TREND_SERIES_META = {
     "phase_u": {"label": "Iu", "unit": "A", "color": "#1f77b4"},
     "phase_v": {"label": "Iv", "unit": "A", "color": "#2ca02c"},
     "phase_w": {"label": "Iw", "unit": "A", "color": "#d62728"},
+    "id_ref": {"label": "Id Ref", "unit": "A", "color": "#8dd3c7"},
     "id_current": {"label": "Id", "unit": "A", "color": "#9467bd"},
+    "iq_ref": {"label": "Iq Ref", "unit": "A", "color": "#fdb462"},
     "iq_current": {"label": "Iq", "unit": "A", "color": "#ff7f0e"},
     "vd": {"label": "Vd", "unit": "V", "color": "#8c564b"},
     "vq": {"label": "Vq", "unit": "V", "color": "#e377c2"},
@@ -98,7 +113,9 @@ TREND_EMA_ALPHA = {
     "phase_u": None,
     "phase_v": None,
     "phase_w": None,
+    "id_ref": None,
     "id_current": 0.18,
+    "iq_ref": None,
     "iq_current": 0.18,
     "vd": 0.22,
     "vq": 0.22,
@@ -904,6 +921,9 @@ class MainWindow(QtWidgets.QMainWindow):
             ("fault_occurred", "Fault"),
             ("vdc", "Vdc"),
             ("temperature", "Temp"),
+            ("calibration_status", "Cal Status"),
+            ("adc_offset_ia", "ADC Offset Ia"),
+            ("adc_offset_ib", "ADC Offset Ib"),
         ]
         motion_fields = [
             ("cmd_speed", "Cmd Speed"),
@@ -982,7 +1002,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dq_current_panel = ScadaTrendPanel(
             "D/Q Currents",
             self._trend_buffer,
-            ["id_current", "iq_current"],
+            ["id_ref", "id_current", "iq_ref", "iq_current"],
         )
         self.vdq_voltage_panel = ScadaTrendPanel(
             "D/Q Voltages",
@@ -1514,7 +1534,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_debug_angle_label = QtWidgets.QLabel("FOC Debug")
         self.foc_debug_angle_combo = QtWidgets.QComboBox()
         self.foc_debug_angle_combo.addItem("Normal", ID_SQUARE_ANGLE_TEST_NONE)
+        self.foc_debug_angle_combo.addItem("+90e", ID_SQUARE_ANGLE_TEST_PLUS_90)
+        self.foc_debug_angle_combo.addItem("-90e", ID_SQUARE_ANGLE_TEST_MINUS_90)
         self.foc_debug_angle_combo.addItem("+180e", ID_SQUARE_ANGLE_TEST_PLUS_180)
+        self.foc_angle_trim_spin = QtWidgets.QDoubleSpinBox()
+        self.foc_angle_trim_spin.setRange(-180.0, 180.0)
+        self.foc_angle_trim_spin.setDecimals(1)
+        self.foc_angle_trim_spin.setSingleStep(5.0)
+        self.foc_angle_trim_spin.setSuffix(" deg")
+        self.foc_angle_trim_spin.setValue(0.0)
+        self.foc_angle_trim_spin.setToolTip(
+            "Fine electrical angle trim applied on top of the selected FOC Debug preset."
+        )
         self.foc_swap_uv_checkbox = QtWidgets.QCheckBox("Swap U/V")
         self.foc_swap_uv_checkbox.setToolTip(
             "Use only as a FOC debug override when 0 rpm / 0 speed gain still overcurrents."
@@ -1536,11 +1567,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.foc_status_value_label = QtWidgets.QLabel("Idle")
         self.foc_status_value_label.setStyleSheet("font-weight: 600;")
+        self.foc_direction_test_status_label = QtWidgets.QLabel("Not run")
         self.foc_live_summary_label = QtWidgets.QLabel(
             "Speed Mode is ready. Enter target speed and gains, then press Start FOC."
         )
         self.foc_live_summary_label.setWordWrap(True)
 
+        self.start_foc_direction_test_button = QtWidgets.QPushButton("Run Direction Test")
         self.start_foc_button = QtWidgets.QPushButton("Start FOC")
         self.stop_foc_button = QtWidgets.QPushButton("Stop FOC")
 
@@ -1558,16 +1591,21 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.foc_speed_ki_spin, 2, 3)
         summary_layout.addWidget(self.foc_debug_angle_label, 3, 0)
         summary_layout.addWidget(self.foc_debug_angle_combo, 3, 1)
-        summary_layout.addWidget(self.foc_swap_uv_checkbox, 3, 2, 1, 2)
+        summary_layout.addWidget(QtWidgets.QLabel("Angle Trim"), 3, 2)
+        summary_layout.addWidget(self.foc_angle_trim_spin, 3, 3)
         summary_layout.addWidget(QtWidgets.QLabel("Acceleration"), 4, 0)
         summary_layout.addWidget(self.foc_accel_spin, 4, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Deceleration"), 4, 2)
-        summary_layout.addWidget(self.foc_decel_spin, 4, 3)
-        summary_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
-        summary_layout.addWidget(self.foc_status_value_label, 5, 1)
-        summary_layout.addWidget(self.foc_live_summary_label, 5, 2, 1, 2)
-        summary_layout.addWidget(self.start_foc_button, 6, 0, 1, 2)
-        summary_layout.addWidget(self.stop_foc_button, 6, 2, 1, 2)
+        summary_layout.addWidget(self.foc_swap_uv_checkbox, 4, 2, 1, 2)
+        summary_layout.addWidget(QtWidgets.QLabel("Deceleration"), 5, 0)
+        summary_layout.addWidget(self.foc_decel_spin, 5, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Status"), 5, 2)
+        summary_layout.addWidget(self.foc_status_value_label, 5, 3)
+        summary_layout.addWidget(QtWidgets.QLabel("Dir Test"), 6, 0)
+        summary_layout.addWidget(self.foc_direction_test_status_label, 6, 1)
+        summary_layout.addWidget(self.foc_live_summary_label, 7, 0, 1, 4)
+        summary_layout.addWidget(self.start_foc_direction_test_button, 8, 0, 1, 2)
+        summary_layout.addWidget(self.start_foc_button, 8, 2, 1, 1)
+        summary_layout.addWidget(self.stop_foc_button, 8, 3, 1, 1)
 
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
@@ -1827,6 +1865,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.monitor_rate_combo.currentIndexChanged.connect(self._update_monitor_poll_interval)
         self.refresh_monitor_button.clicked.connect(self._request_monitor_once)
         self.foc_mode_combo.currentIndexChanged.connect(self._update_foc_mode_ui)
+        self.start_foc_direction_test_button.clicked.connect(self._start_foc_direction_test)
         self.start_foc_button.clicked.connect(self._start_foc_control)
         self.stop_foc_button.clicked.connect(self._stop_foc_control)
         self.start_vf_button.clicked.connect(self._start_open_loop_vf)
@@ -2127,8 +2166,16 @@ class MainWindow(QtWidgets.QMainWindow):
         preview_mode = self._current_foc_mode()
         mode_text = "Position Mode" if preview_mode == POSITION_CONTROL_MODE else "Speed Mode"
         debug_parts: list[str] = []
-        if int(self.foc_debug_angle_combo.currentData() or ID_SQUARE_ANGLE_TEST_NONE) == ID_SQUARE_ANGLE_TEST_PLUS_180:
+        foc_debug_angle = int(self.foc_debug_angle_combo.currentData() or ID_SQUARE_ANGLE_TEST_NONE)
+        foc_angle_trim_deg = float(self.foc_angle_trim_spin.value())
+        if foc_debug_angle == ID_SQUARE_ANGLE_TEST_PLUS_90:
+            debug_parts.append("+90e")
+        elif foc_debug_angle == ID_SQUARE_ANGLE_TEST_MINUS_90:
+            debug_parts.append("-90e")
+        elif foc_debug_angle == ID_SQUARE_ANGLE_TEST_PLUS_180:
             debug_parts.append("+180e")
+        if abs(foc_angle_trim_deg) > 0.05:
+            debug_parts.append(f"trim {foc_angle_trim_deg:+.1f} deg")
         if self.foc_swap_uv_checkbox.isChecked():
             debug_parts.append("Swap U/V")
         debug_suffix = ""
@@ -2136,10 +2183,40 @@ class MainWindow(QtWidgets.QMainWindow):
             debug_suffix = f" Debug: {', '.join(debug_parts)}."
         if snapshot is None:
             self.foc_status_value_label.setText("Idle")
+            self.foc_direction_test_status_label.setText("Not run")
             self.foc_live_summary_label.setText(
                 f"{mode_text} is ready. Servo ON only arms the drive; Start FOC sends the selected setpoints and gains after you complete encoder alignment when required.{debug_suffix}"
             )
             return
+
+        direction_status = int(
+            getattr(snapshot, "foc_direction_test_status", FOC_DIRECTION_TEST_IDLE)
+        )
+        direction_open_loop_delta = int(
+            getattr(snapshot, "foc_direction_test_open_loop_delta_pos", 0)
+        )
+        direction_foc_delta = int(
+            getattr(snapshot, "foc_direction_test_foc_delta_pos", 0)
+        )
+        if direction_status == FOC_DIRECTION_TEST_RUNNING:
+            self.foc_direction_test_status_label.setText("Running...")
+            self.foc_status_value_label.setText("Direction test running")
+            self.foc_live_summary_label.setText(
+                f"Open-loop d+ delta {direction_open_loop_delta:+d} cnt | "
+                f"FOC +Iq delta {direction_foc_delta:+d} cnt. "
+                "If the signs differ, firmware will flip encoder direction and invalidate alignment so you can rerun it cleanly."
+            )
+            return
+        if direction_status == FOC_DIRECTION_TEST_DONE_OK:
+            self.foc_direction_test_status_label.setText("Matched open-loop +")
+        elif direction_status == FOC_DIRECTION_TEST_DONE_FLIPPED:
+            self.foc_direction_test_status_label.setText("Flipped / rerun align")
+        elif direction_status == FOC_DIRECTION_TEST_INCONCLUSIVE:
+            self.foc_direction_test_status_label.setText("Inconclusive")
+        elif direction_status == FOC_DIRECTION_TEST_FAULT:
+            self.foc_direction_test_status_label.setText("Fault")
+        else:
+            self.foc_direction_test_status_label.setText("Idle")
 
         run_mode = getattr(snapshot, "run_mode", None)
         enable_run = bool(getattr(snapshot, "enable_run", False))
@@ -2177,9 +2254,26 @@ class MainWindow(QtWidgets.QMainWindow):
         if int(run_mode) != RUN_MODE_FOC:
             servo_text = "Servo ON" if enable_run else "Servo OFF"
             self.foc_status_value_label.setText(f"{servo_text} | Idle")
-            self.foc_live_summary_label.setText(
-                f"{mode_text} is configured. Servo ON keeps the drive armed at zero references only. Run Encoder Alignment when required, then press Start FOC to run the selected setpoint.{debug_suffix}"
-            )
+            if direction_status == FOC_DIRECTION_TEST_DONE_OK:
+                self.foc_live_summary_label.setText(
+                    "Direction test passed: positive FOC Iq now matches positive open-loop rotation. You can start FOC after encoder alignment stays Done."
+                )
+            elif direction_status == FOC_DIRECTION_TEST_DONE_FLIPPED:
+                self.foc_live_summary_label.setText(
+                    "Direction test found a sign mismatch and flipped the encoder direction chain to match open-loop positive rotation. Run Encoder Alignment again before Start FOC."
+                )
+            elif direction_status == FOC_DIRECTION_TEST_INCONCLUSIVE:
+                self.foc_live_summary_label.setText(
+                    "Direction test could not measure a reliable FOC direction response. Check that the rotor can move freely; if it can, this usually points to weak torque production or runtime theta still being off enough that FOC does not move decisively."
+                )
+            elif direction_status == FOC_DIRECTION_TEST_FAULT:
+                self.foc_live_summary_label.setText(
+                    "Direction test faulted before it could finish. Clear alarms, reduce commissioning aggression, and rerun the test."
+                )
+            else:
+                self.foc_live_summary_label.setText(
+                    f"{mode_text} is configured. Servo ON keeps the drive armed at zero references only. Run Encoder Alignment when required, then press Start FOC to run the selected setpoint.{debug_suffix}"
+                )
             return
 
         runtime_mode = int(
@@ -2208,10 +2302,41 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Error {snapshot.speed_error:.1f} rpm"
             )
 
+    def _start_foc_direction_test(self) -> None:
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None:
+            alignment_policy = int(last_monitor.debug_alignment_policy)
+            alignment_status = int(last_monitor.debug_alignment_status)
+            if (
+                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
+                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
+            ):
+                self._show_auxiliary_window(self._tuning_window)
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Direction Test Blocked",
+                    "This incremental encoder profile requires Encoder Alignment after every power-up. Run Encoder Alignment until Status = Done, then run the FOC direction test.",
+                )
+                return
+
+        self.auto_poll_checkbox.setChecked(True)
+        self.foc_status_value_label.setText("Direction test starting...")
+        self.foc_direction_test_status_label.setText("Starting...")
+        self.foc_live_summary_label.setText(
+            "Running a short open-loop vs FOC sign comparison. The firmware will compare positive open-loop rotation against positive FOC Iq and flip encoder direction automatically if they disagree."
+        )
+        self._enqueue_command(
+            Command.CMD_START_FOC_DIRECTION_TEST,
+            b"",
+            "Run FOC Direction Test",
+        )
+        self._request_monitor_once()
+
     def _start_foc_control(self) -> None:
         mode = self._current_foc_mode()
         foc_debug_angle = int(self.foc_debug_angle_combo.currentData() or ID_SQUARE_ANGLE_TEST_NONE)
         foc_swap_uv = 1 if self.foc_swap_uv_checkbox.isChecked() else 0
+        foc_angle_trim_deg = float(self.foc_angle_trim_spin.value())
         last_monitor = self._latest_monitor_snapshot
         if last_monitor is not None:
             alignment_policy = int(last_monitor.debug_alignment_policy)
@@ -2237,7 +2362,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if mode == POSITION_CONTROL_MODE:
             payload = struct.pack(
-                "<7fBB",
+                "<7fBBf",
                 float(self.foc_target_position_spin.value()),
                 float(self._foc_position_speed_limit_rpm),
                 float(self.foc_position_kp_spin.value()),
@@ -2247,18 +2372,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_decel_spin.value()),
                 foc_debug_angle,
                 foc_swap_uv,
+                foc_angle_trim_deg,
             )
             description = (
                 f"Start FOC Position Mode "
                 f"(target={self.foc_target_position_spin.value():.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
                 f"debug={self.foc_debug_angle_combo.currentText()}, "
+                f"trim={foc_angle_trim_deg:+.1f} deg, "
                 f"swap_uv={'on' if foc_swap_uv else 'off'})"
             )
             command = Command.CMD_START_POSITIONCONTROL
         else:
             payload = struct.pack(
-                "<5fBB",
+                "<5fBBf",
                 float(self._foc_speed_target_rpm),
                 float(self.foc_speed_kp_spin.value()),
                 float(self.foc_speed_ki_spin.value()),
@@ -2266,11 +2393,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_decel_spin.value()),
                 foc_debug_angle,
                 foc_swap_uv,
+                foc_angle_trim_deg,
             )
             description = (
                 f"Start FOC Speed Mode "
                 f"(target={self._foc_speed_target_rpm:.1f} rpm, "
                 f"debug={self.foc_debug_angle_combo.currentText()}, "
+                f"trim={foc_angle_trim_deg:+.1f} deg, "
                 f"swap_uv={'on' if foc_swap_uv else 'off'})"
             )
             command = Command.CMD_START_SPEEDCONTROL
@@ -2341,6 +2470,32 @@ class MainWindow(QtWidgets.QMainWindow):
         if int(status) == ENCODER_ALIGNMENT_STATUS_DONE:
             return "Saved or ready to reuse"
         return "Waiting for commissioning alignment"
+
+    def _adc_offset_text(self, raw_offset: int) -> str:
+        value = int(raw_offset) & 0xFFFF
+        if value == 0x7FFF:
+            return "0x7FFF (default)"
+        return f"{value:d}"
+
+    def _adc_offset_tooltip(self, raw_offset: int) -> str:
+        value = int(raw_offset) & 0xFFFF
+        if value == 0x7FFF:
+            return "Default sentinel. Current-sensor offset calibration has not completed yet."
+        return f"Raw ADC zero-current offset: {value:d} (0x{value:04X})"
+
+    def _calibration_status_text(self, status: int) -> str:
+        code = int(status)
+        if code == CURRENT_CALIB_STATUS_IDLE:
+            return "Idle"
+        if code == CURRENT_CALIB_STATUS_RUNNING:
+            return "Running"
+        if code == CURRENT_CALIB_STATUS_DONE:
+            return "Done"
+        if code == CURRENT_CALIB_STATUS_TIMEOUT:
+            return "Fault: Timeout"
+        if code == CURRENT_CALIB_STATUS_OFFSET_INVALID:
+            return "Fault: Offset Invalid"
+        return f"Unknown ({code})"
 
     def _refresh_alignment_panel(self, snapshot) -> None:
         if not hasattr(self, "alignment_policy_value_label"):
@@ -3273,7 +3428,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 "phase_u": snapshot.phase_u,
                 "phase_v": snapshot.phase_v,
                 "phase_w": snapshot.phase_w,
+                "id_ref": snapshot.id_ref,
                 "id_current": snapshot.id_current,
+                "iq_ref": snapshot.iq_ref,
                 "iq_current": snapshot.iq_current,
                 "vd": snapshot.vd,
                 "vq": snapshot.vq,
@@ -3291,8 +3448,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 "phase_u": snapshot.phase_u,
                 "phase_v": snapshot.phase_v,
                 "phase_w": snapshot.phase_w,
+                "id_ref": (
+                    float(last_monitor.id_ref) if last_monitor is not None else 0.0
+                ),
                 "id_current": (
                     float(last_monitor.id_current) if last_monitor is not None else 0.0
+                ),
+                "iq_ref": (
+                    float(last_monitor.iq_ref) if last_monitor is not None else 0.0
                 ),
                 "iq_current": (
                     float(last_monitor.iq_current) if last_monitor is not None else 0.0
@@ -3339,6 +3502,8 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Servo: {'ON' if snapshot.enable_run else 'OFF'}",
             f"Fault: {format_fault_text(snapshot.fault_occurred)}",
             f"Timing: {self._timing_mode_text(snapshot.control_timing_mode)} | Control {snapshot.control_loop_frequency_hz:.1f} Hz | Speed {snapshot.speed_loop_frequency_hz:.1f} Hz",
+            f"ADC Offset Ia / Ib: {self._adc_offset_text(snapshot.adc_offset_ia)} / {self._adc_offset_text(snapshot.adc_offset_ib)}",
+            f"Calibration Status: {self._calibration_status_text(snapshot.calibration_status)}",
             "",
             "[Encoder Alignment]",
             f"Policy: {self._alignment_policy_text(snapshot.debug_alignment_policy)}",
@@ -3444,6 +3609,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("run_mode", "Idle")
         self._set_monitor_value("control_timing_mode", self._timing_mode_text(self._active_timing_mode))
         self._set_monitor_value("effective_loop_hz", f"{self._active_control_loop_hz:.0f} Hz")
+        self._set_monitor_value("calibration_status", "Idle")
+        self._set_monitor_value("adc_offset_ia", "0x7FFF (default)")
+        self._set_monitor_value("adc_offset_ib", "0x7FFF (default)")
         fault_label = self.monitor_labels.get("fault_occurred")
         if fault_label is not None:
             fault_label.setText("OK")
@@ -3664,6 +3832,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_autotune_panel(snapshot)
         self._set_monitor_value("vdc", f"{snapshot.vdc:.3f} V")
         self._set_monitor_value("temperature", f"{snapshot.temperature:.3f} C")
+        self._set_monitor_value("calibration_status", self._calibration_status_text(snapshot.calibration_status))
+        self._set_monitor_value(
+            "adc_offset_ia",
+            self._adc_offset_text(snapshot.adc_offset_ia),
+            self._adc_offset_tooltip(snapshot.adc_offset_ia),
+        )
+        self._set_monitor_value(
+            "adc_offset_ib",
+            self._adc_offset_text(snapshot.adc_offset_ib),
+            self._adc_offset_tooltip(snapshot.adc_offset_ib),
+        )
         self._set_monitor_value("cmd_speed", f"{snapshot.cmd_speed:.3f}")
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
@@ -3689,6 +3868,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("effective_loop_hz", f"{self._active_control_loop_hz:.0f} Hz")
         self._set_monitor_value("vdc", f"{snapshot.vdc:.3f} V")
         self._set_monitor_value("temperature", f"{snapshot.temperature:.3f} C")
+        if snapshot.fault_code & 0x0100:
+            self._set_monitor_value("calibration_status", self._calibration_status_text(CURRENT_CALIB_STATUS_TIMEOUT))
+        elif snapshot.fault_code & 0x0200:
+            self._set_monitor_value(
+                "calibration_status",
+                self._calibration_status_text(CURRENT_CALIB_STATUS_OFFSET_INVALID),
+            )
         self._set_monitor_value("cmd_speed", f"{snapshot.cmd_speed:.3f}")
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")

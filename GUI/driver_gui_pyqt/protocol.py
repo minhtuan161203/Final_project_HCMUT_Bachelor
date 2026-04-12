@@ -57,6 +57,17 @@ MOTOR_AUTOTUNE_ERROR_SIGNAL = 4
 MOTOR_AUTOTUNE_CHART_NONE = 0
 MOTOR_AUTOTUNE_CHART_RS = 1
 MOTOR_AUTOTUNE_CHART_LS = 2
+FOC_DIRECTION_TEST_IDLE = 0
+FOC_DIRECTION_TEST_RUNNING = 1
+FOC_DIRECTION_TEST_DONE_OK = 2
+FOC_DIRECTION_TEST_DONE_FLIPPED = 3
+FOC_DIRECTION_TEST_INCONCLUSIVE = 4
+FOC_DIRECTION_TEST_FAULT = 5
+CURRENT_CALIB_STATUS_IDLE = 0
+CURRENT_CALIB_STATUS_RUNNING = 1
+CURRENT_CALIB_STATUS_DONE = 2
+CURRENT_CALIB_STATUS_TIMEOUT = 3
+CURRENT_CALIB_STATUS_OFFSET_INVALID = 4
 
 DEFAULT_MOTOR_RATED_CURRENT_RMS = 1.6
 DEFAULT_MOTOR_PEAK_CURRENT_RMS = 3.2
@@ -127,6 +138,7 @@ class Command(IntEnum):
     CMD_STOP_ID_SQUARE_TUNING = 0x59
     CMD_SET_CONTROL_TIMING_MODE = 0x5A
     CMD_START_ENCODER_ALIGNMENT = 0x5B
+    CMD_START_FOC_DIRECTION_TEST = 0x5C
 
 
 class UpdateCode(IntEnum):
@@ -306,6 +318,12 @@ class MonitorSnapshot:
     autotune_speed_kp: float = 0.0
     autotune_speed_ki: float = 0.0
     autotune_position_kp: float = 0.0
+    foc_direction_test_status: int = FOC_DIRECTION_TEST_IDLE
+    foc_direction_test_open_loop_delta_pos: int = 0
+    foc_direction_test_foc_delta_pos: int = 0
+    adc_offset_ia: int = 0x7FFF
+    adc_offset_ib: int = 0x7FFF
+    calibration_status: int = CURRENT_CALIB_STATUS_IDLE
 
 
 @dataclass(slots=True)
@@ -535,6 +553,22 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
             snapshot.autotune_speed_ki,
             snapshot.autotune_position_kp,
         ) = struct.unpack_from("<4B10f", payload, offset)
+        offset += struct.calcsize("<4B10f")
+
+    if len(payload) >= offset + struct.calcsize("<B2i"):
+        (
+            snapshot.foc_direction_test_status,
+            snapshot.foc_direction_test_open_loop_delta_pos,
+            snapshot.foc_direction_test_foc_delta_pos,
+        ) = struct.unpack_from("<B2i", payload, offset)
+        offset += struct.calcsize("<B2i")
+
+    if len(payload) >= offset + struct.calcsize("<2HB"):
+        (
+            snapshot.adc_offset_ia,
+            snapshot.adc_offset_ib,
+            snapshot.calibration_status,
+        ) = struct.unpack_from("<2HB", payload, offset)
 
     return snapshot
 
