@@ -120,7 +120,7 @@
  * Keep this at 0 deg unless hardware verification proves a fixed phase
  * compensation is required across every motor/driver pairing.
  */
-#define DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG	0.0f
+#define DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG	90.05f //Alex tunning so f**king tierd!!!
 typedef enum
 {
 	DEVICE_ID,															/*00:						32 bit*/

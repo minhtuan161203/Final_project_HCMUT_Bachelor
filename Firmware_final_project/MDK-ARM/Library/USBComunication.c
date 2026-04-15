@@ -1,5 +1,7 @@
 #include "USBComunication.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "Parameter.h"
@@ -14,6 +16,7 @@
 #define TX_FRAME_BUFFER_SIZE 256u
 #define USB_COMM_OK 0u
 #define USB_COMM_FAIL 1u
+#define FOC_DEBUG_TEXT_BUFFER_SIZE 160u
 
 static const uint8_t STX = 0x02u;
 static const uint8_t ACK = 0xF0u;
@@ -24,6 +27,9 @@ static const uint8_t ETX = 0x03u;
 static volatile uint16_t s_rx_head = 0u;
 static volatile uint16_t s_rx_tail = 0u;
 static uint8_t s_rx_buffer[RX_BYTE_BUFFER_SIZE];
+static volatile uint8_t s_foc_debug_pending = 0u;
+static uint8_t s_foc_debug_length = 0u;
+static uint8_t s_foc_debug_buffer[FOC_DEBUG_TEXT_BUFFER_SIZE];
 
 typedef struct
 {
@@ -179,6 +185,42 @@ static unsigned char CalcCRC(unsigned char uCode, unsigned char uSize, const uns
 	uCRC = (unsigned char)(uSum & 0xFFu);
 	uCRC += (unsigned char)(uSum >> 8);
 	return uCRC;
+}
+
+void USB_QueueFocDebugText(const char *format, ...)
+{
+	va_list args;
+	int written = 0;
+
+	if (format == 0)
+	{
+		return;
+	}
+	if (s_foc_debug_pending != 0u)
+	{
+		return;
+	}
+
+	va_start(args, format);
+	written = vsnprintf(
+		(char *)s_foc_debug_buffer,
+		sizeof(s_foc_debug_buffer),
+		format,
+		args);
+	va_end(args);
+
+	if (written <= 0)
+	{
+		return;
+	}
+	if (written >= (int)sizeof(s_foc_debug_buffer))
+	{
+		written = (int)sizeof(s_foc_debug_buffer) - 1;
+	}
+
+	s_foc_debug_length = (uint8_t)written;
+	s_foc_debug_pending = 1u;
+	USB_Comm.ReadFocDebugLog = 1u;
 }
 
 static void USB_SendAckPacket(uint8_t ack_code, uint8_t command, const uint8_t *payload, uint8_t payload_length)
@@ -426,6 +468,20 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 
 	SendData(CMD_MONITOR_DATA, offset, USB_Comunicate->TransmitData);
 	USB_Comunicate->ReadMotionMonitorData = 0u;
+}
+
+static void USB_SendFocDebugPacket(USB_Comunication_t *USB_Comunicate)
+{
+	if ((s_foc_debug_pending == 0u) || (s_foc_debug_length == 0u))
+	{
+		USB_Comunicate->ReadFocDebugLog = 0u;
+		return;
+	}
+
+	SendData(CMD_FOC_DEBUG_TEXT, s_foc_debug_length, s_foc_debug_buffer);
+	s_foc_debug_pending = 0u;
+	s_foc_debug_length = 0u;
+	USB_Comunicate->ReadFocDebugLog = 0u;
 }
 
 static void USB_SendErrorPacket(USB_Comunication_t *USB_Comunicate)
@@ -839,6 +895,9 @@ static void USB_HandleIdSquareTuningStart(void)
 	{
 		reuse_completed_alignment = 1u;
 	}
+	/* Square-wave Id commissioning is intended to run on a fixed electrical
+	   frame. Keep that frame deterministic between runs instead of following
+	   the live encoder angle after the user presses Start. */
 	IdSquareTuning.Enable = 1u;
 	IdSquareTuning.AlignmentDone = reuse_completed_alignment;
 	IdSquareTuning.AlignmentCounter = 0u;
@@ -1059,6 +1118,7 @@ static void USB_HandleFocControlStop(void)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
 	ResetControl_V_over_F();
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
@@ -1117,13 +1177,13 @@ static void USB_HandleOpenLoopVfCommand(const uint8_t *payload, uint8_t payload_
 		memcpy(&requested_voltage, &payload[4], sizeof(float));
 	}
 
-	if (requested_frequency < 0.0f)
-	{
-		requested_frequency = 0.0f;
-	}
 	if (requested_frequency > 50.0f)
 	{
 		requested_frequency = 50.0f;
+	}
+	if (requested_frequency < -50.0f)
+	{
+		requested_frequency = -50.0f;
 	}
 	if (requested_voltage < 0.0f)
 	{
@@ -1185,6 +1245,7 @@ static void USB_HandleServoOn(void)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
 	gTargetSpeedRpm = 0.0f;
 	gTargetPositionCounts = Parameter.fPosition;
 	gCommandedSpeedRpm = 0.0f;
@@ -1655,6 +1716,11 @@ int16_t USB_TransmitData(USB_Comunication_t *USB_Comunicate)
 		(gMotorAutoTune.chart_transfer_active != 0u))
 	{
 		USB_SendAutoTuneChunk(USB_Comunicate);
+	}
+
+	if (USB_Comunicate->ReadFocDebugLog == 1u)
+	{
+		USB_SendFocDebugPacket(USB_Comunicate);
 	}
 
 	if (USB_Comunicate->ReadMotionMonitorData == 1u)

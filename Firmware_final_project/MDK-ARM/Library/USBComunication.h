@@ -83,6 +83,7 @@ typedef enum
 	CMD_FFT_DATA_NGUYEN = 0x36,
 	CMD_FFT_DATA_THINH = 0x37,
 	CMD_AUTOTUNING_DATA_THINH = 0x38,
+	CMD_FOC_DEBUG_TEXT = 0x39,
 	MTR_CODE_ERROR = 0xE1
 }UpdateDataCmd_e;
 
@@ -153,6 +154,7 @@ typedef struct
 	uint8_t ReadFFTData_th;
 	uint8_t ReadFFTData_ng;
 	uint8_t ReadAutoTuningData_T;
+	uint8_t ReadFocDebugLog;
 	uint8_t PriorityFlag;
 	uint8_t TotalLength, Counter;
 	bool bDataProcesable;
@@ -204,6 +206,8 @@ int16_t USB_TransmitData(USB_Comunication_t* USB_Comunicate);
 void USB_ReceiveData(uint8_t *data, uint32_t SizeOfData);
 
 void USB_ProcessData(USB_Comunication_t* USB_Comunicate);
+
+void USB_QueueFocDebugText(const char *format, ...);
 
 void SendData(UpdateDataCmd_e uCommand, uint16_t uDataLength, uint8_t *uSetData);
 	

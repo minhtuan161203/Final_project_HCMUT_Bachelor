@@ -2,6 +2,8 @@ firmware_final_project\usbcomunication.o: Library\USBComunication.c
 firmware_final_project\usbcomunication.o: Library\USBComunication.h
 firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdint.h
 firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdbool.h
+firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdarg.h
+firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdio.h
 firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\string.h
 firmware_final_project\usbcomunication.o: Library\Parameter.h
 firmware_final_project\usbcomunication.o: Library\StateMachine.h
@@ -13,7 +15,6 @@ firmware_final_project\usbcomunication.o: ../Middlewares/ST/STM32_USB_Device_Lib
 firmware_final_project\usbcomunication.o: ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ioreq.h
 firmware_final_project\usbcomunication.o: ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_def.h
 firmware_final_project\usbcomunication.o: ../Inc/usbd_conf.h
-firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdio.h
 firmware_final_project\usbcomunication.o: C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\Bin\..\include\stdlib.h
 firmware_final_project\usbcomunication.o: ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h
 firmware_final_project\usbcomunication.o: ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f407xx.h

@@ -34,7 +34,6 @@ from protocol import (
     FOC_DIRECTION_TEST_INCONCLUSIVE,
     FOC_DIRECTION_TEST_RUNNING,
     ID_SQUARE_ANGLE_TEST_NONE,
-    ID_SQUARE_ANGLE_TEST_PLUS_90,
     ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
     ID_SQUARE_TUNING_MODE_SQUARE_WAVE,
     MOTOR_AUTOTUNE_CHART_LS,
@@ -1449,7 +1448,10 @@ class MainWindow(QtWidgets.QMainWindow):
         vf_tab = QtWidgets.QWidget()
         vf_layout = QtWidgets.QGridLayout(vf_tab)
         self.vf_frequency_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_frequency_spin.setRange(0.0, DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ)
+        self.vf_frequency_spin.setRange(
+            -DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ,
+            DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ,
+        )
         self.vf_frequency_spin.setDecimals(2)
         self.vf_frequency_spin.setSingleStep(0.50)
         self.vf_frequency_spin.setSuffix(" Hz")
@@ -1461,7 +1463,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_vf_button = QtWidgets.QPushButton("Start V/F")
         self.stop_vf_button = QtWidgets.QPushButton("Stop V/F")
         vf_note = QtWidgets.QLabel(
-            "Default motor profile: 4 pole pairs, 3000 rpm, 200 Hz electrical, 91 V, 1.6 A, 200 W. Open-loop commands are still clamped in firmware for safe testing. Trend Charts are low-rate monitor views; use Trace Scope with the 'Phase Currents' preset when you need waveform-level Iu/Iv/Iw detail."
+            "Default motor profile: 4 pole pairs, 3000 rpm, 200 Hz electrical, 91 V, 1.6 A, 200 W. Open-loop electrical frequency now accepts both positive and negative commands for direction/sign checks, while voltage remains firmware-clamped for safe testing. Trend Charts are low-rate monitor views; use Trace Scope with the 'Phase Currents' preset when you need waveform-level Iu/Iv/Iw detail."
         )
         vf_note.setWordWrap(True)
         vf_layout.addWidget(QtWidgets.QLabel("Electrical Frequency"), 0, 0)
@@ -1527,10 +1529,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_speed_ki_spin.setValue(5.0)
 
         self.foc_debug_angle_label = QtWidgets.QLabel("FOC Frame")
-        self.foc_debug_angle_value_label = QtWidgets.QLabel("Normal")
+        self.foc_debug_angle_value_label = QtWidgets.QLabel("None (raw theta)")
         self.foc_debug_angle_value_label.setStyleSheet("font-weight: 600;")
         self.foc_debug_angle_value_label.setToolTip(
-            "Commissioning is locked to the validated +90 electrical offset for runtime FOC."
+            "Runtime FOC applies no extra electrical frame offset. The controller uses raw theta from the encoder offset path as-is."
         )
 
         self.foc_accel_spin = QtWidgets.QDoubleSpinBox()
@@ -1593,7 +1595,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_mode_description_label = QtWidgets.QLabel()
         self.foc_mode_description_label.setWordWrap(True)
         self.foc_servo_note_label = QtWidgets.QLabel(
-            "Servo ON only runs the safe arm sequence: current-sensor offset calibration, zero-current references, and PWM enable without any motion target. Watch Driver Monitor for encoder alignment status, then Start FOC sends the selected mode, target, gains, and ramp limits to the firmware; runtime FOC is locked to the validated +90 electrical frame."
+            "Servo ON only runs the safe arm sequence: current-sensor offset calibration, zero-current references, and PWM enable without any motion target. Watch Driver Monitor for encoder alignment status, then Start FOC sends the selected mode, target, gains, and ramp limits to the firmware; runtime FOC now uses raw theta with no extra electrical frame offset."
         )
         self.foc_servo_note_label.setWordWrap(True)
         note_layout.addWidget(self.foc_mode_description_label)
@@ -2126,7 +2128,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         preview_mode = self._current_foc_mode()
         mode_text = "Position Mode" if preview_mode == POSITION_CONTROL_MODE else "Speed Mode"
-        debug_suffix = " Electrical frame: -90e fixed."
+        debug_suffix = " Electrical frame: none (raw theta)."
         if snapshot is None:
             self.foc_status_value_label.setText("Idle")
             self.foc_direction_test_status_label.setText("Not run")
@@ -2150,7 +2152,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.foc_live_summary_label.setText(
                 f"Open-loop + delta {direction_open_loop_delta:+d} cnt | "
                 f"FOC +Iq delta {direction_foc_delta:+d} cnt. "
-                "Firmware is comparing positive open-loop rotation against a very small +Iq on the fixed -90e frame. If the signs disagree, encoder direction will be flipped and alignment must be rerun."
+                "Firmware is comparing positive open-loop rotation against a very small +Iq on the raw runtime theta path with no extra frame offset. If the signs disagree, encoder direction will be flipped and alignment must be rerun."
             )
             return
         if direction_status == FOC_DIRECTION_TEST_DONE_OK:
@@ -2311,7 +2313,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_status_value_label.setText("Angle fit starting...")
         self.foc_direction_test_status_label.setText("Angle fit")
         self.foc_live_summary_label.setText(
-            "Running a short angle fit sweep around -90e to maximize q-axis torque. Watch Enc Offset in Driver Monitor; it should update when the fit completes."
+            "Running a short angle fit sweep around the current raw theta / encoder offset path to maximize q-axis torque. Watch Enc Offset in Driver Monitor; it should update when the fit completes."
         )
         self._enqueue_command(
             Command.CMD_START_FOC_ANGLE_FIT,
@@ -2355,14 +2357,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
-                ID_SQUARE_ANGLE_TEST_PLUS_90,
+                ID_SQUARE_ANGLE_TEST_NONE,
                 0,
             )
             description = (
                 f"Start FOC Position Mode "
                 f"(target={self.foc_target_position_spin.value():.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
-                "frame=-90e fixed)"
+                "frame=none)"
             )
             command = Command.CMD_START_POSITIONCONTROL
         else:
@@ -2373,13 +2375,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
-                ID_SQUARE_ANGLE_TEST_PLUS_90,
+                ID_SQUARE_ANGLE_TEST_NONE,
                 0,
             )
             description = (
                 f"Start FOC Speed Mode "
                 f"(target={self._foc_speed_target_rpm:.1f} rpm, "
-                "frame=-90e fixed)"
+                "frame=none)"
             )
             command = Command.CMD_START_SPEEDCONTROL
 
@@ -3281,6 +3283,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self._append_snapshot_to_trend_buffer(snapshot)
             self._update_monitor(snapshot)
             self._refresh_debug_terminal(snapshot)
+            return
+
+        if subcommand == UpdateCode.CMD_FOC_DEBUG_TEXT:
+            message = body.split(b"\x00", 1)[0].decode("utf-8", errors="replace").strip()
+            if message:
+                self._append_log(message)
             return
 
         if subcommand == UpdateCode.MTR_CODE_ERROR:
