@@ -34,6 +34,7 @@ from protocol import (
     FOC_DIRECTION_TEST_INCONCLUSIVE,
     FOC_DIRECTION_TEST_RUNNING,
     ID_SQUARE_ANGLE_TEST_NONE,
+    ID_SQUARE_ANGLE_TEST_PLUS_90,
     ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
     ID_SQUARE_TUNING_MODE_SQUARE_WAVE,
     MOTOR_AUTOTUNE_CHART_LS,
@@ -1526,7 +1527,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_speed_ki_spin.setValue(5.0)
 
         self.foc_debug_angle_label = QtWidgets.QLabel("FOC Frame")
-        self.foc_debug_angle_value_label = QtWidgets.QLabel("+90e (Fixed)")
+        self.foc_debug_angle_value_label = QtWidgets.QLabel("Normal")
         self.foc_debug_angle_value_label.setStyleSheet("font-weight: 600;")
         self.foc_debug_angle_value_label.setToolTip(
             "Commissioning is locked to the validated +90 electrical offset for runtime FOC."
@@ -1555,6 +1556,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_live_summary_label.setWordWrap(True)
 
         self.start_foc_direction_test_button = QtWidgets.QPushButton("Run Direction Test")
+        self.start_foc_angle_fit_button = QtWidgets.QPushButton("Run Angle Fit")
         self.start_foc_button = QtWidgets.QPushButton("Start FOC")
         self.stop_foc_button = QtWidgets.QPushButton("Stop FOC")
 
@@ -1582,8 +1584,9 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.foc_direction_test_status_label, 5, 3)
         summary_layout.addWidget(self.foc_live_summary_label, 6, 0, 1, 4)
         summary_layout.addWidget(self.start_foc_direction_test_button, 7, 0, 1, 2)
-        summary_layout.addWidget(self.start_foc_button, 7, 2, 1, 1)
-        summary_layout.addWidget(self.stop_foc_button, 7, 3, 1, 1)
+        summary_layout.addWidget(self.start_foc_angle_fit_button, 7, 2, 1, 2)
+        summary_layout.addWidget(self.start_foc_button, 8, 0, 1, 2)
+        summary_layout.addWidget(self.stop_foc_button, 8, 2, 1, 2)
 
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
@@ -1840,6 +1843,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_mode_combo.currentIndexChanged.connect(self._update_foc_mode_ui)
         self.foc_target_speed_spin.valueChanged.connect(self._on_foc_target_speed_value_changed)
         self.start_foc_direction_test_button.clicked.connect(self._start_foc_direction_test)
+        self.start_foc_angle_fit_button.clicked.connect(self._start_foc_angle_fit)
         self.start_foc_button.clicked.connect(self._start_foc_control)
         self.stop_foc_button.clicked.connect(self._stop_foc_control)
         self.start_vf_button.clicked.connect(self._start_open_loop_vf)
@@ -1848,12 +1852,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 Command.CMD_STOP_OPEN_LOOP_VF, b"", "Stop Open Loop V/F"
             )
         )
-        self.servo_on_button.clicked.connect(
-            lambda: self._enqueue_command(Command.CMD_SERVO_ON, b"", "Servo ON")
-        )
-        self.servo_off_button.clicked.connect(
-            lambda: self._enqueue_command(Command.CMD_SERVO_OFF, b"", "Servo OFF")
-        )
+        self.servo_on_button.clicked.connect(self._handle_servo_on)
+        self.servo_off_button.clicked.connect(self._handle_servo_off)
         self.ack_fault_button.clicked.connect(self._reset_alarm)
         self.alarm_banner_reset_button.clicked.connect(self._reset_alarm)
         self.alarm_reset_button.clicked.connect(self._reset_alarm)
@@ -2126,7 +2126,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         preview_mode = self._current_foc_mode()
         mode_text = "Position Mode" if preview_mode == POSITION_CONTROL_MODE else "Speed Mode"
-        debug_suffix = " Electrical frame: +90e fixed."
+        debug_suffix = " Electrical frame: -90e fixed."
         if snapshot is None:
             self.foc_status_value_label.setText("Idle")
             self.foc_direction_test_status_label.setText("Not run")
@@ -2148,9 +2148,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.foc_direction_test_status_label.setText("Running...")
             self.foc_status_value_label.setText("Direction test running")
             self.foc_live_summary_label.setText(
-                f"Open-loop d+ delta {direction_open_loop_delta:+d} cnt | "
+                f"Open-loop + delta {direction_open_loop_delta:+d} cnt | "
                 f"FOC +Iq delta {direction_foc_delta:+d} cnt. "
-                "If the signs differ, firmware will flip encoder direction and invalidate alignment so you can rerun it cleanly."
+                "Firmware is comparing positive open-loop rotation against a very small +Iq on the fixed -90e frame. If the signs disagree, encoder direction will be flipped and alignment must be rerun."
             )
             return
         if direction_status == FOC_DIRECTION_TEST_DONE_OK:
@@ -2248,6 +2248,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Error {snapshot.speed_error:.1f} rpm"
             )
 
+    def _handle_servo_on(self) -> None:
+        self.auto_poll_checkbox.setChecked(True)
+        self.foc_status_value_label.setText("Servo ON starting...")
+        self.foc_live_summary_label.setText(
+            "Running Servo ON sequence: ADC offset calibration first, then encoder alignment. Watch Driver Monitor for Cal Status and Align Status to reach Done."
+        )
+        self._enqueue_command(Command.CMD_SERVO_ON, b"", "Servo ON")
+        self._request_monitor_once()
+
+    def _handle_servo_off(self) -> None:
+        self.auto_poll_checkbox.setChecked(True)
+        self._enqueue_command(Command.CMD_SERVO_OFF, b"", "Servo OFF")
+        self._request_monitor_once()
+
     def _start_foc_direction_test(self) -> None:
         last_monitor = self._latest_monitor_snapshot
         if last_monitor is not None:
@@ -2268,7 +2282,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_status_value_label.setText("Direction test starting...")
         self.foc_direction_test_status_label.setText("Starting...")
         self.foc_live_summary_label.setText(
-            "Running a short open-loop vs FOC sign comparison. The firmware will compare positive open-loop rotation against positive FOC Iq and flip encoder direction automatically if they disagree."
+            "Running a short open-loop vs FOC sign comparison. The firmware compares positive open-loop rotation against positive FOC Iq and flips encoder direction automatically if they disagree."
         )
         self._enqueue_command(
             Command.CMD_START_FOC_DIRECTION_TEST,
@@ -2276,6 +2290,36 @@ class MainWindow(QtWidgets.QMainWindow):
             "Run FOC Direction Test",
         )
         self._request_monitor_once()
+
+    def _start_foc_angle_fit(self) -> None:
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None:
+            alignment_policy = int(last_monitor.debug_alignment_policy)
+            alignment_status = int(last_monitor.debug_alignment_status)
+            if (
+                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
+                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
+            ):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Angle Fit Blocked",
+                    "Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then run Angle Fit.",
+                )
+                return
+
+        self.auto_poll_checkbox.setChecked(True)
+        self.foc_status_value_label.setText("Angle fit starting...")
+        self.foc_direction_test_status_label.setText("Angle fit")
+        self.foc_live_summary_label.setText(
+            "Running a short angle fit sweep around -90e to maximize q-axis torque. Watch Enc Offset in Driver Monitor; it should update when the fit completes."
+        )
+        self._enqueue_command(
+            Command.CMD_START_FOC_ANGLE_FIT,
+            b"",
+            "Run FOC Angle Fit",
+        )
+        self._request_monitor_once()
+
 
     def _start_foc_control(self) -> None:
         mode = self._current_foc_mode()
@@ -2303,7 +2347,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if mode == POSITION_CONTROL_MODE:
             payload = struct.pack(
-                "<7f",
+                "<7fBB",
                 float(self.foc_target_position_spin.value()),
                 float(self._foc_position_speed_limit_rpm),
                 float(self.foc_position_kp_spin.value()),
@@ -2311,27 +2355,31 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
+                ID_SQUARE_ANGLE_TEST_PLUS_90,
+                0,
             )
             description = (
                 f"Start FOC Position Mode "
                 f"(target={self.foc_target_position_spin.value():.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
-                "frame=+90e fixed)"
+                "frame=-90e fixed)"
             )
             command = Command.CMD_START_POSITIONCONTROL
         else:
             payload = struct.pack(
-                "<5f",
+                "<5fBB",
                 float(self._foc_speed_target_rpm),
                 float(self.foc_speed_kp_spin.value()),
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
+                ID_SQUARE_ANGLE_TEST_PLUS_90,
+                0,
             )
             description = (
                 f"Start FOC Speed Mode "
                 f"(target={self._foc_speed_target_rpm:.1f} rpm, "
-                "frame=+90e fixed)"
+                "frame=-90e fixed)"
             )
             command = Command.CMD_START_SPEEDCONTROL
 
