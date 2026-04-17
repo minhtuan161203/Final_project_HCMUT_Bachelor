@@ -1,7 +1,7 @@
 Dependencies for Project 'Firmware_final_project', Target 'Firmware_final_project': (DO NOT MODIFY !)
 CompilerVersion: 5060960::V5.06 update 7 (build 960)::.\ARM_Compiler_5.06u7
 F (startup_stm32f407xx.s)(0x69D2C397)(--cpu Cortex-M4.fp.sp -g --apcs=interwork -I.\RTE\_Firmware_final_project-IC:\Users\Admin\AppData\Local\Arm\Packs\ARM\CMSIS\6.2.0\CMSIS\Core\Include--pd "__UVISION_VERSION SETA 543" --pd "STM32F407xx SETA 1" --pd "_RTE_ SETA 1"--list startup_stm32f407xx.lst --xref -o firmware_final_project\startup_stm32f407xx.o --depend firmware_final_project\startup_stm32f407xx.d)
-F (../Src/main.c)(0x69DFFFB1)(--c99 -c --cpu Cortex-M4.fp.sp -g -O3 --apcs=interwork --split_sections -I ../Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc -I ../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ./Library-I.\RTE\_Firmware_final_project-IC:\Users\Admin\AppData\Local\Arm\Packs\ARM\CMSIS\6.2.0\CMSIS\Core\Include-D__UVISION_VERSION="543" -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o firmware_final_project\main.o --omf_browse firmware_final_project\main.crf --depend firmware_final_project\main.d)
+F (../Src/main.c)(0x69E26557)(--c99 -c --cpu Cortex-M4.fp.sp -g -O3 --apcs=interwork --split_sections -I ../Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc -I ../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ./Library-I.\RTE\_Firmware_final_project-IC:\Users\Admin\AppData\Local\Arm\Packs\ARM\CMSIS\6.2.0\CMSIS\Core\Include-D__UVISION_VERSION="543" -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o firmware_final_project\main.o --omf_browse firmware_final_project\main.crf --depend firmware_final_project\main.d)
 I (../Inc/main.h)(0x698876F1)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h)(0x693F96F2)
 I (../Inc/stm32f4xx_hal_conf.h)(0x698876F1)
@@ -46,7 +46,7 @@ I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\string.h
 I (./Library/define.h)(0x69DFF43A)
 I (./Library/PIDcontrol.h)(0x69DFA23A)
 I (./Library/StateMachine.h)(0x69DFA23A)
-I (./Library/USBComunication.h)(0x69DFBDC6)
+I (./Library/USBComunication.h)(0x69E258F8)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\stdbool.h)(0x5E8E4AD2)
 I (./Library/vector_transfs.h)(0x69B81C2E)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\math.h)(0x5E8E4AD2)
@@ -236,7 +236,7 @@ I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_ll_usb.h)(0x693F96F2)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd_ex.h)(0x693F96F2)
 I (../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_core.h)(0x693F96F4)
 I (../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ctlreq.h)(0x693F96F4)
-I (./Library/USBComunication.h)(0x69DFBDC6)
+I (./Library/USBComunication.h)(0x69E258F8)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\stdbool.h)(0x5E8E4AD2)
 F (../Src/stm32f4xx_it.c)(0x69D0D6B5)(--c99 -c --cpu Cortex-M4.fp.sp -g -O3 --apcs=interwork --split_sections -I ../Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc -I ../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ./Library-I.\RTE\_Firmware_final_project-IC:\Users\Admin\AppData\Local\Arm\Packs\ARM\CMSIS\6.2.0\CMSIS\Core\Include-D__UVISION_VERSION="543" -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o firmware_final_project\stm32f4xx_it.o --omf_browse firmware_final_project\stm32f4xx_it.crf --depend firmware_final_project\stm32f4xx_it.d)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h)(0x693F96F2)
@@ -1507,8 +1507,8 @@ F (.\Library\StateMachine.c)(0x69DFA23A)(--c99 -c --cpu Cortex-M4.fp.sp -g -O3 -
 I (Library\StateMachine.h)(0x69DFA23A)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\stdint.h)(0x5E8E4AD2)
 F (.\Library\StateMachine.h)(0x69DFA23A)()
-F (.\Library\USBComunication.c)(0x69DFE144)(--c99 -c --cpu Cortex-M4.fp.sp -g -O3 --apcs=interwork --split_sections -I ../Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc -I ../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ./Library-I.\RTE\_Firmware_final_project-IC:\Users\Admin\AppData\Local\Arm\Packs\ARM\CMSIS\6.2.0\CMSIS\Core\Include-D__UVISION_VERSION="543" -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o firmware_final_project\usbcomunication.o --omf_browse firmware_final_project\usbcomunication.crf --depend firmware_final_project\usbcomunication.d)
-I (Library\USBComunication.h)(0x69DFBDC6)
+F (.\Library\USBComunication.c)(0x69E25E8F)(--c99 -c --cpu Cortex-M4.fp.sp -g -O3 --apcs=interwork --split_sections -I ../Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc -I ../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ./Library-I.\RTE\_Firmware_final_project-IC:\Users\Admin\AppData\Local\Arm\Packs\ARM\CMSIS\6.2.0\CMSIS\Core\Include-D__UVISION_VERSION="543" -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o firmware_final_project\usbcomunication.o --omf_browse firmware_final_project\usbcomunication.crf --depend firmware_final_project\usbcomunication.d)
+I (Library\USBComunication.h)(0x69E258F8)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\stdint.h)(0x5E8E4AD2)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\stdbool.h)(0x5E8E4AD2)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\stdarg.h)(0x5E8E4AD2)
@@ -1561,7 +1561,7 @@ I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_ll_usb.h)(0x693F96F2)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd_ex.h)(0x693F96F2)
 I (../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_core.h)(0x693F96F4)
 I (../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ctlreq.h)(0x693F96F4)
-F (.\Library\USBComunication.h)(0x69DFBDC6)()
+F (.\Library\USBComunication.h)(0x69E258F8)()
 F (.\Library\vector_transfs.c)(0x69BED475)(--c99 -c --cpu Cortex-M4.fp.sp -g -O3 --apcs=interwork --split_sections -I ../Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc -I ../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ./Library-I.\RTE\_Firmware_final_project-IC:\Users\Admin\AppData\Local\Arm\Packs\ARM\CMSIS\6.2.0\CMSIS\Core\Include-D__UVISION_VERSION="543" -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o firmware_final_project\vector_transfs.o --omf_browse firmware_final_project\vector_transfs.crf --depend firmware_final_project\vector_transfs.d)
 I (Library\vector_transfs.h)(0x69B81C2E)
 I (C:\Users\Admin\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\math.h)(0x5E8E4AD2)

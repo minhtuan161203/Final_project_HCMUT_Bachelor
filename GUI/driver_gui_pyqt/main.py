@@ -1559,6 +1559,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.start_foc_direction_test_button = QtWidgets.QPushButton("Run Direction Test")
         self.start_foc_angle_fit_button = QtWidgets.QPushButton("Run Angle Fit")
+        self.start_foc_rotating_theta_test_button = QtWidgets.QPushButton("Run Rotating Theta Current Test")
+        self.start_foc_rotating_theta_voltage_test_button = QtWidgets.QPushButton("Run Rotating Theta Voltage Test")
+        self.start_foc_current_feedback_map_test_button = QtWidgets.QPushButton("Run Current Feedback Map Test")
         self.start_foc_button = QtWidgets.QPushButton("Start FOC")
         self.stop_foc_button = QtWidgets.QPushButton("Stop FOC")
 
@@ -1587,8 +1590,11 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.foc_live_summary_label, 6, 0, 1, 4)
         summary_layout.addWidget(self.start_foc_direction_test_button, 7, 0, 1, 2)
         summary_layout.addWidget(self.start_foc_angle_fit_button, 7, 2, 1, 2)
-        summary_layout.addWidget(self.start_foc_button, 8, 0, 1, 2)
-        summary_layout.addWidget(self.stop_foc_button, 8, 2, 1, 2)
+        summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 8, 0, 1, 2)
+        summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 8, 2, 1, 2)
+        summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 9, 0, 1, 4)
+        summary_layout.addWidget(self.start_foc_button, 10, 0, 1, 2)
+        summary_layout.addWidget(self.stop_foc_button, 10, 2, 1, 2)
 
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
@@ -1846,6 +1852,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_target_speed_spin.valueChanged.connect(self._on_foc_target_speed_value_changed)
         self.start_foc_direction_test_button.clicked.connect(self._start_foc_direction_test)
         self.start_foc_angle_fit_button.clicked.connect(self._start_foc_angle_fit)
+        self.start_foc_rotating_theta_test_button.clicked.connect(self._start_foc_rotating_theta_test)
+        self.start_foc_rotating_theta_voltage_test_button.clicked.connect(self._start_foc_rotating_theta_voltage_test)
+        self.start_foc_current_feedback_map_test_button.clicked.connect(self._start_foc_current_feedback_map_test)
         self.start_foc_button.clicked.connect(self._start_foc_control)
         self.stop_foc_button.clicked.connect(self._stop_foc_control)
         self.start_vf_button.clicked.connect(self._start_open_loop_vf)
@@ -2319,6 +2328,93 @@ class MainWindow(QtWidgets.QMainWindow):
             Command.CMD_START_FOC_ANGLE_FIT,
             b"",
             "Run FOC Angle Fit",
+        )
+        self._request_monitor_once()
+
+    def _start_foc_rotating_theta_test(self) -> None:
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None:
+            alignment_policy = int(last_monitor.debug_alignment_policy)
+            alignment_status = int(last_monitor.debug_alignment_status)
+            if (
+                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
+                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
+            ):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Rotating Theta Test Blocked",
+                    "Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then run the rotating-theta current-vector test.",
+                )
+                return
+
+        self.auto_poll_checkbox.setChecked(True)
+        self.foc_status_value_label.setText("Rotating-theta test starting...")
+        self.foc_direction_test_status_label.setText("Rot theta")
+        self.foc_live_summary_label.setText(
+            "Running a synthetic rotating-theta FOC test: the firmware ramps an internal electrical angle, applies the fixed frame compensation, and injects a small +Iq with Id = 0. If the motor spins smoothly here, Park/Clarke/PWM/current loop are likely fine and the remaining bug is in the encoder theta runtime path."
+        )
+        self._enqueue_command(
+            Command.CMD_START_FOC_ROTATING_THETA_TEST,
+            b"",
+            "Run FOC Rotating Theta Current Test",
+        )
+        self._request_monitor_once()
+
+    def _start_foc_rotating_theta_voltage_test(self) -> None:
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None:
+            alignment_policy = int(last_monitor.debug_alignment_policy)
+            alignment_status = int(last_monitor.debug_alignment_status)
+            if (
+                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
+                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
+            ):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Rotating Theta Voltage Test Blocked",
+                    "Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then run the rotating-theta voltage-vector test.",
+                )
+                return
+
+        self.auto_poll_checkbox.setChecked(True)
+        self.foc_status_value_label.setText("Rotating-theta voltage test starting...")
+        self.foc_direction_test_status_label.setText("Rot theta V")
+        self.foc_live_summary_label.setText(
+            "Running a synthetic rotating-theta voltage-vector test: the firmware ramps an internal electrical angle, applies the fixed frame compensation, and injects a small direct +Vq with Vd = 0. If this spins smoothly but the current-loop version still steps, the remaining bug sits in current feedback / dq measurement rather than inverse Park-Clarke-PWM."
+        )
+        self._enqueue_command(
+            Command.CMD_START_FOC_ROTATING_THETA_VOLTAGE_TEST,
+            b"",
+            "Run FOC Rotating Theta Voltage Test",
+        )
+        self._request_monitor_once()
+
+    def _start_foc_current_feedback_map_test(self) -> None:
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None:
+            alignment_policy = int(last_monitor.debug_alignment_policy)
+            alignment_status = int(last_monitor.debug_alignment_status)
+            if (
+                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
+                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
+            ):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Current Feedback Map Test Blocked",
+                    "Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then run the mapping sweep.",
+                )
+                return
+
+        self.auto_poll_checkbox.setChecked(True)
+        self.foc_status_value_label.setText("Current feedback map test starting...")
+        self.foc_direction_test_status_label.setText("Map sweep")
+        self.foc_live_summary_label.setText(
+            "Running a controlled 4-case current-feedback mapping sweep on the rotating-theta current test. The firmware will try normal, invert, swap, and swap+invert mappings and log Id/Iq summary metrics for each case so we can pick the cleanest feedback convention without hand-editing code each round."
+        )
+        self._enqueue_command(
+            Command.CMD_START_FOC_CURRENT_FEEDBACK_MAP_TEST,
+            b"",
+            "Run FOC Current Feedback Map Test",
         )
         self._request_monitor_once()
 

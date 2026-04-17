@@ -130,9 +130,17 @@ volatile uint8_t gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
 volatile uint8_t gServoArmOnlyRequested = 0u;
 volatile uint8_t gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
 volatile uint8_t gFocCurrentUvSwapTest = 0u;
+volatile uint8_t gFocCurrentPolarityInvertTest = 0u;
 volatile uint8_t gFocDirectionTestStatus = FOC_DIRECTION_TEST_IDLE;
 volatile int32_t gFocDirectionTestOpenLoopDeltaPos = 0;
 volatile int32_t gFocDirectionTestFocDeltaPos = 0;
+volatile uint8_t gFocRotatingThetaTestRunning = 0u;
+volatile float gFocRotatingThetaDebugThetaDeg = 0.0f;
+volatile int32_t gFocRotatingThetaDebugDeltaPos = 0;
+volatile uint8_t gFocRotatingThetaVoltageTestRunning = 0u;
+volatile float gFocRotatingThetaVoltageDebugThetaDeg = 0.0f;
+volatile int32_t gFocRotatingThetaVoltageDebugDeltaPos = 0;
+volatile uint8_t gFocCurrentFeedbackMapTestRunning = 0u;
 volatile uint8_t gFocDirectionTestDebugStage = 0u;
 volatile float gFocDirectionTestDebugAngleDeg = 0.0f;
 volatile float gFocDirectionTestDebugCandidate0Deg = 0.0f;
@@ -241,13 +249,21 @@ static void FinalizeEncoderAlignment(uint8_t alignment_successful);
 static void FinalizeFocDirectionTest(uint8_t result);
 static void RunFocDirectionTestLoop(void);
 static void RunFocAngleFitLoop(void);
+static void RunFocRotatingThetaTestLoop(void);
+static void RunFocRotatingThetaVoltageTestLoop(void);
+static void RunFocCurrentFeedbackMapTestLoop(void);
 static void LoadDiagnosticCurrentPiGains(void);
 static void RestoreFocAngleFitOffsetIfNeeded(void);
 static uint8_t LoadParametersFromFlashIfAvailable(void);
+static const char *GetCurrentFeedbackMapCaseName(uint8_t index);
 void ApplyControlTimingMode(uint8_t mode);
 void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode);
 uint8_t StartFocDirectionTest(void);
 uint8_t StartFocAngleFit(void);
+uint8_t StartFocRotatingThetaTest(void);
+uint8_t StartFocRotatingThetaVoltageTest(void);
+uint8_t StartFocCurrentFeedbackMapTest(void);
+void StopFocDiagnosticModes(void);
 uint8_t SaveParametersToFlash(void);
 
 /* USER CODE END PFP */
@@ -271,7 +287,7 @@ uint8_t SaveParametersToFlash(void);
 #define FOC_ZERO_CMD_REF_DEADBAND_A 0.01f
 #define FOC_ZERO_CMD_MEAS_DEADBAND_A 0.08f
 #define FORCE_DRIVER_CURRENT_POLARITY_INVERT 0u
-#define FORCE_DRIVER_CURRENT_UV_SWAP 0u
+#define FORCE_DRIVER_CURRENT_UV_SWAP 1u
 #define ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A 0.2f
 #define ID_SQUARE_TUNING_ALIGN_CURRENT_RATIO 0.2f
 #define ID_SQUARE_TUNING_ALIGN_TIME_S 2.0f
@@ -301,6 +317,20 @@ uint8_t SaveParametersToFlash(void);
 #define ANGLE_FIT_SWEEP_MIN_DEG 75.0f
 #define ANGLE_FIT_SWEEP_STEP_DEG 5.0f
 #define ANGLE_FIT_VERIFY_FLIP_DEG 180.0f
+#define ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ 1.0f
+#define ROTATING_THETA_TEST_IQ_A 0.20f
+#define ROTATING_THETA_TEST_FRAME_DEG (-DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG)
+#define DEFAULT_RUNTIME_FOC_FRAME_DEG (-DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG)
+#define ROTATING_THETA_TEST_VOLTAGE_LIMIT_RATIO 0.15f
+#define ROTATING_THETA_TEST_MIN_VOLTAGE_LIMIT_V 2.0f
+#define ROTATING_THETA_TEST_MAX_VOLTAGE_LIMIT_V 8.0f
+#define ROTATING_THETA_TEST_LOG_TIME_S 0.25f
+#define ROTATING_THETA_VOLTAGE_TEST_ELECTRICAL_FREQ_HZ 1.0f
+#define ROTATING_THETA_VOLTAGE_TEST_VQ_V 2.0f
+#define ROTATING_THETA_VOLTAGE_TEST_FRAME_DEG (-DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG)
+#define ROTATING_THETA_VOLTAGE_TEST_LOG_TIME_S 0.25f
+#define CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT 4u
+#define CURRENT_FEEDBACK_MAP_TEST_CASE_TIME_S 1.0f
 #define FOC_DIAGNOSTIC_CURRENT_KP_SCALE 1.0f
 #define FOC_DIAGNOSTIC_CURRENT_KI_SCALE 1.0f
 #define SPEED_ESTIMATE_LPF_ALPHA 0.1f
@@ -346,6 +376,28 @@ static int32_t sFocAngleFitVerifyFocDeltaPos = 0;
 static int32_t sFocAngleFitOriginalOffset = 0;
 static uint8_t sFocAngleFitOffsetApplied = 0u;
 static uint8_t sFocAngleFitAccepted = 0u;
+static float sFocRotatingThetaCommand = 0.0f;
+static float sFocRotatingThetaStartPosition = 0.0f;
+static uint16_t sFocRotatingThetaLogCounter = 0u;
+static float sFocRotatingThetaVoltageCommand = 0.0f;
+static float sFocRotatingThetaVoltageStartPosition = 0.0f;
+static uint16_t sFocRotatingThetaVoltageLogCounter = 0u;
+static const uint8_t sFocCurrentFeedbackMapSwapCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 0u, 1u, 1u};
+static const uint8_t sFocCurrentFeedbackMapInvertCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 1u, 0u, 1u};
+static uint8_t sFocCurrentFeedbackMapCaseIndex = 0u;
+static uint16_t sFocCurrentFeedbackMapCounter = 0u;
+static float sFocCurrentFeedbackMapCommand = 0.0f;
+static float sFocCurrentFeedbackMapStartPosition = 0.0f;
+static float sFocCurrentFeedbackMapIdAbsAccum = 0.0f;
+static float sFocCurrentFeedbackMapIqAccum = 0.0f;
+static float sFocCurrentFeedbackMapIqErrAbsAccum = 0.0f;
+static float sFocCurrentFeedbackMapSpeedAbsAccum = 0.0f;
+static uint32_t sFocCurrentFeedbackMapSampleCount = 0u;
+static float sFocCurrentFeedbackMapIdAbsAvg[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0.0f};
+static float sFocCurrentFeedbackMapIqAvg[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0.0f};
+static float sFocCurrentFeedbackMapIqErrAbsAvg[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0.0f};
+static float sFocCurrentFeedbackMapSpeedAbsAvg[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0.0f};
+static int32_t sFocCurrentFeedbackMapDeltaPos[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0};
 
 enum
 {
@@ -369,6 +421,23 @@ enum
 	FOC_ANGLE_FIT_STAGE_VERIFY_FOC_MOVE,
 	FOC_ANGLE_FIT_STAGE_VERIFY_FOC_SETTLE,
 };
+
+static const char *GetCurrentFeedbackMapCaseName(uint8_t index)
+{
+	switch (index)
+	{
+		case 0u:
+			return "normal";
+		case 1u:
+			return "invert";
+		case 2u:
+			return "swap";
+		case 3u:
+			return "swap+invert";
+		default:
+			return "unknown";
+	}
+}
 
 static float ClampFloat(float value, float lower, float upper)
 {
@@ -1413,6 +1482,7 @@ uint8_t StartFocDirectionTest(void)
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	gFocCurrentUvSwapTest = 0u;
+	gFocCurrentPolarityInvertTest = 0u;
 	gFocDirectionTestStatus = FOC_DIRECTION_TEST_RUNNING;
 	gFocDirectionTestOpenLoopDeltaPos = 0;
 	gFocDirectionTestFocDeltaPos = 0;
@@ -1494,6 +1564,7 @@ uint8_t StartFocAngleFit(void)
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	gFocCurrentUvSwapTest = 0u;
+	gFocCurrentPolarityInvertTest = 0u;
 	gFocAngleFitRunning = 1u;
 	sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_COMPARE_MOVE;
 	sFocAngleFitCounter = 0u;
@@ -1531,6 +1602,200 @@ uint8_t StartFocAngleFit(void)
 	ResetControlLoops();
 	STM_NextState(&StateMachine, START);
 	return 1u;
+}
+
+uint8_t StartFocRotatingThetaTest(void)
+{
+	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
+	{
+		return 0u;
+	}
+	if (FaultCode != NO_ERROR)
+	{
+		return 0u;
+	}
+	if (Current_Sensor.CalibFinish <= 0)
+	{
+		return 0u;
+	}
+	if (gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE)
+	{
+		return 0u;
+	}
+
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
+	gFocCurrentUvSwapTest = 0u;
+	gFocCurrentPolarityInvertTest = 0u;
+	gFocRotatingThetaVoltageTestRunning = 0u;
+	gFocCurrentFeedbackMapTestRunning = 0u;
+	gFocRotatingThetaTestRunning = 1u;
+	gFocRotatingThetaDebugThetaDeg = 0.0f;
+	gFocRotatingThetaDebugDeltaPos = 0;
+	sFocRotatingThetaCommand = 0.0f;
+	sFocRotatingThetaStartPosition = Parameter.fPosition;
+	sFocRotatingThetaLogCounter = 0u;
+	USB_QueueFocDebugText(
+		"[RTH] start f=%.2f iq=%.3f frame=%.2f off=%ld",
+		ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ,
+		ROTATING_THETA_TEST_IQ_A,
+		ROTATING_THETA_TEST_FRAME_DEG,
+		(long)Parameter.Offset_Enc);
+	FOC_DEBUG_PRINTF(
+		"[RTH] start f=%.2fHz iq=%.3fA frame=%.2fdeg offset=%ld\r\n",
+		ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ,
+		ROTATING_THETA_TEST_IQ_A,
+		ROTATING_THETA_TEST_FRAME_DEG,
+		(long)Parameter.Offset_Enc);
+	ResetControlLoops();
+	STM_NextState(&StateMachine, START);
+	return 1u;
+}
+
+uint8_t StartFocRotatingThetaVoltageTest(void)
+{
+	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
+	{
+		return 0u;
+	}
+	if (FaultCode != NO_ERROR)
+	{
+		return 0u;
+	}
+	if (Current_Sensor.CalibFinish <= 0)
+	{
+		return 0u;
+	}
+	if (gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE)
+	{
+		return 0u;
+	}
+
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
+	gFocCurrentUvSwapTest = 0u;
+	gFocCurrentPolarityInvertTest = 0u;
+	gFocRotatingThetaTestRunning = 0u;
+	gFocCurrentFeedbackMapTestRunning = 0u;
+	gFocRotatingThetaVoltageTestRunning = 1u;
+	gFocRotatingThetaVoltageDebugThetaDeg = 0.0f;
+	gFocRotatingThetaVoltageDebugDeltaPos = 0;
+	sFocRotatingThetaVoltageCommand = 0.0f;
+	sFocRotatingThetaVoltageStartPosition = Parameter.fPosition;
+	sFocRotatingThetaVoltageLogCounter = 0u;
+	USB_QueueFocDebugText(
+		"[RTV] start f=%.2f vq=%.2f frame=%.2f off=%ld",
+		ROTATING_THETA_VOLTAGE_TEST_ELECTRICAL_FREQ_HZ,
+		ROTATING_THETA_VOLTAGE_TEST_VQ_V,
+		ROTATING_THETA_VOLTAGE_TEST_FRAME_DEG,
+		(long)Parameter.Offset_Enc);
+	FOC_DEBUG_PRINTF(
+		"[RTV] start f=%.2fHz vq=%.2fV frame=%.2fdeg offset=%ld\r\n",
+		ROTATING_THETA_VOLTAGE_TEST_ELECTRICAL_FREQ_HZ,
+		ROTATING_THETA_VOLTAGE_TEST_VQ_V,
+		ROTATING_THETA_VOLTAGE_TEST_FRAME_DEG,
+		(long)Parameter.Offset_Enc);
+	ResetControlLoops();
+	STM_NextState(&StateMachine, START);
+	return 1u;
+}
+
+uint8_t StartFocCurrentFeedbackMapTest(void)
+{
+	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
+	{
+		return 0u;
+	}
+	if (FaultCode != NO_ERROR)
+	{
+		return 0u;
+	}
+	if (Current_Sensor.CalibFinish <= 0)
+	{
+		return 0u;
+	}
+	if (gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE)
+	{
+		return 0u;
+	}
+
+	gRunMode = RUN_MODE_FOC;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
+	gFocCurrentUvSwapTest = sFocCurrentFeedbackMapSwapCases[0];
+	gFocCurrentPolarityInvertTest = sFocCurrentFeedbackMapInvertCases[0];
+	gFocRotatingThetaTestRunning = 0u;
+	gFocRotatingThetaVoltageTestRunning = 0u;
+	gFocCurrentFeedbackMapTestRunning = 1u;
+	sFocCurrentFeedbackMapCaseIndex = 0u;
+	sFocCurrentFeedbackMapCounter = 0u;
+	sFocCurrentFeedbackMapCommand = 0.0f;
+	sFocCurrentFeedbackMapStartPosition = Parameter.fPosition;
+	sFocCurrentFeedbackMapIdAbsAccum = 0.0f;
+	sFocCurrentFeedbackMapIqAccum = 0.0f;
+	sFocCurrentFeedbackMapIqErrAbsAccum = 0.0f;
+	sFocCurrentFeedbackMapSpeedAbsAccum = 0.0f;
+	sFocCurrentFeedbackMapSampleCount = 0u;
+	memset(sFocCurrentFeedbackMapIdAbsAvg, 0, sizeof(sFocCurrentFeedbackMapIdAbsAvg));
+	memset(sFocCurrentFeedbackMapIqAvg, 0, sizeof(sFocCurrentFeedbackMapIqAvg));
+	memset(sFocCurrentFeedbackMapIqErrAbsAvg, 0, sizeof(sFocCurrentFeedbackMapIqErrAbsAvg));
+	memset(sFocCurrentFeedbackMapSpeedAbsAvg, 0, sizeof(sFocCurrentFeedbackMapSpeedAbsAvg));
+	memset(sFocCurrentFeedbackMapDeltaPos, 0, sizeof(sFocCurrentFeedbackMapDeltaPos));
+	USB_QueueFocDebugText(
+		"[CFM] start f=%.2f iq=%.3f frame=%.2f off=%ld",
+		ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ,
+		ROTATING_THETA_TEST_IQ_A,
+		ROTATING_THETA_TEST_FRAME_DEG,
+		(long)Parameter.Offset_Enc);
+	USB_QueueFocDebugText(
+		"[CFM] case=%u name=%s swap=%u inv=%u begin",
+		(unsigned int)sFocCurrentFeedbackMapCaseIndex,
+		GetCurrentFeedbackMapCaseName(sFocCurrentFeedbackMapCaseIndex),
+		(unsigned int)gFocCurrentUvSwapTest,
+		(unsigned int)gFocCurrentPolarityInvertTest);
+	FOC_DEBUG_PRINTF(
+		"[CFM] start f=%.2fHz iq=%.3fA frame=%.2fdeg offset=%ld\r\n",
+		ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ,
+		ROTATING_THETA_TEST_IQ_A,
+		ROTATING_THETA_TEST_FRAME_DEG,
+		(long)Parameter.Offset_Enc);
+	ResetControlLoops();
+	STM_NextState(&StateMachine, START);
+	return 1u;
+}
+
+void StopFocDiagnosticModes(void)
+{
+	gFocDirectionTestStatus = FOC_DIRECTION_TEST_IDLE;
+	gFocAngleFitRunning = 0u;
+	gFocRotatingThetaTestRunning = 0u;
+	gFocRotatingThetaVoltageTestRunning = 0u;
+	gFocCurrentFeedbackMapTestRunning = 0u;
+	gFocCurrentUvSwapTest = 0u;
+	gFocCurrentPolarityInvertTest = 0u;
 }
 static void FinalizeFocDirectionTest(uint8_t result)
 {
@@ -1751,6 +2016,273 @@ static void RunFocDirectionTestLoop(void)
 			FinalizeFocDirectionTest(FOC_DIRECTION_TEST_INCONCLUSIVE);
 			break;
 	}
+}
+
+static void RunFocRotatingThetaTestLoop(void)
+{
+	float voltage_limit;
+	float theta_step_rad;
+	float control_theta;
+	uint16_t log_samples;
+
+	voltage_limit = Parameter.fVdc * ROTATING_THETA_TEST_VOLTAGE_LIMIT_RATIO;
+	if (voltage_limit < ROTATING_THETA_TEST_MIN_VOLTAGE_LIMIT_V)
+	{
+		voltage_limit = ROTATING_THETA_TEST_MIN_VOLTAGE_LIMIT_V;
+	}
+	if (voltage_limit > ROTATING_THETA_TEST_MAX_VOLTAGE_LIMIT_V)
+	{
+		voltage_limit = ROTATING_THETA_TEST_MAX_VOLTAGE_LIMIT_V;
+	}
+	theta_step_rad =
+		(2.0f * PI * ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ) /
+		GetEffectiveCurrentLoopFrequency();
+	log_samples = (uint16_t)ClampFloat(
+		GetEffectiveCurrentLoopFrequency() * ROTATING_THETA_TEST_LOG_TIME_S,
+		1.0f,
+		60000.0f);
+
+	LoadDiagnosticCurrentPiGains();
+	gIdRefA = 0.0f;
+	gIqRefA = ROTATING_THETA_TEST_IQ_A;
+	gTargetSpeedRpm = 0.0f;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	sFocRotatingThetaCommand = WrapAngle(sFocRotatingThetaCommand + theta_step_rad);
+	control_theta = WrapAngle(
+		sFocRotatingThetaCommand + ((ROTATING_THETA_TEST_FRAME_DEG * PI) / 180.0f));
+	gFocRotatingThetaDebugThetaDeg = control_theta * (180.0f / PI);
+	UpdateMeasuredCurrentsForTheta(control_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
+	RunCurrentLoopForTheta(control_theta, 0.0f, ROTATING_THETA_TEST_IQ_A, voltage_limit, 0u);
+	gFocRotatingThetaDebugDeltaPos =
+		(int32_t)lroundf(Parameter.fPosition - sFocRotatingThetaStartPosition);
+
+	if (++sFocRotatingThetaLogCounter >= log_samples)
+	{
+		sFocRotatingThetaLogCounter = 0u;
+		USB_QueueFocDebugText(
+			"[RTH] th=%.1f id=%.3f iq=%.3f pos=%ld sp=%.1f v=%.2f",
+			gFocRotatingThetaDebugThetaDeg,
+			Parameter.fIdq[0],
+			Parameter.fIdq[1],
+			(long)gFocRotatingThetaDebugDeltaPos,
+			Parameter.fActSpeed,
+			voltage_limit);
+		FOC_DEBUG_PRINTF(
+			"[RTH] theta=%.1f deg id=%.3f iq=%.3f pos=%ld speed=%.1f rpm vlim=%.2f\r\n",
+			gFocRotatingThetaDebugThetaDeg,
+			Parameter.fIdq[0],
+			Parameter.fIdq[1],
+			(long)gFocRotatingThetaDebugDeltaPos,
+			Parameter.fActSpeed,
+			voltage_limit);
+	}
+}
+
+static void RunFocRotatingThetaVoltageTestLoop(void)
+{
+	float theta_step_rad;
+	float control_theta;
+	float vq_cmd;
+	uint16_t log_samples;
+
+	theta_step_rad =
+		(2.0f * PI * ROTATING_THETA_VOLTAGE_TEST_ELECTRICAL_FREQ_HZ) /
+		GetEffectiveCurrentLoopFrequency();
+	log_samples = (uint16_t)ClampFloat(
+		GetEffectiveCurrentLoopFrequency() * ROTATING_THETA_VOLTAGE_TEST_LOG_TIME_S,
+		1.0f,
+		60000.0f);
+
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	sFocRotatingThetaVoltageCommand = WrapAngle(sFocRotatingThetaVoltageCommand + theta_step_rad);
+	control_theta = WrapAngle(
+		sFocRotatingThetaVoltageCommand + ((ROTATING_THETA_VOLTAGE_TEST_FRAME_DEG * PI) / 180.0f));
+	gFocRotatingThetaVoltageDebugThetaDeg = control_theta * (180.0f / PI);
+	UpdateMeasuredCurrentsForTheta(control_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
+	vq_cmd = ROTATING_THETA_VOLTAGE_TEST_VQ_V;
+	if (Parameter.fVdc < 1.0f)
+	{
+		vq_cmd = 0.0f;
+	}
+	else if (vq_cmd > (Parameter.fVdc * 0.25f))
+	{
+		vq_cmd = Parameter.fVdc * 0.25f;
+	}
+	ApplyVoltageVectorForTheta(control_theta, 0.0f, vq_cmd);
+	gFocRotatingThetaVoltageDebugDeltaPos =
+		(int32_t)lroundf(Parameter.fPosition - sFocRotatingThetaVoltageStartPosition);
+
+	if (++sFocRotatingThetaVoltageLogCounter >= log_samples)
+	{
+		sFocRotatingThetaVoltageLogCounter = 0u;
+		USB_QueueFocDebugText(
+			"[RTV] th=%.1f id=%.3f iq=%.3f iu=%.3f iv=%.3f pos=%ld sp=%.1f vq=%.2f",
+			gFocRotatingThetaVoltageDebugThetaDeg,
+			Parameter.fIdq[0],
+			Parameter.fIdq[1],
+			Parameter.fIabc[0],
+			Parameter.fIabc[1],
+			(long)gFocRotatingThetaVoltageDebugDeltaPos,
+			Parameter.fActSpeed,
+			vq_cmd);
+		FOC_DEBUG_PRINTF(
+			"[RTV] theta=%.1f deg id=%.3f iq=%.3f iu=%.3f iv=%.3f pos=%ld speed=%.1f rpm vq=%.2f\r\n",
+			gFocRotatingThetaVoltageDebugThetaDeg,
+			Parameter.fIdq[0],
+			Parameter.fIdq[1],
+			Parameter.fIabc[0],
+			Parameter.fIabc[1],
+			(long)gFocRotatingThetaVoltageDebugDeltaPos,
+			Parameter.fActSpeed,
+			vq_cmd);
+	}
+}
+
+static void RunFocCurrentFeedbackMapTestLoop(void)
+{
+	float voltage_limit;
+	float theta_step_rad;
+	float control_theta;
+	uint16_t case_samples;
+	uint8_t current_case;
+	uint32_t sample_count;
+	float id_abs_avg;
+	float iq_avg;
+	float iq_err_abs_avg;
+	float speed_abs_avg;
+	int32_t delta_pos;
+	float best_score;
+	uint8_t best_case;
+	uint8_t index;
+
+	voltage_limit = Parameter.fVdc * ROTATING_THETA_TEST_VOLTAGE_LIMIT_RATIO;
+	if (voltage_limit < ROTATING_THETA_TEST_MIN_VOLTAGE_LIMIT_V)
+	{
+		voltage_limit = ROTATING_THETA_TEST_MIN_VOLTAGE_LIMIT_V;
+	}
+	if (voltage_limit > ROTATING_THETA_TEST_MAX_VOLTAGE_LIMIT_V)
+	{
+		voltage_limit = ROTATING_THETA_TEST_MAX_VOLTAGE_LIMIT_V;
+	}
+	theta_step_rad =
+		(2.0f * PI * ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ) /
+		GetEffectiveCurrentLoopFrequency();
+	case_samples = (uint16_t)ClampFloat(
+		GetEffectiveCurrentLoopFrequency() * CURRENT_FEEDBACK_MAP_TEST_CASE_TIME_S,
+		1.0f,
+		60000.0f);
+
+	LoadDiagnosticCurrentPiGains();
+	gIdRefA = 0.0f;
+	gIqRefA = ROTATING_THETA_TEST_IQ_A;
+	gTargetSpeedRpm = 0.0f;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	sFocCurrentFeedbackMapCommand = WrapAngle(sFocCurrentFeedbackMapCommand + theta_step_rad);
+	control_theta = WrapAngle(
+		sFocCurrentFeedbackMapCommand + ((ROTATING_THETA_TEST_FRAME_DEG * PI) / 180.0f));
+	UpdateMeasuredCurrentsForTheta(control_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
+	RunCurrentLoopForTheta(control_theta, 0.0f, ROTATING_THETA_TEST_IQ_A, voltage_limit, 0u);
+
+	sFocCurrentFeedbackMapIdAbsAccum += fabsf(Parameter.fIdq[0]);
+	sFocCurrentFeedbackMapIqAccum += Parameter.fIdq[1];
+	sFocCurrentFeedbackMapIqErrAbsAccum += fabsf(ROTATING_THETA_TEST_IQ_A - Parameter.fIdq[1]);
+	sFocCurrentFeedbackMapSpeedAbsAccum += fabsf(Parameter.fActSpeed);
+	sFocCurrentFeedbackMapSampleCount++;
+
+	if (++sFocCurrentFeedbackMapCounter < case_samples)
+	{
+		return;
+	}
+
+	current_case = sFocCurrentFeedbackMapCaseIndex;
+	sample_count = (sFocCurrentFeedbackMapSampleCount > 0u) ? sFocCurrentFeedbackMapSampleCount : 1u;
+	id_abs_avg = sFocCurrentFeedbackMapIdAbsAccum / (float)sample_count;
+	iq_avg = sFocCurrentFeedbackMapIqAccum / (float)sample_count;
+	iq_err_abs_avg = sFocCurrentFeedbackMapIqErrAbsAccum / (float)sample_count;
+	speed_abs_avg = sFocCurrentFeedbackMapSpeedAbsAccum / (float)sample_count;
+	delta_pos = (int32_t)lroundf(Parameter.fPosition - sFocCurrentFeedbackMapStartPosition);
+
+	sFocCurrentFeedbackMapIdAbsAvg[current_case] = id_abs_avg;
+	sFocCurrentFeedbackMapIqAvg[current_case] = iq_avg;
+	sFocCurrentFeedbackMapIqErrAbsAvg[current_case] = iq_err_abs_avg;
+	sFocCurrentFeedbackMapSpeedAbsAvg[current_case] = speed_abs_avg;
+	sFocCurrentFeedbackMapDeltaPos[current_case] = delta_pos;
+
+	USB_QueueFocDebugText(
+		"[CFM] case=%u name=%s swap=%u inv=%u idabs=%.3f iqavg=%.3f iqerr=%.3f sp=%.1f pos=%ld",
+		(unsigned int)current_case,
+		GetCurrentFeedbackMapCaseName(current_case),
+		(unsigned int)sFocCurrentFeedbackMapSwapCases[current_case],
+		(unsigned int)sFocCurrentFeedbackMapInvertCases[current_case],
+		id_abs_avg,
+		iq_avg,
+		iq_err_abs_avg,
+		speed_abs_avg,
+		(long)delta_pos);
+	FOC_DEBUG_PRINTF(
+		"[CFM] case=%u name=%s swap=%u inv=%u idabs=%.3f iqavg=%.3f iqerr=%.3f speed=%.1f pos=%ld\r\n",
+		(unsigned int)current_case,
+		GetCurrentFeedbackMapCaseName(current_case),
+		(unsigned int)sFocCurrentFeedbackMapSwapCases[current_case],
+		(unsigned int)sFocCurrentFeedbackMapInvertCases[current_case],
+		id_abs_avg,
+		iq_avg,
+		iq_err_abs_avg,
+		speed_abs_avg,
+		(long)delta_pos);
+
+	sFocCurrentFeedbackMapCaseIndex++;
+	if (sFocCurrentFeedbackMapCaseIndex >= CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT)
+	{
+		best_case = 0u;
+		best_score = sFocCurrentFeedbackMapIdAbsAvg[0] + sFocCurrentFeedbackMapIqErrAbsAvg[0];
+		for (index = 1u; index < CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT; index++)
+		{
+			float score = sFocCurrentFeedbackMapIdAbsAvg[index] + sFocCurrentFeedbackMapIqErrAbsAvg[index];
+			if (score < best_score)
+			{
+				best_score = score;
+				best_case = index;
+			}
+		}
+		USB_QueueFocDebugText(
+			"[CFM] best=%u name=%s swap=%u inv=%u score=%.3f",
+			(unsigned int)best_case,
+			GetCurrentFeedbackMapCaseName(best_case),
+			(unsigned int)sFocCurrentFeedbackMapSwapCases[best_case],
+			(unsigned int)sFocCurrentFeedbackMapInvertCases[best_case],
+			best_score);
+		gFocCurrentFeedbackMapTestRunning = 0u;
+		gFocCurrentUvSwapTest = 0u;
+		gFocCurrentPolarityInvertTest = 0u;
+		gIdRefA = 0.0f;
+		gIqRefA = 0.0f;
+		ApplyVoltageVectorForTheta(Parameter.fTheta, 0.0f, 0.0f);
+		return;
+	}
+
+	gFocCurrentUvSwapTest = sFocCurrentFeedbackMapSwapCases[sFocCurrentFeedbackMapCaseIndex];
+	gFocCurrentPolarityInvertTest = sFocCurrentFeedbackMapInvertCases[sFocCurrentFeedbackMapCaseIndex];
+	sFocCurrentFeedbackMapCounter = 0u;
+	sFocCurrentFeedbackMapStartPosition = Parameter.fPosition;
+	sFocCurrentFeedbackMapIdAbsAccum = 0.0f;
+	sFocCurrentFeedbackMapIqAccum = 0.0f;
+	sFocCurrentFeedbackMapIqErrAbsAccum = 0.0f;
+	sFocCurrentFeedbackMapSpeedAbsAccum = 0.0f;
+	sFocCurrentFeedbackMapSampleCount = 0u;
+	ResetControlLoops();
+	USB_QueueFocDebugText(
+		"[CFM] case=%u name=%s swap=%u inv=%u begin",
+		(unsigned int)sFocCurrentFeedbackMapCaseIndex,
+		GetCurrentFeedbackMapCaseName(sFocCurrentFeedbackMapCaseIndex),
+		(unsigned int)gFocCurrentUvSwapTest,
+		(unsigned int)gFocCurrentPolarityInvertTest);
 }
 
 static void FinalizeFocAngleFit(void)
@@ -2437,8 +2969,8 @@ static void UpdateMeasuredSpeedAndTheta(void)
 		position_single_turn += encoder_resolution;
 	}
 	// Invert for position theta 0 to 2pi match Lib vector tranform
-//	mechanical_angle = (1.0f - (position_single_turn / encoder_resolution)) * (2.0f * PI);
-	mechanical_angle = (position_single_turn / encoder_resolution) * (2.0f * PI);
+  mechanical_angle = (1.0f - (position_single_turn / encoder_resolution)) * (2.0f * PI);
+	// mechanical_angle = (position_single_turn / encoder_resolution) * (2.0f * PI);
 	electrical_angle = mechanical_angle * (float)Parameter.u8PolePair;
 	gDebugMechanicalAngleRad = WrapAngle(mechanical_angle);
 	gDebugElectricalAngleRad = WrapAngle(electrical_angle);
@@ -2480,9 +3012,16 @@ static void ApplyPhaseCurrentFeedbackMapping(float *phase_u, float *phase_v)
 	/* Current polarity is a driver hardware characteristic for this board.
 	   Keep it forced in firmware so every motor uses the same validated
 	   feedback sign. U/V swap remains available only as an extra debug aid. */
-	apply_swap = (FORCE_DRIVER_CURRENT_UV_SWAP != 0u) ||
-		((IdSquareTuning.Enable != 0u) ? (IdSquareTuning.CurrentUvSwapTest != 0u) : (gFocCurrentUvSwapTest != 0u));
-	apply_invert = (FORCE_DRIVER_CURRENT_POLARITY_INVERT != 0u) || (IdSquareTuning.CurrentPolarityInvertTest != 0u);
+	if (IdSquareTuning.Enable != 0u)
+	{
+		apply_swap = (FORCE_DRIVER_CURRENT_UV_SWAP != 0u) || (IdSquareTuning.CurrentUvSwapTest != 0u);
+		apply_invert = (FORCE_DRIVER_CURRENT_POLARITY_INVERT != 0u) || (IdSquareTuning.CurrentPolarityInvertTest != 0u);
+	}
+	else
+	{
+		apply_swap = (FORCE_DRIVER_CURRENT_UV_SWAP != 0u) || (gFocCurrentUvSwapTest != 0u);
+		apply_invert = (FORCE_DRIVER_CURRENT_POLARITY_INVERT != 0u) || (gFocCurrentPolarityInvertTest != 0u);
+	}
 
 	if (apply_swap != 0u)
 	{
@@ -2780,6 +3319,35 @@ static void ReportFault(uint16_t fault)
 		RestoreFocAngleFitOffsetIfNeeded();
 		gFocAngleFitRunning = 0u;
 	}
+	if (gFocRotatingThetaTestRunning != 0u)
+	{
+		USB_QueueFocDebugText(
+			"[RTH] fault=0x%04X th=%.1f off=%ld",
+			(unsigned int)fault,
+			gFocRotatingThetaDebugThetaDeg,
+			(long)Parameter.Offset_Enc);
+		gFocRotatingThetaTestRunning = 0u;
+	}
+	if (gFocRotatingThetaVoltageTestRunning != 0u)
+	{
+		USB_QueueFocDebugText(
+			"[RTV] fault=0x%04X th=%.1f off=%ld",
+			(unsigned int)fault,
+			gFocRotatingThetaVoltageDebugThetaDeg,
+			(long)Parameter.Offset_Enc);
+		gFocRotatingThetaVoltageTestRunning = 0u;
+	}
+	if (gFocCurrentFeedbackMapTestRunning != 0u)
+	{
+		USB_QueueFocDebugText(
+			"[CFM] fault=0x%04X case=%u off=%ld",
+			(unsigned int)fault,
+			(unsigned int)sFocCurrentFeedbackMapCaseIndex,
+			(long)Parameter.Offset_Enc);
+		gFocCurrentFeedbackMapTestRunning = 0u;
+		gFocCurrentUvSwapTest = 0u;
+		gFocCurrentPolarityInvertTest = 0u;
+	}
 	STM_FaultProcessing(&StateMachine, fault, 0xFFFFFFFFu);
 	ResetControlLoops();
 	SetPwmEnabled(0u);
@@ -2815,6 +3383,21 @@ static void RunFocLoop(void)
 	if (gFocAngleFitRunning != 0u)
 	{
 		RunFocAngleFitLoop();
+		return;
+	}
+	if (gFocRotatingThetaTestRunning != 0u)
+	{
+		RunFocRotatingThetaTestLoop();
+		return;
+	}
+	if (gFocRotatingThetaVoltageTestRunning != 0u)
+	{
+		RunFocRotatingThetaVoltageTestLoop();
+		return;
+	}
+	if (gFocCurrentFeedbackMapTestRunning != 0u)
+	{
+		RunFocCurrentFeedbackMapTestLoop();
 		return;
 	}
 
@@ -2895,6 +3478,8 @@ static void RunFocLoop(void)
 	}
 	else
 	{
+		control_theta = WrapAngle(
+			control_theta + ((DEFAULT_RUNTIME_FOC_FRAME_DEG * PI) / 180.0f));
 		switch (gFocElectricalAngleTestMode)
 		{
 			case ID_SQUARE_ANGLE_TEST_PLUS_90:
@@ -3012,7 +3597,7 @@ static void RunFocLoop(void)
 			gCommandedSpeedRpm = speed_reference_rpm;
 			gSpeedPi.fIn = speed_reference_rpm - Parameter.fActSpeed;
 			gSpeedPi.m_calc(&gSpeedPi);
-			gIqRefA = ClampFloat(gSpeedPi.fOut, gSpeedPi.fLowOutLim, gSpeedPi.fUpOutLim); //Get Iq ref for current loop
+			gIqRefA = -ClampFloat(gSpeedPi.fOut, gSpeedPi.fLowOutLim, gSpeedPi.fUpOutLim); //Get Iq ref for current loop
 		}
 
 		voltage_limit = Parameter.fVdc * 0.45f;
