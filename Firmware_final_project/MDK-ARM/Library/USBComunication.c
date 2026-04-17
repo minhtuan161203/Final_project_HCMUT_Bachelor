@@ -1041,6 +1041,8 @@ static uint8_t USB_HandleWriteToFlash(void)
 
 static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_length)
 {
+	float speed_limit_rpm = DriverParameter[MAXIMUM_SPEED];
+	float motor_max_speed_rpm = MotorParameter[MOTOR_MAXIMUM_SPEED];
 	uint8_t foc_angle_test_mode = ID_SQUARE_ANGLE_TEST_NONE;
 	uint8_t foc_current_uv_swap_test = 0u;
 
@@ -1069,13 +1071,41 @@ static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_lengt
 		memcpy(&DriverParameter[ACCELERATION_TIME], &payload[12], sizeof(float));
 		memcpy(&DriverParameter[DECELERATION_TIME], &payload[16], sizeof(float));
 	}
-	if (payload_length >= 21u)
+	if (payload_length >= 24u)
+	{
+		memcpy(&speed_limit_rpm, &payload[20], sizeof(float));
+	}
+	if (payload_length >= 25u)
+	{
+		foc_angle_test_mode = payload[24];
+	}
+	else if (payload_length >= 21u)
 	{
 		foc_angle_test_mode = payload[20];
 	}
-	if (payload_length >= 22u)
+	if (payload_length >= 26u)
+	{
+		foc_current_uv_swap_test = payload[25];
+	}
+	else if (payload_length >= 22u)
 	{
 		foc_current_uv_swap_test = payload[21];
+	}
+
+	if (speed_limit_rpm < 0.0f)
+	{
+		speed_limit_rpm = -speed_limit_rpm;
+	}
+	if (motor_max_speed_rpm > 0.0f)
+	{
+		if ((speed_limit_rpm <= 0.0f) || (speed_limit_rpm > motor_max_speed_rpm))
+		{
+			speed_limit_rpm = motor_max_speed_rpm;
+		}
+	}
+	if (speed_limit_rpm > 0.0f)
+	{
+		DriverParameter[MAXIMUM_SPEED] = speed_limit_rpm;
 	}
 	UpdateDriverParameter(DriverParameter);
 	gFocElectricalAngleTestMode = foc_angle_test_mode;
@@ -1096,12 +1126,19 @@ static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_lengt
 	gTargetPositionCounts = Parameter.fPosition;
 	gCommandedSpeedRpm = Parameter.fActSpeed;
 	gTracePosError = 0.0f;
+	USB_QueueFocDebugText(
+		"[FOC] speed start tgt=%.1f max=%.1f kp=%.3f ki=%.3f",
+		gTargetSpeedRpm,
+		DriverParameter[MAXIMUM_SPEED],
+		DriverParameter[SPEED_P_GAIN],
+		DriverParameter[SPEED_I_GAIN]);
 }
 
 static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_length)
 {
 	float requested_position = Parameter.fPosition;
 	float speed_limit_rpm = DriverParameter[MAXIMUM_SPEED];
+	float motor_max_speed_rpm = MotorParameter[MOTOR_MAXIMUM_SPEED];
 	uint8_t foc_angle_test_mode = ID_SQUARE_ANGLE_TEST_NONE;
 	uint8_t foc_current_uv_swap_test = 0u;
 
@@ -1151,6 +1188,13 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	{
 		speed_limit_rpm = -speed_limit_rpm;
 	}
+	if (motor_max_speed_rpm > 0.0f)
+	{
+		if ((speed_limit_rpm <= 0.0f) || (speed_limit_rpm > motor_max_speed_rpm))
+		{
+			speed_limit_rpm = motor_max_speed_rpm;
+		}
+	}
 	if (speed_limit_rpm > 0.0f)
 	{
 		DriverParameter[MAXIMUM_SPEED] = speed_limit_rpm;
@@ -1163,6 +1207,12 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	gTargetSpeedRpm = DriverParameter[MAXIMUM_SPEED];
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = gTargetPositionCounts - Parameter.fPosition;
+	USB_QueueFocDebugText(
+		"[FOC] pos start tgt=%.1f lim=%.1f act=%.1f err=%.1f",
+		gTargetPositionCounts,
+		DriverParameter[MAXIMUM_SPEED],
+		Parameter.fPosition,
+		gTracePosError);
 }
 
 static void USB_HandleFocControlStop(void)

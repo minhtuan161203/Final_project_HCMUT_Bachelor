@@ -3,7 +3,7 @@
 <title>Static Call Graph - [Firmware_final_project\Firmware_final_project.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image Firmware_final_project\Firmware_final_project.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Fri Apr 17 23:52:47 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sat Apr 18 00:23:11 2026
 <BR><P>
 <H3>Maximum Stack Usage =        704 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -2893,6 +2893,8 @@ Global Symbols
 <LI><a href="#[13b]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
 <LI><a href="#[11f]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FinalizeFocDirectionTest
 <LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FinalizeFocAngleFit
+<LI><a href="#[213]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandleSpeedCommand
+<LI><a href="#[214]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandlePositionCommand
 </UL>
 
 <P><STRONG><a name="[163]"></a>USB_ReadDevAllInEpInterrupt</STRONG> (Thumb, 14 bytes, Stack size 0 bytes, stm32f4xx_ll_usb.o(i.USB_ReadDevAllInEpInterrupt))
@@ -3225,6 +3227,8 @@ Global Symbols
 <LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocAngleFitLoop
 <LI><a href="#[13b]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
 <LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FinalizeFocAngleFit
+<LI><a href="#[213]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandleSpeedCommand
+<LI><a href="#[214]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandlePositionCommand
 </UL>
 
 <P><STRONG><a name="[23f]"></a>_f2d</STRONG> (Thumb, 86 bytes, Stack size 16 bytes, f2d.o(x$fpl$f2d), UNUSED)
@@ -4205,12 +4209,15 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[210]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
 
-<P><STRONG><a name="[214]"></a>USB_HandlePositionCommand</STRONG> (Thumb, 258 bytes, Stack size 48 bytes, usbcomunication.o(i.USB_HandlePositionCommand))
-<BR><BR>[Stack]<UL><LI>Max Depth = 72<LI>Call Chain = USB_HandlePositionCommand &rArr; UpdateDriverParameter &rArr; GetEffectiveSpeedLoopFrequency
+<P><STRONG><a name="[214]"></a>USB_HandlePositionCommand</STRONG> (Thumb, 370 bytes, Stack size 80 bytes, usbcomunication.o(i.USB_HandlePositionCommand))
+<BR><BR>[Stack]<UL><LI>Max Depth = 232 + Unknown Stack Size
+<LI>Call Chain = USB_HandlePositionCommand &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1a7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateDriverParameter
 <LI><a href="#[223]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
+<LI><a href="#[11d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_QueueFocDebugText
 <LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
+<LI><a href="#[11c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_f2d
 </UL>
 <BR>[Called By]<UL><LI><a href="#[210]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
@@ -4225,12 +4232,15 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[210]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
 
-<P><STRONG><a name="[213]"></a>USB_HandleSpeedCommand</STRONG> (Thumb, 252 bytes, Stack size 40 bytes, usbcomunication.o(i.USB_HandleSpeedCommand))
-<BR><BR>[Stack]<UL><LI>Max Depth = 64<LI>Call Chain = USB_HandleSpeedCommand &rArr; UpdateDriverParameter &rArr; GetEffectiveSpeedLoopFrequency
+<P><STRONG><a name="[213]"></a>USB_HandleSpeedCommand</STRONG> (Thumb, 424 bytes, Stack size 72 bytes, usbcomunication.o(i.USB_HandleSpeedCommand))
+<BR><BR>[Stack]<UL><LI>Max Depth = 224 + Unknown Stack Size
+<LI>Call Chain = USB_HandleSpeedCommand &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1a7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateDriverParameter
 <LI><a href="#[223]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
+<LI><a href="#[11d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_QueueFocDebugText
 <LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
+<LI><a href="#[11c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_f2d
 </UL>
 <BR>[Called By]<UL><LI><a href="#[210]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>

@@ -166,6 +166,7 @@ DRIVER_PARAM_SPEED_I_GAIN = 6
 DRIVER_PARAM_ACCEL_TIME_MS = 10
 DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
+MOTOR_PARAM_MAXIMUM_SPEED = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_SPEED")
 MOTOR_PARAM_CURRENT_P_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_P_GAIN")
 MOTOR_PARAM_CURRENT_I_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_I_GAIN")
 
@@ -2021,6 +2022,40 @@ class MainWindow(QtWidgets.QMainWindow):
     def _current_foc_mode(self) -> int:
         return int(self.foc_mode_combo.currentData() or SPEED_CONTROL_MODE)
 
+    def _motor_max_speed_rpm(self) -> float:
+        if not hasattr(self, "motor_table"):
+            return DEFAULT_MOTOR_RATED_SPEED_RPM
+        motor_max_speed = self._table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_MAXIMUM_SPEED,
+            DEFAULT_MOTOR_RATED_SPEED_RPM,
+        )
+        if motor_max_speed <= 0.0:
+            motor_max_speed = DEFAULT_MOTOR_RATED_SPEED_RPM
+        return float(motor_max_speed)
+
+    def _driver_max_speed_rpm(self) -> float:
+        if not hasattr(self, "driver_table"):
+            return DEFAULT_MOTOR_RATED_SPEED_RPM
+        driver_max_speed = self._table_float_value(
+            self.driver_table,
+            DRIVER_PARAM_MAXIMUM_SPEED,
+            DEFAULT_MOTOR_RATED_SPEED_RPM,
+        )
+        if driver_max_speed <= 0.0:
+            driver_max_speed = self._motor_max_speed_rpm()
+        return float(driver_max_speed)
+
+    def _speed_mode_limit_rpm(self) -> float:
+        limit_rpm = max(
+            abs(float(self._foc_speed_target_rpm)),
+            self._driver_max_speed_rpm(),
+            self._motor_max_speed_rpm(),
+        )
+        if limit_rpm <= 0.0:
+            limit_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM
+        return float(limit_rpm)
+
     def _load_foc_controls_from_driver_table(self) -> None:
         if not hasattr(self, "driver_table"):
             return
@@ -2063,10 +2098,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _sync_foc_controls_to_driver_table(self) -> None:
         if not hasattr(self, "driver_table"):
             return
+        mode = self._current_foc_mode()
+        if mode == POSITION_CONTROL_MODE:
+            maximum_speed_rpm = abs(float(self._foc_position_speed_limit_rpm))
+        else:
+            maximum_speed_rpm = self._speed_mode_limit_rpm()
         self._set_table_float_value(
             self.driver_table,
             DRIVER_PARAM_CONTROL_MODE,
-            float(self._current_foc_mode()),
+            float(mode),
         )
         self._set_table_float_value(
             self.driver_table,
@@ -2092,6 +2132,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.driver_table,
             DRIVER_PARAM_DECEL_TIME_MS,
             float(self.foc_decel_spin.value()),
+        )
+        self._set_table_float_value(
+            self.driver_table,
+            DRIVER_PARAM_MAXIMUM_SPEED,
+            maximum_speed_rpm,
         )
 
     def _update_foc_mode_ui(self) -> None:
@@ -2444,9 +2489,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_foc_controls_to_driver_table()
 
         if mode == POSITION_CONTROL_MODE:
+            position_target = float(self.foc_target_position_spin.value())
+            current_position = (
+                float(getattr(last_monitor, "act_position", position_target))
+                if last_monitor is not None
+                else position_target
+            )
             payload = struct.pack(
                 "<7fBB",
-                float(self.foc_target_position_spin.value()),
+                position_target,
                 float(self._foc_position_speed_limit_rpm),
                 float(self.foc_position_kp_spin.value()),
                 float(self.foc_speed_kp_spin.value()),
@@ -2463,23 +2514,40 @@ class MainWindow(QtWidgets.QMainWindow):
                 "frame=none)"
             )
             command = Command.CMD_START_POSITIONCONTROL
+            if abs(position_target - current_position) < 1.0:
+                self.foc_live_summary_label.setText(
+                    "Position Mode start sent, but Target Position already matches the current position within 1 count. Change the target if you expect motion."
+                )
+            else:
+                self.foc_live_summary_label.setText(
+                    f"Starting Position Mode: target {position_target:.1f} cnt | "
+                    f"current {current_position:.1f} cnt | "
+                    f"speed limit {self._foc_position_speed_limit_rpm:.1f} rpm"
+                )
         else:
+            speed_limit_rpm = self._speed_mode_limit_rpm()
             payload = struct.pack(
-                "<5fBB",
+                "<6fBB",
                 float(self._foc_speed_target_rpm),
                 float(self.foc_speed_kp_spin.value()),
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
+                speed_limit_rpm,
                 ID_SQUARE_ANGLE_TEST_NONE,
                 0,
             )
             description = (
                 f"Start FOC Speed Mode "
                 f"(target={self._foc_speed_target_rpm:.1f} rpm, "
+                f"max={speed_limit_rpm:.1f} rpm, "
                 "frame=none)"
             )
             command = Command.CMD_START_SPEEDCONTROL
+            self.foc_live_summary_label.setText(
+                f"Starting Speed Mode: target {self._foc_speed_target_rpm:.1f} rpm | "
+                f"max speed {speed_limit_rpm:.1f} rpm"
+            )
 
         self.foc_status_value_label.setText("Starting...")
         self._enqueue_command(command, payload, description)
