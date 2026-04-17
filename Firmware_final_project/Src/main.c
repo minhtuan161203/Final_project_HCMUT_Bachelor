@@ -3566,7 +3566,7 @@ static void RunFocLoop(void)
 				}
 				else
 				{
-					position_speed_target_rpm = position_error_counts * GetConfiguredPositionGain();
+					position_speed_target_rpm = - position_error_counts * GetConfiguredPositionGain();
 				}
 				position_speed_target_rpm = ClampFloat(
 					position_speed_target_rpm,
