@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import base64
+from bisect import bisect_left
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import html
 import math
 import struct
@@ -86,7 +87,7 @@ from transport import PortDescriptor, SerialWorker, list_serial_ports
 KNOWN_DEVICE_VID = 1100
 KNOWN_DEVICE_PID = 22336
 TREND_BUFFER_CAPACITY = 4000
-TREND_REFRESH_INTERVAL_MS = 33
+TREND_REFRESH_INTERVAL_MS = 20
 TRACE_CAPTURE_REFRESH_INTERVAL_MS = 100
 
 TREND_SERIES_META = {
@@ -225,6 +226,7 @@ class ChartReportCapture:
     image: QtGui.QImage
     series_endpoints: dict[str, QtCore.QPointF]
     series_labels: dict[str, str]
+    series_points: dict[str, list[QtCore.QPointF]] = field(default_factory=dict)
     dpi: int = 300
 
 
@@ -256,17 +258,17 @@ def _series_pen_spec(
 
     role = _series_role_key(series_key, label, index)
     if role == "reference":
-        pen = QtGui.QPen(QtGui.QColor("#000000"), 3.3)
+        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.5)
         pen.setStyle(QtCore.Qt.PenStyle.SolidLine)
-        return pen, None
-    if role == "feedback":
-        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.7)
-        pen.setStyle(QtCore.Qt.PenStyle.DashLine)
         return pen, "square"
+    if role == "feedback":
+        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.5)
+        pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        return pen, "circle"
 
-    pen = QtGui.QPen(QtGui.QColor("#000000"), 2.0)
+    pen = QtGui.QPen(QtGui.QColor("#000000"), 2.5)
     pen.setStyle(QtCore.Qt.PenStyle.DotLine)
-    return pen, "circle"
+    return pen, "diamond"
 
 
 def _draw_series_marker(
@@ -287,9 +289,149 @@ def _draw_series_marker(
         painter.drawRect(
             QtCore.QRectF(center.x() - half, center.y() - half, size_px, size_px)
         )
+    elif marker_shape == "diamond":
+        painter.drawPolygon(
+            QtGui.QPolygonF(
+                [
+                    QtCore.QPointF(center.x(), center.y() - half),
+                    QtCore.QPointF(center.x() + half, center.y()),
+                    QtCore.QPointF(center.x(), center.y() + half),
+                    QtCore.QPointF(center.x() - half, center.y()),
+                ]
+            )
+        )
     else:
         painter.drawEllipse(center, half, half)
     painter.restore()
+
+
+def _report_marker_indices(count: int, step: int = 25) -> list[int]:
+    if count <= 0:
+        return []
+    indices = list(range(step - 1, count, step))
+    if not indices or indices[-1] != count - 1:
+        indices.append(count - 1)
+    return sorted(set(index for index in indices if 0 <= index < count))
+
+
+def _report_marker_ratios(
+    plot_width_px: float,
+    *,
+    min_spacing_px: float = 72.0,
+    edge_padding_ratio: float = 0.04,
+) -> list[float]:
+    usable_width = max(1.0, float(plot_width_px))
+    marker_count = max(4, int(usable_width / max(32.0, min_spacing_px)))
+    start_ratio = max(0.0, min(0.2, edge_padding_ratio))
+    end_ratio = 1.0 - start_ratio
+    if marker_count <= 1 or end_ratio <= start_ratio:
+        return [0.5]
+    step = (end_ratio - start_ratio) / max(1, marker_count - 1)
+    return [start_ratio + (step * index) for index in range(marker_count)]
+
+
+def _nearest_sorted_index(values: list[float], target: float) -> int:
+    if not values:
+        return 0
+    insert_at = bisect_left(values, target)
+    if insert_at <= 0:
+        return 0
+    if insert_at >= len(values):
+        return len(values) - 1
+    prev_value = values[insert_at - 1]
+    next_value = values[insert_at]
+    if abs(target - prev_value) <= abs(next_value - target):
+        return insert_at - 1
+    return insert_at
+
+
+def _common_unit(units: list[str]) -> str:
+    normalized = [unit.strip() for unit in units if unit and unit.strip()]
+    unique = sorted(set(normalized))
+    return unique[0] if len(unique) == 1 else ""
+
+
+def _format_axis_value(value: float, *, unit: str = "", decimals: int = 2) -> str:
+    number = f"{value:.{decimals}f}"
+    return f"{number} {unit}" if unit else number
+
+
+def _format_elapsed_time_label(seconds: float) -> str:
+    if seconds < 1.0:
+        return f"{seconds * 1000.0:.0f} ms"
+    if seconds < 10.0:
+        return f"{seconds:.1f} s"
+    return f"{seconds:.0f} s"
+
+
+def _draw_report_legend_sample(
+    painter: QtGui.QPainter,
+    x: float,
+    y: float,
+    width: float,
+    label: str,
+    series_key: str | None,
+    index: int,
+    text_color: QtGui.QColor,
+) -> float:
+    pen, marker_shape = _series_pen_spec(
+        series_key,
+        label,
+        index,
+        report_mode=True,
+        fallback_color="#000000",
+    )
+    sample_y = y + 5.0
+    painter.save()
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    painter.setPen(pen)
+    painter.drawLine(
+        QtCore.QPointF(x, sample_y),
+        QtCore.QPointF(x + width, sample_y),
+    )
+    _draw_series_marker(
+        painter,
+        QtCore.QPointF(x + width * 0.55, sample_y),
+        marker_shape,
+        7.0,
+        QtGui.QColor("#000000"),
+    )
+    painter.setPen(text_color)
+    painter.restore()
+    return x + width
+
+
+def _build_drag_preview_pixmap(
+    text: str,
+    *,
+    glow_color: str = "#00BFFF",
+) -> QtGui.QPixmap:
+    font = QtGui.QFont("Times New Roman", 12)
+    font.setBold(True)
+    metrics = QtGui.QFontMetrics(font)
+    width = max(96, metrics.horizontalAdvance(text) + 36)
+    height = max(32, metrics.height() + 14)
+    pixmap = QtGui.QPixmap(width, height)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    glow = QtGui.QColor(glow_color)
+    glow.setAlpha(110)
+    painter.setPen(QtCore.Qt.PenStyle.NoPen)
+    painter.setBrush(glow)
+    painter.drawRoundedRect(QtCore.QRectF(2, 2, width - 4, height - 4), 10.0, 10.0)
+    painter.setPen(QtGui.QPen(QtGui.QColor("#00BFFF"), 2.0))
+    painter.setBrush(QtGui.QColor("#ffffff"))
+    painter.drawRoundedRect(QtCore.QRectF(4, 4, width - 8, height - 8), 9.0, 9.0)
+    painter.setFont(font)
+    painter.setPen(QtGui.QColor("#000000"))
+    painter.drawText(
+        QtCore.QRectF(12, 0, width - 24, height),
+        QtCore.Qt.AlignmentFlag.AlignCenter,
+        text,
+    )
+    painter.end()
+    return pixmap
 
 
 def _qimage_to_png_bytes(image: QtGui.QImage) -> bytes:
@@ -307,31 +449,147 @@ class ReportTextItem(QtWidgets.QGraphicsTextItem):
         text: str,
         *,
         bold: bool = False,
+        tag_style: bool = False,
+        owner_annotation: "ArrowAnnotationItem | None" = None,
         parent: QtWidgets.QGraphicsItem | None = None,
     ) -> None:
         super().__init__(text, parent)
-        font = QtGui.QFont("Times New Roman", 13)
-        font.setBold(bold)
+        self._owner_annotation = owner_annotation
+        self._placeholder = text or "Label"
+        self._tag_style = bool(tag_style)
+        self._border_width = 1.8 if self._tag_style else 1.2
+        self._programmatic_move = False
+        self.document().setDocumentMargin(6.0 if self._tag_style else 4.0)
+        font = QtGui.QFont("Times New Roman", 30)
+        font.setBold(bold or self._tag_style)
         self.setFont(font)
         self.setDefaultTextColor(QtGui.QColor("#000000"))
+        self.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.NoTextInteraction)
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
-        self.setZValue(20.0)
+        self.setZValue(25.0)
 
-    def mouseDoubleClickEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
-        text, accepted = QtWidgets.QInputDialog.getText(
-            None,
-            "Edit Label",
-            "Annotation Text",
-            QtWidgets.QLineEdit.EchoMode.Normal,
-            self.toPlainText(),
+    def annotation_owner(self):
+        return self._owner_annotation or self
+
+    def outline_width(self) -> float:
+        return self._border_width
+
+    def set_outline_width(self, value: float) -> None:
+        self._border_width = max(0.5, float(value))
+        self.update()
+
+    def set_font_point_size(self, value: int) -> None:
+        font = QtGui.QFont(self.font())
+        font.setPointSize(int(max(8, min(32, value))))
+        self.setFont(font)
+        self.update()
+
+    def set_canvas_pos(
+        self,
+        pos: QtCore.QPointF,
+        *,
+        by_owner: bool = False,
+    ) -> None:
+        self._programmatic_move = by_owner
+        self.setPos(pos)
+        self._programmatic_move = False
+
+    def start_editing(self, *, select_all: bool = True) -> None:
+        self.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextEditorInteraction
         )
-        if accepted and text.strip():
-            self.setPlainText(text.strip())
-        super().mouseDoubleClickEvent(event)
+        self.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
+        cursor = self.textCursor()
+        if select_all:
+            cursor.select(QtGui.QTextCursor.SelectionType.Document)
+            self.setTextCursor(cursor)
+
+    def boundingRect(self) -> QtCore.QRectF:  # noqa: N802
+        return super().boundingRect().adjusted(-2.0, -2.0, 2.0, 2.0)
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: QtWidgets.QWidget | None = None,
+    ) -> None:
+        _ = widget
+        rect = super().boundingRect().adjusted(-1.5, -1.5, 1.5, 1.5)
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        fill = QtGui.QColor("#f5f5f5" if self._tag_style else "#ffffff")
+        fill.setAlpha(238 if self._tag_style else 224)
+        border = QtGui.QPen(QtGui.QColor("#000000"), self._border_width)
+        if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            border.setWidthF(self._border_width + 0.8)
+            border.setStyle(QtCore.Qt.PenStyle.DashLine)
+        painter.setPen(border)
+        painter.setBrush(QtGui.QBrush(fill))
+        painter.drawRoundedRect(rect, 8.0, 8.0)
+        painter.restore()
+        super().paint(painter, option, widget)
+
+    def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:  # noqa: N802
+        text = self.toPlainText().strip()
+        if not text:
+            self.setPlainText(self._placeholder)
+        else:
+            self.setPlainText(text)
+            self._placeholder = text
+        self.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.NoTextInteraction)
+        super().focusOutEvent(event)
+
+    def mouseDoubleClickEvent(  # noqa: N802
+        self, event: QtWidgets.QGraphicsSceneMouseEvent
+    ) -> None:
+        self.start_editing(select_all=False)
+        event.accept()
+
+    def itemChange(
+        self,
+        change: QtWidgets.QGraphicsItem.GraphicsItemChange,
+        value,
+    ):
+        if (
+            change
+            == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
+            and self._owner_annotation is not None
+            and not self._programmatic_move
+        ):
+            self._owner_annotation.notify_label_moved_by_user(self)
+        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self.update()
+        return super().itemChange(change, value)
+
+    def svg_elements(self, origin: QtCore.QPointF) -> list[str]:
+        scene_rect = self.sceneBoundingRect().translated(-origin)
+        font = self.font()
+        margin = self.document().documentMargin()
+        text_pos = self.scenePos() - origin + QtCore.QPointF(
+            margin,
+            font.pointSizeF() + margin * 0.6,
+        )
+        return [
+            (
+                f"<rect x=\"{scene_rect.x():.2f}\" y=\"{scene_rect.y():.2f}\" "
+                f"width=\"{scene_rect.width():.2f}\" height=\"{scene_rect.height():.2f}\" "
+                f"rx=\"8\" ry=\"8\" fill=\"#ffffff\" fill-opacity=\"0.94\" "
+                f"stroke=\"#000000\" stroke-width=\"{self._border_width:.2f}\" />"
+            ),
+            (
+                f"<text x=\"{text_pos.x():.2f}\" y=\"{text_pos.y():.2f}\" "
+                f"font-family=\"{html.escape(font.family())}\" "
+                f"font-size=\"{font.pointSizeF():.2f}\" "
+                f"font-weight=\"{'700' if font.bold() else '400'}\" "
+                "fill=\"#000000\">"
+                f"{html.escape(self.toPlainText())}</text>"
+            ),
+        ]
 
 
 class ArrowHandleItem(QtWidgets.QGraphicsEllipseItem):
@@ -352,6 +610,10 @@ class ArrowHandleItem(QtWidgets.QGraphicsEllipseItem):
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
         self.setZValue(30.0)
+        self.hide()
+
+    def annotation_owner(self) -> "ArrowAnnotationItem":
+        return self._owner
 
     def itemChange(
         self,
@@ -360,10 +622,16 @@ class ArrowHandleItem(QtWidgets.QGraphicsEllipseItem):
     ):
         if (
             change
+            == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionChange
+            and self._owner is not None
+        ):
+            return self._owner.constrain_handle_position(self, value)
+        if (
+            change
             == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
             and self._owner is not None
         ):
-            self._owner.handle_moved()
+            self._owner.handle_moved(self)
         return super().itemChange(change, value)
 
 
@@ -375,26 +643,95 @@ class ArrowAnnotationItem(QtWidgets.QGraphicsObject):
         parent: QtWidgets.QGraphicsItem | None = None,
     ) -> None:
         super().__init__(parent)
-        self._padding = 14.0
-        self.start_handle = ArrowHandleItem(self, start_point, self)
-        self.end_handle = ArrowHandleItem(self, end_point, self)
+        self._padding = 22.0
+        self._line_thickness = 2.4
+        self._label_detached = False
+        self.setPos(start_point)
+        self.start_handle = ArrowHandleItem(self, QtCore.QPointF(0.0, 0.0), self)
+        self.end_handle = ArrowHandleItem(self, end_point - start_point, self)
+        self.label_item = ReportTextItem(
+            "Callout",
+            owner_annotation=self,
+            parent=self,
+        )
+        self.label_item.set_canvas_pos(self._suggested_label_pos(), by_owner=True)
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
         )
-        self.setZValue(15.0)
+        self.setZValue(18.0)
+
+    def _set_handles_visible(self, visible: bool) -> None:
+        self.start_handle.setVisible(visible)
+        self.end_handle.setVisible(visible)
+
+    def _suggested_label_pos(self) -> QtCore.QPointF:
+        end_point = self.end_handle.pos()
+        return end_point + QtCore.QPointF(12.0, -28.0)
+
+    def constrain_handle_position(
+        self,
+        handle: ArrowHandleItem,
+        value,
+    ) -> QtCore.QPointF:
+        _ = handle
+        if isinstance(value, QtCore.QPointF):
+            return QtCore.QPointF(value)
+        return QtCore.QPointF()
+
+    def notify_label_moved_by_user(self, item: ReportTextItem) -> None:
+        if item is self.label_item:
+            self._label_detached = True
+
+    def line_thickness(self) -> float:
+        return self._line_thickness
+
+    def set_line_thickness(self, value: float) -> None:
+        self.prepareGeometryChange()
+        self._line_thickness = max(0.8, float(value))
+        self.update()
+
+    def text_item(self) -> ReportTextItem:
+        return self.label_item
 
     def boundingRect(self) -> QtCore.QRectF:  # noqa: N802
-        line_rect = QtCore.QRectF(self.start_handle.pos(), self.end_handle.pos()).normalized()
-        return line_rect.adjusted(
+        line_rect = QtCore.QRectF(
+            self.start_handle.pos(), self.end_handle.pos()
+        ).normalized()
+        label_rect = self.label_item.mapRectToParent(self.label_item.boundingRect())
+        return line_rect.united(label_rect).adjusted(
             -self._padding,
             -self._padding,
             self._padding,
             self._padding,
         )
 
-    def handle_moved(self) -> None:
+    def shape(self) -> QtGui.QPainterPath:  # noqa: N802
+        path = QtGui.QPainterPath()
+        path.moveTo(self.start_handle.pos())
+        path.lineTo(self.end_handle.pos())
+        stroker = QtGui.QPainterPathStroker()
+        stroker.setWidth(max(10.0, self._line_thickness + 8.0))
+        result = stroker.createStroke(path)
+        result.addRect(self.label_item.mapRectToParent(self.label_item.boundingRect()))
+        return result
+
+    def itemChange(
+        self,
+        change: QtWidgets.QGraphicsItem.GraphicsItemChange,
+        value,
+    ):
+        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self._set_handles_visible(bool(value))
+            self.update()
+        return super().itemChange(change, value)
+
+    def handle_moved(self, handle: ArrowHandleItem) -> None:
+        _ = handle
         self.prepareGeometryChange()
+        if not self._label_detached:
+            self.label_item.set_canvas_pos(self._suggested_label_pos(), by_owner=True)
         self.update()
 
     def paint(
@@ -403,13 +740,14 @@ class ArrowAnnotationItem(QtWidgets.QGraphicsObject):
         option: QtWidgets.QStyleOptionGraphicsItem,
         widget: QtWidgets.QWidget | None = None,
     ) -> None:
-        _ = option
         _ = widget
         start_point = self.start_handle.pos()
         end_point = self.end_handle.pos()
         painter.save()
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.0)
+        pen = QtGui.QPen(QtGui.QColor("#000000"), self._line_thickness)
+        if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
         painter.setPen(pen)
         painter.drawLine(start_point, end_point)
 
@@ -417,7 +755,7 @@ class ArrowAnnotationItem(QtWidgets.QGraphicsObject):
             start_point.y() - end_point.y(),
             start_point.x() - end_point.x(),
         )
-        arrow_size = 11.0
+        arrow_size = 12.0 + self._line_thickness
         left = QtCore.QPointF(
             end_point.x() + math.cos(angle + math.pi / 6.0) * arrow_size,
             end_point.y() + math.sin(angle + math.pi / 6.0) * arrow_size,
@@ -430,11 +768,501 @@ class ArrowAnnotationItem(QtWidgets.QGraphicsObject):
         painter.drawPolygon(QtGui.QPolygonF([end_point, left, right]))
         painter.restore()
 
+    def mouseDoubleClickEvent(  # noqa: N802
+        self, event: QtWidgets.QGraphicsSceneMouseEvent
+    ) -> None:
+        self.label_item.start_editing(select_all=False)
+        event.accept()
+
     def svg_geometry(self) -> tuple[QtCore.QPointF, QtCore.QPointF]:
         return (
             self.mapToScene(self.start_handle.pos()),
             self.mapToScene(self.end_handle.pos()),
         )
+
+
+class CropOverlayItem(QtWidgets.QGraphicsObject):
+    def __init__(
+        self,
+        image_rect: QtCore.QRectF,
+        on_change,
+        parent: QtWidgets.QGraphicsItem | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._image_rect = QtCore.QRectF(image_rect)
+        self._crop_rect = QtCore.QRectF(image_rect)
+        self._on_change = on_change
+        self._active = False
+        self._handle_size = 12.0
+        self._min_size = 120.0
+        self._drag_mode: str | None = None
+        self._press_pos = QtCore.QPointF()
+        self._press_crop = QtCore.QRectF()
+        self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+        self.setAcceptHoverEvents(True)
+        self.setZValue(12.0)
+
+    def boundingRect(self) -> QtCore.QRectF:  # noqa: N802
+        return QtCore.QRectF(self._image_rect)
+
+    def crop_rect(self) -> QtCore.QRectF:
+        return QtCore.QRectF(self._crop_rect)
+
+    def set_active(self, active: bool) -> None:
+        self._active = bool(active)
+        self.setAcceptedMouseButtons(
+            QtCore.Qt.MouseButton.LeftButton
+            if self._active
+            else QtCore.Qt.MouseButton.NoButton
+        )
+        self.update()
+
+    def set_crop_rect(self, rect: QtCore.QRectF) -> None:
+        crop = QtCore.QRectF(rect).normalized()
+        crop = crop.intersected(self._image_rect)
+        if crop.width() < self._min_size:
+            crop.setWidth(min(self._min_size, self._image_rect.width()))
+        if crop.height() < self._min_size:
+            crop.setHeight(min(self._min_size, self._image_rect.height()))
+        if crop.right() > self._image_rect.right():
+            crop.moveRight(self._image_rect.right())
+        if crop.bottom() > self._image_rect.bottom():
+            crop.moveBottom(self._image_rect.bottom())
+        if crop.left() < self._image_rect.left():
+            crop.moveLeft(self._image_rect.left())
+        if crop.top() < self._image_rect.top():
+            crop.moveTop(self._image_rect.top())
+        self.prepareGeometryChange()
+        self._crop_rect = crop
+        self.update()
+        if callable(self._on_change):
+            self._on_change()
+
+    def _handle_rects(self) -> dict[str, QtCore.QRectF]:
+        half = self._handle_size * 0.5
+        rect = self._crop_rect
+        points = {
+            "top_left": rect.topLeft(),
+            "top": QtCore.QPointF(rect.center().x(), rect.top()),
+            "top_right": rect.topRight(),
+            "right": QtCore.QPointF(rect.right(), rect.center().y()),
+            "bottom_right": rect.bottomRight(),
+            "bottom": QtCore.QPointF(rect.center().x(), rect.bottom()),
+            "bottom_left": rect.bottomLeft(),
+            "left": QtCore.QPointF(rect.left(), rect.center().y()),
+        }
+        return {
+            key: QtCore.QRectF(
+                point.x() - half,
+                point.y() - half,
+                self._handle_size,
+                self._handle_size,
+            )
+            for key, point in points.items()
+        }
+
+    def _hit_test(self, pos: QtCore.QPointF) -> str | None:
+        for key, rect in self._handle_rects().items():
+            if rect.contains(pos):
+                return key
+        if self._crop_rect.contains(pos):
+            return "move"
+        return None
+
+    def _cursor_for_mode(self, mode: str | None) -> QtCore.Qt.CursorShape:
+        mapping = {
+            "top_left": QtCore.Qt.CursorShape.SizeFDiagCursor,
+            "bottom_right": QtCore.Qt.CursorShape.SizeFDiagCursor,
+            "top_right": QtCore.Qt.CursorShape.SizeBDiagCursor,
+            "bottom_left": QtCore.Qt.CursorShape.SizeBDiagCursor,
+            "left": QtCore.Qt.CursorShape.SizeHorCursor,
+            "right": QtCore.Qt.CursorShape.SizeHorCursor,
+            "top": QtCore.Qt.CursorShape.SizeVerCursor,
+            "bottom": QtCore.Qt.CursorShape.SizeVerCursor,
+            "move": QtCore.Qt.CursorShape.SizeAllCursor,
+        }
+        return mapping.get(mode, QtCore.Qt.CursorShape.ArrowCursor)
+
+    def _drag_rect(self, pos: QtCore.QPointF) -> QtCore.QRectF:
+        delta = pos - self._press_pos
+        source = QtCore.QRectF(self._press_crop)
+        if self._drag_mode == "move":
+            candidate = source.translated(delta)
+            if candidate.left() < self._image_rect.left():
+                candidate.translate(self._image_rect.left() - candidate.left(), 0.0)
+            if candidate.right() > self._image_rect.right():
+                candidate.translate(self._image_rect.right() - candidate.right(), 0.0)
+            if candidate.top() < self._image_rect.top():
+                candidate.translate(0.0, self._image_rect.top() - candidate.top())
+            if candidate.bottom() > self._image_rect.bottom():
+                candidate.translate(0.0, self._image_rect.bottom() - candidate.bottom())
+            return candidate
+
+        left = source.left()
+        right = source.right()
+        top = source.top()
+        bottom = source.bottom()
+
+        if self._drag_mode and "left" in self._drag_mode:
+            left = min(
+                max(self._image_rect.left(), source.left() + delta.x()),
+                right - self._min_size,
+            )
+        if self._drag_mode and "right" in self._drag_mode:
+            right = max(
+                min(self._image_rect.right(), source.right() + delta.x()),
+                left + self._min_size,
+            )
+        if self._drag_mode and "top" in self._drag_mode:
+            top = min(
+                max(self._image_rect.top(), source.top() + delta.y()),
+                bottom - self._min_size,
+            )
+        if self._drag_mode and "bottom" in self._drag_mode:
+            bottom = max(
+                min(self._image_rect.bottom(), source.bottom() + delta.y()),
+                top + self._min_size,
+            )
+        return QtCore.QRectF(
+            QtCore.QPointF(left, top),
+            QtCore.QPointF(right, bottom),
+        ).normalized()
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: QtWidgets.QWidget | None = None,
+    ) -> None:
+        _ = option
+        _ = widget
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+        if self._active:
+            outer = QtGui.QPainterPath()
+            outer.addRect(self._image_rect)
+            inner = QtGui.QPainterPath()
+            inner.addRect(self._crop_rect)
+            painter.fillPath(
+                outer.subtracted(inner),
+                QtGui.QColor(120, 120, 120, 110),
+            )
+            border_pen = QtGui.QPen(QtGui.QColor("#000000"), 1.8)
+            border_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            painter.setPen(border_pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._crop_rect)
+            for rect in self._handle_rects().values():
+                painter.setPen(QtGui.QPen(QtGui.QColor("#000000"), 1.2))
+                painter.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
+                painter.drawRect(rect)
+        else:
+            border_pen = QtGui.QPen(QtGui.QColor("#555555"), 1.0)
+            border_pen.setStyle(QtCore.Qt.PenStyle.DotLine)
+            painter.setPen(border_pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._crop_rect)
+        painter.restore()
+
+    def hoverMoveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:  # noqa: N802
+        mode = self._hit_test(event.pos()) if self._active else None
+        self.setCursor(self._cursor_for_mode(mode))
+        super().hoverMoveEvent(event)
+
+    def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if not self._active:
+            event.ignore()
+            return
+        self._drag_mode = self._hit_test(event.pos())
+        if self._drag_mode is None:
+            event.ignore()
+            return
+        self._press_pos = event.pos()
+        self._press_crop = QtCore.QRectF(self._crop_rect)
+        event.accept()
+
+    def mouseMoveEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if not self._active or self._drag_mode is None:
+            event.ignore()
+            return
+        self.set_crop_rect(self._drag_rect(event.pos()))
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        self._drag_mode = None
+        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        super().mouseReleaseEvent(event)
+
+
+class SignalTagBadge(QtWidgets.QLabel):
+    MIME_TYPE = "application/x-report-signal-tag"
+
+    def __init__(self, series_key: str, label: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(label, parent)
+        self.series_key = series_key
+        self.label_text = label
+        self._drag_start = QtCore.QPoint()
+        self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(30)
+        self.setStyleSheet(
+            "QLabel {"
+            "background: #ffffff; color: #111111; border: 1px solid #6c757d; border-radius: 8px;"
+            "padding: 4px 8px; font-weight: 700;}"
+        )
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        self._drag_start = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if not (event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+            return
+        if (
+            event.position().toPoint() - self._drag_start
+        ).manhattanLength() < QtWidgets.QApplication.startDragDistance():
+            return
+
+        drag = QtGui.QDrag(self)
+        mime = QtCore.QMimeData()
+        mime.setData(
+            self.MIME_TYPE,
+            f"{self.series_key}\n{self.label_text}".encode("utf-8"),
+        )
+        drag.setMimeData(mime)
+        drag.setPixmap(_build_drag_preview_pixmap(self.label_text))
+        drag.exec(QtCore.Qt.DropAction.CopyAction)
+
+
+class ReportCanvasView(QtWidgets.QGraphicsView):
+    def __init__(self, dialog: "ReportEditorDialog") -> None:
+        super().__init__(dialog._scene, dialog)
+        self._dialog = dialog
+        self._tool_mode = "select"
+        self._draft_arrow: ArrowAnnotationItem | None = None
+        self.setAcceptDrops(True)
+        self.setMouseTracking(True)
+        self.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        self.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        self.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+        self.setViewportUpdateMode(
+            QtWidgets.QGraphicsView.ViewportUpdateMode.FullViewportUpdate
+        )
+        self.setBackgroundBrush(QtGui.QColor("#1f1f1f"))
+
+    def set_tool_mode(self, mode: str) -> None:
+        self._tool_mode = mode
+        if mode == "select":
+            self.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+            self.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        else:
+            self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
+            self.viewport().setCursor(QtCore.Qt.CursorShape.CrossCursor)
+
+    def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # noqa: N802
+        if event.mimeData().hasFormat(SignalTagBadge.MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event: QtGui.QDragMoveEvent) -> None:  # noqa: N802
+        if event.mimeData().hasFormat(SignalTagBadge.MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QtGui.QDropEvent) -> None:  # noqa: N802
+        if not event.mimeData().hasFormat(SignalTagBadge.MIME_TYPE):
+            super().dropEvent(event)
+            return
+        payload = bytes(event.mimeData().data(SignalTagBadge.MIME_TYPE)).decode(
+            "utf-8", errors="ignore"
+        )
+        scene_pos = self.mapToScene(event.position().toPoint())
+        self._dialog.add_signal_tag_from_payload(payload, scene_pos)
+        event.acceptProposedAction()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if (
+            self._tool_mode == "arrow"
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
+            scene_pos = self._dialog.clamp_scene_point(self.mapToScene(event.pos()))
+            self._draft_arrow = self._dialog.create_arrow(scene_pos, scene_pos)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if self._draft_arrow is not None:
+            scene_pos = self._dialog.clamp_scene_point(self.mapToScene(event.pos()))
+            local_end = self._draft_arrow.mapFromScene(scene_pos)
+            self._draft_arrow.end_handle.setPos(local_end)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if self._draft_arrow is not None:
+            arrow = self._draft_arrow
+            self._draft_arrow = None
+            scene_pos = self._dialog.clamp_scene_point(self.mapToScene(event.pos()))
+            snapped_pos = self._dialog.snap_scene_point(scene_pos)
+            arrow.end_handle.setPos(arrow.mapFromScene(snapped_pos))
+            length = QtCore.QLineF(
+                arrow.start_handle.pos(), arrow.end_handle.pos()
+            ).length()
+            if length < 12.0:
+                self.scene().removeItem(arrow)
+            else:
+                self._dialog.finalize_arrow(arrow)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            super().mouseDoubleClickEvent(event)
+            return
+        if self._tool_mode == "crop":
+            super().mouseDoubleClickEvent(event)
+            return
+
+        item = self.itemAt(event.pos())
+        if isinstance(item, (ReportTextItem, ArrowAnnotationItem, ArrowHandleItem)):
+            super().mouseDoubleClickEvent(event)
+            return
+
+        scene_pos = self._dialog.clamp_scene_point(self.mapToScene(event.pos()))
+        self._dialog.add_text_note_at(scene_pos)
+        event.accept()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._dialog.layout_overlays()
+
+
+class FloatingAnnotationMenu(QtWidgets.QFrame):
+    def __init__(self, view: ReportCanvasView) -> None:
+        super().__init__(view.viewport())
+        self._view = view
+        self._target: ArrowAnnotationItem | ReportTextItem | None = None
+        self._updating = False
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,252); border: 2px solid #7d8b99; border-radius: 10px; }"
+            "QLabel { color: #111111; font-weight: 700; }"
+            "QPushButton { background: #ffffff; color: #111111; border: 1px solid #b8c2cc;"
+            " border-radius: 8px; padding: 5px 10px; font-weight: 700; }"
+            "QPushButton:hover { background: #eef4fb; border-color: #7aa7d9; }"
+            "QSpinBox, QDoubleSpinBox { background: #ffffff; color: #111111;"
+            " border: 1px solid #97a6b4; border-radius: 8px; padding: 4px 8px; font-weight: 600; }"
+        )
+        shadow = QtWidgets.QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(22.0)
+        shadow.setOffset(0.0, 5.0)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 60))
+        self.setGraphicsEffect(shadow)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
+
+        self.delete_button = QtWidgets.QPushButton("Delete")
+        self.delete_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.font_spin = QtWidgets.QSpinBox()
+        self.font_spin.setRange(8, 32)
+        self.font_spin.setSuffix(" pt")
+        self.font_spin.setMinimumWidth(96)
+        self.thickness_spin = QtWidgets.QDoubleSpinBox()
+        self.thickness_spin.setRange(0.5, 8.0)
+        self.thickness_spin.setDecimals(1)
+        self.thickness_spin.setSingleStep(0.5)
+        self.thickness_spin.setSuffix(" px")
+        self.thickness_spin.setMinimumWidth(104)
+        if self.font_spin.lineEdit() is not None:
+            self.font_spin.lineEdit().setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        if self.thickness_spin.lineEdit() is not None:
+            self.thickness_spin.lineEdit().setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(self.delete_button)
+        layout.addWidget(QtWidgets.QLabel("Font"))
+        layout.addWidget(self.font_spin)
+        layout.addWidget(QtWidgets.QLabel("Line"))
+        layout.addWidget(self.thickness_spin)
+
+        self.delete_button.clicked.connect(self._delete_target)
+        self.font_spin.valueChanged.connect(self._apply_font_size)
+        self.thickness_spin.valueChanged.connect(self._apply_thickness)
+        self.hide()
+
+    def _target_text_item(self) -> ReportTextItem | None:
+        if isinstance(self._target, ArrowAnnotationItem):
+            return self._target.text_item()
+        if isinstance(self._target, ReportTextItem):
+            return self._target
+        return None
+
+    def set_target(
+        self, target: ArrowAnnotationItem | ReportTextItem | None
+    ) -> None:
+        self._target = target
+        if target is None:
+            self.hide()
+            return
+
+        self._updating = True
+        text_item = self._target_text_item()
+        if text_item is not None:
+            self.font_spin.setValue(text_item.font().pointSize())
+            self.thickness_spin.setValue(text_item.outline_width())
+        if isinstance(target, ArrowAnnotationItem):
+            self.thickness_spin.setValue(target.line_thickness())
+        self._updating = False
+        self._reposition()
+        self.show()
+        self.raise_()
+
+    def _reposition(self) -> None:
+        if self._target is None:
+            return
+        rect = self._target.sceneBoundingRect()
+        top_right = self._view.mapFromScene(rect.topRight())
+        x = max(8, min(top_right.x() + 12, self._view.viewport().width() - self.width() - 8))
+        y = max(8, min(top_right.y() - 8, self._view.viewport().height() - self.height() - 8))
+        self.move(int(x), int(y))
+
+    def _delete_target(self) -> None:
+        if self._target is None:
+            return
+        scene = self._view.scene()
+        if scene is None:
+            return
+        if isinstance(self._target, ArrowAnnotationItem):
+            scene.removeItem(self._target)
+        else:
+            owner = self._target.annotation_owner()
+            if isinstance(owner, ArrowAnnotationItem):
+                scene.removeItem(owner)
+            else:
+                scene.removeItem(self._target)
+        self.set_target(None)
+
+    def _apply_font_size(self, value: int) -> None:
+        if self._updating:
+            return
+        text_item = self._target_text_item()
+        if text_item is not None:
+            text_item.set_font_point_size(value)
+            self._reposition()
+
+    def _apply_thickness(self, value: float) -> None:
+        if self._updating or self._target is None:
+            return
+        if isinstance(self._target, ArrowAnnotationItem):
+            self._target.set_line_thickness(value)
+        else:
+            self._target.set_outline_width(value)
 
 
 class ReportEditorDialog(QtWidgets.QDialog):
@@ -445,217 +1273,507 @@ class ReportEditorDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Report Editor - {capture.title}")
-        self.resize(1320, 860)
+        self.resize(1440, 920)
         self.setModal(True)
 
         self._capture = capture
         self._base_image = capture.image
         self._base_endpoints = dict(capture.series_endpoints)
         self._series_labels = dict(capture.series_labels)
-        self._caption_prefix = "Figure 1."
-        self._current_endpoints: dict[str, QtCore.QPointF] = {}
+        self._base_rect = QtCore.QRectF(
+            0.0,
+            0.0,
+            float(self._base_image.width()),
+            float(self._base_image.height()),
+        )
 
         self._scene = QtWidgets.QGraphicsScene(self)
-        self._view = QtWidgets.QGraphicsView(self._scene, self)
-        self._view.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        self._view.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        self._view.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
-        self._base_pixmap_item = QtWidgets.QGraphicsPixmapItem()
+        self._view = ReportCanvasView(self)
+        self._base_pixmap_item = QtWidgets.QGraphicsPixmapItem(
+            QtGui.QPixmap.fromImage(self._base_image)
+        )
         self._base_pixmap_item.setZValue(0.0)
         self._scene.addItem(self._base_pixmap_item)
+
+        self._crop_overlay = CropOverlayItem(self._base_rect, self._handle_crop_changed)
+        self._scene.addItem(self._crop_overlay)
+
+        self._caption_backdrop = QtWidgets.QGraphicsRectItem()
+        self._caption_backdrop.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 242)))
+        self._caption_backdrop.setPen(QtGui.QPen(QtGui.QColor("#c4ccd4"), 1.0))
+        self._caption_backdrop.setZValue(9.0)
+        self._scene.addItem(self._caption_backdrop)
+
         self._caption_item = QtWidgets.QGraphicsTextItem()
-        caption_font = QtGui.QFont("Times New Roman", 14)
+        caption_font = QtGui.QFont("Segoe UI", 34)
         caption_font.setBold(True)
         self._caption_item.setFont(caption_font)
-        self._caption_item.setDefaultTextColor(QtGui.QColor("#000000"))
-        self._caption_item.setZValue(5.0)
+        self._caption_item.setDefaultTextColor(QtGui.QColor("#101418"))
+        self._caption_item.setZValue(10.0)
         self._scene.addItem(self._caption_item)
 
-        controls_layout = QtWidgets.QVBoxLayout()
-        instructions = QtWidgets.QLabel(
-            "Workflow: crop the captured chart, add draggable labels or signal tags, place arrow callouts, then export to clipboard or disk. Double-click any text label to rename it."
-        )
-        instructions.setWordWrap(True)
-        controls_layout.addWidget(instructions)
+        self._floating_menu = FloatingAnnotationMenu(self._view)
+        self._series_points = {
+            key: [QtCore.QPointF(point) for point in points]
+            for key, points in capture.series_points.items()
+        }
 
-        caption_group = QtWidgets.QGroupBox("Caption / Figure")
-        caption_layout = QtWidgets.QGridLayout(caption_group)
-        self.figure_prefix_edit = QtWidgets.QLineEdit("Figure 1.")
-        self.caption_edit = QtWidgets.QLineEdit(capture.title)
-        caption_layout.addWidget(QtWidgets.QLabel("Figure Prefix"), 0, 0)
-        caption_layout.addWidget(self.figure_prefix_edit, 0, 1)
-        caption_layout.addWidget(QtWidgets.QLabel("Caption"), 1, 0)
-        caption_layout.addWidget(self.caption_edit, 1, 1)
-        controls_layout.addWidget(caption_group)
-
-        crop_group = QtWidgets.QGroupBox("Crop Margins (px)")
-        crop_layout = QtWidgets.QGridLayout(crop_group)
-        self.crop_left_spin = QtWidgets.QSpinBox()
-        self.crop_right_spin = QtWidgets.QSpinBox()
-        self.crop_top_spin = QtWidgets.QSpinBox()
-        self.crop_bottom_spin = QtWidgets.QSpinBox()
-        for spin in (
-            self.crop_left_spin,
-            self.crop_right_spin,
-            self.crop_top_spin,
-            self.crop_bottom_spin,
-        ):
-            spin.setRange(0, 4000)
-        crop_layout.addWidget(QtWidgets.QLabel("Left"), 0, 0)
-        crop_layout.addWidget(self.crop_left_spin, 0, 1)
-        crop_layout.addWidget(QtWidgets.QLabel("Right"), 0, 2)
-        crop_layout.addWidget(self.crop_right_spin, 0, 3)
-        crop_layout.addWidget(QtWidgets.QLabel("Top"), 1, 0)
-        crop_layout.addWidget(self.crop_top_spin, 1, 1)
-        crop_layout.addWidget(QtWidgets.QLabel("Bottom"), 1, 2)
-        crop_layout.addWidget(self.crop_bottom_spin, 1, 3)
-        controls_layout.addWidget(crop_group)
-
-        annotation_group = QtWidgets.QGroupBox("Annotations")
-        annotation_layout = QtWidgets.QGridLayout(annotation_group)
-        self.annotation_text_button = QtWidgets.QPushButton("Add Text Label")
-        self.add_arrow_button = QtWidgets.QPushButton("Add Arrow")
-        self.remove_selected_button = QtWidgets.QPushButton("Remove Selected")
-        self.signal_tag_combo = QtWidgets.QComboBox()
-        self.signal_tag_combo.addItems(list(self._series_labels.keys()))
-        self.add_signal_tag_button = QtWidgets.QPushButton("Add Signal Tag")
-        annotation_layout.addWidget(self.annotation_text_button, 0, 0, 1, 2)
-        annotation_layout.addWidget(self.add_arrow_button, 1, 0)
-        annotation_layout.addWidget(self.remove_selected_button, 1, 1)
-        annotation_layout.addWidget(QtWidgets.QLabel("Signal"), 2, 0)
-        annotation_layout.addWidget(self.signal_tag_combo, 2, 1)
-        annotation_layout.addWidget(self.add_signal_tag_button, 3, 0, 1, 2)
-        controls_layout.addWidget(annotation_group)
-
-        export_group = QtWidgets.QGroupBox("Final Export")
-        export_layout = QtWidgets.QVBoxLayout(export_group)
+        self.select_tool_button = QtWidgets.QToolButton()
+        self.select_tool_button.setText("Select")
+        self.select_tool_button.setCheckable(True)
+        self.crop_tool_button = QtWidgets.QToolButton()
+        self.crop_tool_button.setText("Crop")
+        self.crop_tool_button.setCheckable(True)
+        self.arrow_tool_button = QtWidgets.QToolButton()
+        self.arrow_tool_button.setText("Arrow")
+        self.arrow_tool_button.setCheckable(True)
+        self.add_label_button = QtWidgets.QToolButton()
+        self.add_label_button.setText("Add Label")
+        self.fit_view_button = QtWidgets.QToolButton()
+        self.fit_view_button.setText("Fit View")
         self.copy_clipboard_button = QtWidgets.QPushButton("Save to Clipboard")
         self.save_png_button = QtWidgets.QPushButton("Save PNG")
         self.save_svg_button = QtWidgets.QPushButton("Save SVG")
+
+        overlay_style = (
+            "QFrame { background: rgba(255, 255, 255, 255);"
+            " border: 2px solid #97a6b4; border-radius: 12px; }"
+            "QLabel { color: #101418; font-weight: 700; }"
+            "QToolButton, QPushButton {"
+            " background: #ffffff; color: #111111; border: 1px solid #b4c0cb;"
+            " border-radius: 8px; padding: 6px 12px; font-weight: 700; }"
+            "QToolButton:hover, QPushButton:hover { background: #eef5ff; border-color: #4f8dd6; }"
+            "QToolButton:checked { background: #0d6efd; color: #ffffff; border-color: #0b5ed7; }"
+            "QLineEdit { background: #ffffff; color: #111111; border: 1px solid #97a6b4;"
+            " border-radius: 8px; padding: 6px 10px; selection-background-color: #b6d4fe; font-weight: 600; }"
+        )
+        self._tool_palette = QtWidgets.QFrame(self._view.viewport())
+        self._tool_palette.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self._tool_palette.setStyleSheet(overlay_style)
+        toolbar_layout = QtWidgets.QHBoxLayout(self._tool_palette)
+        toolbar_layout.setContentsMargins(12, 10, 12, 10)
+        toolbar_layout.setSpacing(8)
+        toolbar_layout.addWidget(self.select_tool_button)
+        toolbar_layout.addWidget(self.crop_tool_button)
+        toolbar_layout.addWidget(self.arrow_tool_button)
+        toolbar_layout.addWidget(self.add_label_button)
+        toolbar_layout.addWidget(self.fit_view_button)
+
+        self._export_palette = QtWidgets.QFrame(self._view.viewport())
+        self._export_palette.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self._export_palette.setStyleSheet(overlay_style)
+        export_layout = QtWidgets.QHBoxLayout(self._export_palette)
+        export_layout.setContentsMargins(12, 10, 12, 10)
+        export_layout.setSpacing(8)
         export_layout.addWidget(self.copy_clipboard_button)
         export_layout.addWidget(self.save_png_button)
         export_layout.addWidget(self.save_svg_button)
-        controls_layout.addWidget(export_group)
-        controls_layout.addStretch(1)
 
-        right_layout = QtWidgets.QVBoxLayout()
-        right_layout.addWidget(self._view, 1)
+        self._tag_palette = QtWidgets.QFrame(self._view.viewport())
+        self._tag_palette.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self._tag_palette.setStyleSheet(overlay_style)
+        palette_layout = QtWidgets.QVBoxLayout(self._tag_palette)
+        palette_layout.setContentsMargins(12, 12, 12, 12)
+        palette_layout.setSpacing(8)
+        palette_title = QtWidgets.QLabel("Signal Tags")
+        palette_title.setStyleSheet("font-weight: 800; color: #111111;")
+        palette_help = QtWidgets.QLabel("Drag a tag straight onto the chart line.")
+        palette_help.setWordWrap(True)
+        palette_help.setStyleSheet("color: #374151; font-size: 11px; font-weight: 600;")
+        palette_layout.addWidget(palette_title)
+        palette_layout.addWidget(palette_help)
+        for series_key, label in self._ordered_signal_tags():
+            palette_layout.addWidget(SignalTagBadge(series_key, label, self._tag_palette))
+        palette_layout.addStretch(1)
 
-        main_layout = QtWidgets.QHBoxLayout(self)
-        main_layout.addLayout(controls_layout, 0)
-        main_layout.addLayout(right_layout, 1)
+        self._caption_overlay = QtWidgets.QFrame(self._view.viewport())
+        self._caption_overlay.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self._caption_overlay.setStyleSheet(overlay_style)
+        caption_layout = QtWidgets.QHBoxLayout(self._caption_overlay)
+        caption_layout.setContentsMargins(12, 10, 12, 10)
+        caption_layout.setSpacing(8)
+        self.figure_prefix_edit = QtWidgets.QLineEdit("Figure 1.")
+        self.caption_edit = QtWidgets.QLineEdit(capture.title)
+        caption_layout.addWidget(QtWidgets.QLabel("Figure"))
+        caption_layout.addWidget(self.figure_prefix_edit, 0)
+        caption_layout.addWidget(QtWidgets.QLabel("Caption"))
+        caption_layout.addWidget(self.caption_edit, 1)
 
-        self.figure_prefix_edit.textChanged.connect(self._update_caption_item)
-        self.caption_edit.textChanged.connect(self._update_caption_item)
-        self.crop_left_spin.valueChanged.connect(self._refresh_base_image)
-        self.crop_right_spin.valueChanged.connect(self._refresh_base_image)
-        self.crop_top_spin.valueChanged.connect(self._refresh_base_image)
-        self.crop_bottom_spin.valueChanged.connect(self._refresh_base_image)
-        self.annotation_text_button.clicked.connect(self._add_annotation_label)
-        self.add_arrow_button.clicked.connect(self._add_arrow)
-        self.remove_selected_button.clicked.connect(self._remove_selected_items)
-        self.add_signal_tag_button.clicked.connect(self._add_signal_tag)
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(self._view, 1)
+
+        for widget in (
+            self._tool_palette,
+            self._export_palette,
+            self._tag_palette,
+            self._caption_overlay,
+        ):
+            shadow = QtWidgets.QGraphicsDropShadowEffect(widget)
+            shadow.setBlurRadius(24.0)
+            shadow.setOffset(0.0, 6.0)
+            shadow.setColor(QtGui.QColor(0, 0, 0, 58))
+            widget.setGraphicsEffect(shadow)
+
+        self.select_tool_button.clicked.connect(lambda: self._set_tool_mode("select"))
+        self.crop_tool_button.clicked.connect(lambda: self._set_tool_mode("crop"))
+        self.arrow_tool_button.clicked.connect(lambda: self._set_tool_mode("arrow"))
+        self.add_label_button.clicked.connect(self._add_annotation_label)
+        self.fit_view_button.clicked.connect(self._fit_to_artboard)
         self.copy_clipboard_button.clicked.connect(self._copy_to_clipboard)
         self.save_png_button.clicked.connect(self._save_png)
         self.save_svg_button.clicked.connect(self._save_svg)
+        self.figure_prefix_edit.textChanged.connect(self._update_caption_item)
+        self.caption_edit.textChanged.connect(self._update_caption_item)
+        self._scene.selectionChanged.connect(self._update_context_menu)
 
-        self._refresh_base_image()
+        self._set_tool_mode("select")
+        self._tool_palette.show()
+        self._export_palette.show()
+        self._tag_palette.show()
+        self._caption_overlay.show()
+        QtCore.QTimer.singleShot(0, self._finish_initial_layout)
 
-    def _crop_rect(self) -> QtCore.QRect:
-        width = self._base_image.width()
-        height = self._base_image.height()
-        left = min(self.crop_left_spin.value(), width - 10)
-        top = min(self.crop_top_spin.value(), height - 10)
-        right = min(self.crop_right_spin.value(), max(0, width - left - 10))
-        bottom = min(self.crop_bottom_spin.value(), max(0, height - top - 10))
-        return QtCore.QRect(left, top, width - left - right, height - top - bottom)
+    def _ordered_signal_tags(self) -> list[tuple[str, str]]:
+        entries = list(self._series_labels.items())
 
-    def _refresh_base_image(self) -> None:
-        crop = self._crop_rect()
-        cropped_image = self._base_image.copy(crop)
-        self._current_endpoints = {}
-        for series_key, point in self._base_endpoints.items():
-            adjusted = QtCore.QPointF(point.x() - crop.left(), point.y() - crop.top())
-            if 0.0 <= adjusted.x() <= cropped_image.width() and 0.0 <= adjusted.y() <= cropped_image.height():
-                self._current_endpoints[series_key] = adjusted
+        def rank(item: tuple[str, str]) -> tuple[int, str]:
+            key, label = item
+            token = f"{key} {label}".lower()
+            if "iq" in token:
+                return (0, label)
+            if "id" in token:
+                return (1, label)
+            if "speed" in token:
+                return (2, label)
+            return (3, label)
 
-        self._base_pixmap_item.setPixmap(QtGui.QPixmap.fromImage(cropped_image))
-        self._base_pixmap_item.setPos(0.0, 0.0)
+        entries.sort(key=rank)
+        return entries
+
+    def _finish_initial_layout(self) -> None:
+        self.layout_overlays()
         self._update_caption_item()
-        self._scene.setSceneRect(self._scene.itemsBoundingRect().adjusted(-20, -20, 20, 20))
-        self._view.fitInView(self._scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit_to_artboard()
+
+    def image_scene_rect(self) -> QtCore.QRectF:
+        return QtCore.QRectF(self._base_rect)
+
+    def clamp_scene_point(self, point: QtCore.QPointF) -> QtCore.QPointF:
+        return QtCore.QPointF(
+            min(max(point.x(), self._base_rect.left()), self._base_rect.right()),
+            min(max(point.y(), self._base_rect.top()), self._base_rect.bottom()),
+        )
+
+    def _set_tool_mode(self, mode: str) -> None:
+        self.select_tool_button.setChecked(mode == "select")
+        self.crop_tool_button.setChecked(mode == "crop")
+        self.arrow_tool_button.setChecked(mode == "arrow")
+        self._view.set_tool_mode(mode)
+        self._crop_overlay.set_active(mode == "crop")
+        if mode == "crop":
+            self._scene.clearSelection()
+        self._update_context_menu()
+
+    def _handle_crop_changed(self) -> None:
+        self._update_caption_item()
+        self._scene.setSceneRect(self._scene.itemsBoundingRect().adjusted(-30, -30, 30, 30))
 
     def _update_caption_item(self) -> None:
         figure_prefix = self.figure_prefix_edit.text().strip() or "Figure 1."
         caption_text = self.caption_edit.text().strip() or self._capture.title
         self._caption_item.setPlainText(f"{figure_prefix} {caption_text}")
-        base_rect = self._base_pixmap_item.boundingRect()
+        crop_rect = self._crop_overlay.crop_rect()
         caption_rect = self._caption_item.boundingRect()
-        self._caption_item.setPos(
-            max(0.0, (base_rect.width() - caption_rect.width()) * 0.5),
-            base_rect.height() + 18.0,
+        caption_pos = QtCore.QPointF(
+            max(0.0, crop_rect.center().x() - caption_rect.width() * 0.5),
+            crop_rect.bottom() + 22.0,
         )
-        self._scene.setSceneRect(self._scene.itemsBoundingRect().adjusted(-20, -20, 20, 20))
+        self._caption_item.setPos(caption_pos)
+        scene_caption_rect = self._caption_item.mapToScene(caption_rect).boundingRect()
+        backdrop_rect = scene_caption_rect.adjusted(-16.0, -8.0, 16.0, 10.0)
+        self._caption_backdrop.setRect(backdrop_rect)
+        self._scene.setSceneRect(self._scene.itemsBoundingRect().adjusted(-30, -30, 30, 30))
+
+    def _fit_view_reserved_rect(self) -> QtCore.QRectF:
+        viewport = self._view.viewport()
+        if viewport is None:
+            return QtCore.QRectF()
+        rect = QtCore.QRectF(viewport.rect())
+        margin = 16.0
+        top_reserved = 0.0
+        left_reserved = 0.0
+        bottom_reserved = 0.0
+
+        if self._tool_palette.isVisible():
+            top_reserved = max(
+                top_reserved,
+                float(self._tool_palette.y() + self._tool_palette.height() + margin),
+            )
+        if self._export_palette.isVisible():
+            top_reserved = max(
+                top_reserved,
+                float(self._export_palette.y() + self._export_palette.height() + margin),
+            )
+        if self._tag_palette.isVisible():
+            left_reserved = max(
+                left_reserved,
+                float(self._tag_palette.x() + self._tag_palette.width() + margin),
+            )
+            top_reserved = max(
+                top_reserved,
+                float(self._tag_palette.y() + min(28, self._tag_palette.height() // 4)),
+            )
+        if self._caption_overlay.isVisible():
+            bottom_reserved = max(
+                bottom_reserved,
+                float(viewport.height() - self._caption_overlay.y() + margin),
+            )
+
+        return rect.adjusted(left_reserved, top_reserved, -margin, -bottom_reserved)
+
+    def _fit_to_artboard(self) -> None:
+        target_rect = self._crop_overlay.crop_rect().united(
+            self._caption_backdrop.mapToScene(self._caption_backdrop.rect()).boundingRect()
+        )
+        target_rect = target_rect.adjusted(-30.0, -30.0, 30.0, 30.0)
+        available_rect = self._fit_view_reserved_rect()
+        if available_rect.width() <= 40.0 or available_rect.height() <= 40.0:
+            self._view.fitInView(
+                target_rect,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            )
+            return
+
+        scale_x = available_rect.width() / max(1.0, target_rect.width())
+        scale_y = available_rect.height() / max(1.0, target_rect.height())
+        scale = max(0.01, min(scale_x, scale_y))
+
+        transform = QtGui.QTransform()
+        transform.scale(scale, scale)
+        self._view.setTransform(transform)
+
+        viewport_rect = QtCore.QRectF(self._view.viewport().rect())
+        delta_view = available_rect.center() - viewport_rect.center()
+        delta_scene = QtCore.QPointF(delta_view.x() / scale, delta_view.y() / scale)
+        self._view.centerOn(target_rect.center() - delta_scene)
+
+    def _default_drop_point(self) -> QtCore.QPointF:
+        crop_rect = self._crop_overlay.crop_rect()
+        return crop_rect.center() + QtCore.QPointF(-30.0, -20.0)
 
     def _add_annotation_label(self) -> None:
-        text, accepted = QtWidgets.QInputDialog.getText(
-            self,
-            "Add Annotation",
-            "Label",
-            QtWidgets.QLineEdit.EchoMode.Normal,
-            "Overshoot",
-        )
-        if not accepted or not text.strip():
-            return
-        item = ReportTextItem(text.strip())
-        base_rect = self._base_pixmap_item.boundingRect()
-        item.setPos(base_rect.center() + QtCore.QPointF(-40.0, -20.0))
+        self.add_text_note_at(self._default_drop_point())
+
+    def add_text_note_at(self, scene_pos: QtCore.QPointF) -> None:
+        item = ReportTextItem("Note")
+        item.set_canvas_pos(self.clamp_scene_point(scene_pos))
         self._scene.addItem(item)
+        self._scene.clearSelection()
+        item.setSelected(True)
+        item.start_editing()
+        self._set_tool_mode("select")
+        self._update_context_menu()
 
-    def _add_signal_tag(self) -> None:
-        series_key = self.signal_tag_combo.currentText()
-        label = self._series_labels.get(series_key, series_key)
-        item = ReportTextItem(label, bold=True)
-        endpoint = self._current_endpoints.get(series_key)
-        if endpoint is None:
-            base_rect = self._base_pixmap_item.boundingRect()
-            item.setPos(base_rect.topRight() + QtCore.QPointF(-140.0, 20.0))
-        else:
-            item.setPos(endpoint + QtCore.QPointF(14.0, -18.0))
-        self._scene.addItem(item)
-
-    def _add_arrow(self) -> None:
-        base_rect = self._base_pixmap_item.boundingRect()
-        center = base_rect.center()
-        arrow = ArrowAnnotationItem(
-            center + QtCore.QPointF(-70.0, -40.0),
-            center + QtCore.QPointF(30.0, 10.0),
-        )
-        self._scene.addItem(arrow)
-
-    def _remove_selected_items(self) -> None:
-        for item in list(self._scene.selectedItems()):
-            if item in (self._base_pixmap_item, self._caption_item):
+    def _nearest_series_point(
+        self,
+        scene_pos: QtCore.QPointF,
+        *,
+        series_key: str | None = None,
+        radius: float = 96.0,
+    ) -> QtCore.QPointF | None:
+        candidate_keys = [series_key] if series_key is not None else list(self._series_points.keys())
+        best_point: QtCore.QPointF | None = None
+        best_distance = radius
+        for key in candidate_keys:
+            if key is None:
                 continue
-            self._scene.removeItem(item)
+            for point in self._series_points.get(key, []):
+                if not self._crop_overlay.crop_rect().contains(point):
+                    continue
+                distance = QtCore.QLineF(scene_pos, point).length()
+                if distance < best_distance:
+                    best_distance = distance
+                    best_point = QtCore.QPointF(point)
+        return best_point
+
+    def snap_scene_point(self, scene_pos: QtCore.QPointF) -> QtCore.QPointF:
+        nearest = self._nearest_series_point(scene_pos, radius=72.0)
+        if nearest is not None:
+            return nearest
+        return self.clamp_scene_point(scene_pos)
+
+    def _snap_signal_tag_position(
+        self,
+        series_key: str,
+        scene_pos: QtCore.QPointF,
+    ) -> QtCore.QPointF:
+        nearest = self._nearest_series_point(
+            scene_pos,
+            series_key=series_key,
+            radius=120.0,
+        )
+        if nearest is not None:
+            return nearest + QtCore.QPointF(14.0, -18.0)
+        endpoint = self._base_endpoints.get(series_key)
+        if endpoint is None:
+            return scene_pos
+        if self._crop_overlay.crop_rect().contains(endpoint):
+            if QtCore.QLineF(scene_pos, endpoint).length() <= 90.0:
+                return endpoint + QtCore.QPointF(14.0, -18.0)
+        return scene_pos
+
+    def add_signal_tag_from_payload(
+        self, payload: str, scene_pos: QtCore.QPointF
+    ) -> None:
+        parts = payload.splitlines()
+        if not parts:
+            return
+        series_key = parts[0].strip()
+        label = parts[1].strip() if len(parts) > 1 else self._series_labels.get(series_key, series_key)
+        item = ReportTextItem(label, bold=True, tag_style=True)
+        item.set_canvas_pos(self._snap_signal_tag_position(series_key, scene_pos))
+        self._scene.addItem(item)
+        self._scene.clearSelection()
+        item.setSelected(True)
+        self._set_tool_mode("select")
+        self._update_context_menu()
+
+    def create_arrow(
+        self,
+        start_point: QtCore.QPointF,
+        end_point: QtCore.QPointF,
+    ) -> ArrowAnnotationItem:
+        arrow = ArrowAnnotationItem(start_point, end_point)
+        self._scene.addItem(arrow)
+        return arrow
+
+    def finalize_arrow(self, arrow: ArrowAnnotationItem) -> None:
+        self._scene.clearSelection()
+        arrow.setSelected(True)
+        arrow.text_item().start_editing()
+        self._set_tool_mode("select")
+        self._update_context_menu()
+
+    def _selected_annotation_target(self):
+        if self._crop_overlay.crop_rect().isNull():
+            return None
+        if self.crop_tool_button.isChecked():
+            return None
+        for item in self._scene.selectedItems():
+            if isinstance(item, ArrowAnnotationItem):
+                return item
+            if isinstance(item, ReportTextItem):
+                owner = item.annotation_owner()
+                return owner if isinstance(owner, ArrowAnnotationItem) else item
+            if isinstance(item, ArrowHandleItem):
+                return item.annotation_owner()
+        return None
+
+    def _update_context_menu(self) -> None:
+        target = self._selected_annotation_target()
+        self._floating_menu.set_target(target)
+
+    def layout_overlays(self) -> None:
+        viewport = self._view.viewport()
+        if viewport is None:
+            return
+        margin = 14
+
+        for widget in (
+            self._tool_palette,
+            self._export_palette,
+            self._tag_palette,
+            self._caption_overlay,
+        ):
+            widget.adjustSize()
+
+        self._tool_palette.move(margin, margin)
+        self._export_palette.move(
+            max(margin, viewport.width() - self._export_palette.width() - margin),
+            margin,
+        )
+        self._tag_palette.move(
+            margin,
+            max(
+                self._tool_palette.y() + self._tool_palette.height() + margin,
+                margin + 92,
+            ),
+        )
+        max_overlay_width = max(260, viewport.width() - (2 * margin))
+        caption_width = min(max_overlay_width, max(420, viewport.width() - (2 * margin) - 120))
+        self._caption_overlay.resize(
+            caption_width,
+            self._caption_overlay.sizeHint().height(),
+        )
+        self._caption_overlay.move(
+            max(margin, (viewport.width() - self._caption_overlay.width()) // 2),
+            max(
+                margin,
+                viewport.height() - self._caption_overlay.height() - margin,
+            ),
+        )
+
+        self._floating_menu.raise_()
+        self._tool_palette.raise_()
+        self._export_palette.raise_()
+        self._tag_palette.raise_()
+        self._caption_overlay.raise_()
+
+    def _export_scene_rect(self) -> QtCore.QRectF:
+        crop_rect = self._crop_overlay.crop_rect()
+        caption_rect = self._caption_backdrop.mapToScene(
+            self._caption_backdrop.rect()
+        ).boundingRect()
+        return crop_rect.united(caption_rect).adjusted(-12.0, -12.0, 12.0, 12.0)
+
+    def _prepare_export(self) -> tuple[list[QtWidgets.QGraphicsItem], bool]:
+        selected = list(self._scene.selectedItems())
+        for item in selected:
+            item.setSelected(False)
+        overlay_visible = self._crop_overlay.isVisible()
+        self._crop_overlay.setVisible(False)
+        self._floating_menu.hide()
+        return selected, overlay_visible
+
+    def _restore_export(
+        self,
+        selected: list[QtWidgets.QGraphicsItem],
+        overlay_visible: bool,
+    ) -> None:
+        self._crop_overlay.setVisible(overlay_visible)
+        for item in selected:
+            item.setSelected(True)
+        self._update_context_menu()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.layout_overlays()
 
     def _render_scene_to_image(self) -> QtGui.QImage:
-        scene_rect = self._scene.itemsBoundingRect().adjusted(10.0, 10.0, 10.0, 10.0)
-        image = QtGui.QImage(
-            int(scene_rect.width()),
-            int(scene_rect.height()),
-            QtGui.QImage.Format.Format_ARGB32,
-        )
-        image.fill(QtGui.QColor("#ffffff"))
-        painter = QtGui.QPainter(image)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        self._scene.render(
-            painter,
-            QtCore.QRectF(image.rect()),
-            scene_rect,
-        )
-        painter.end()
-        return image
+        export_rect = self._export_scene_rect()
+        selected, overlay_visible = self._prepare_export()
+        try:
+            image = QtGui.QImage(
+                max(1, int(math.ceil(export_rect.width()))),
+                max(1, int(math.ceil(export_rect.height()))),
+                QtGui.QImage.Format.Format_ARGB32,
+            )
+            dpi = max(96, int(self._capture.dpi))
+            image.setDotsPerMeterX(int(dpi / 25.4 * 1000.0))
+            image.setDotsPerMeterY(int(dpi / 25.4 * 1000.0))
+            image.fill(QtGui.QColor("#ffffff"))
+            painter = QtGui.QPainter(image)
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            self._scene.render(
+                painter,
+                QtCore.QRectF(image.rect()),
+                export_rect,
+            )
+            painter.end()
+            return image
+        finally:
+            self._restore_export(selected, overlay_visible)
 
     def _copy_to_clipboard(self) -> None:
         QtWidgets.QApplication.clipboard().setImage(self._render_scene_to_image())
@@ -681,11 +1799,13 @@ class ReportEditorDialog(QtWidgets.QDialog):
         if not path:
             return
 
-        crop_image = self._base_pixmap_item.pixmap().toImage()
+        export_rect = self._export_scene_rect()
+        crop_rect = self._crop_overlay.crop_rect().toRect().intersected(self._base_image.rect())
+        crop_image = self._base_image.copy(crop_rect)
         png_b64 = base64.b64encode(_qimage_to_png_bytes(crop_image)).decode("ascii")
-        scene_rect = self._scene.itemsBoundingRect().adjusted(10.0, 10.0, 10.0, 10.0)
-        width = max(1.0, scene_rect.width())
-        height = max(1.0, scene_rect.height())
+        origin = export_rect.topLeft()
+        width = max(1.0, export_rect.width())
+        height = max(1.0, export_rect.height())
 
         svg_lines = [
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
@@ -693,74 +1813,77 @@ class ReportEditorDialog(QtWidgets.QDialog):
                 f"<svg xmlns=\"http://www.w3.org/2000/svg\" "
                 f"xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
                 f"width=\"{width:.0f}\" height=\"{height:.0f}\" "
-                f"viewBox=\"{scene_rect.x():.2f} {scene_rect.y():.2f} {width:.2f} {height:.2f}\">"
+                f"viewBox=\"0 0 {width:.2f} {height:.2f}\">"
             ),
             "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>",
             (
-                f"<image x=\"0\" y=\"0\" width=\"{crop_image.width()}\" height=\"{crop_image.height()}\" "
+                f"<image x=\"{crop_rect.x() - origin.x():.2f}\" y=\"{crop_rect.y() - origin.y():.2f}\" "
+                f"width=\"{crop_image.width()}\" height=\"{crop_image.height()}\" "
                 f"xlink:href=\"data:image/png;base64,{png_b64}\" />"
             ),
         ]
 
-        for item in self._scene.items():
-            if isinstance(item, ArrowAnnotationItem):
-                start_point, end_point = item.svg_geometry()
-                angle = math.atan2(
-                    start_point.y() - end_point.y(),
-                    start_point.x() - end_point.x(),
-                )
-                arrow_size = 11.0
-                left = QtCore.QPointF(
-                    end_point.x() + math.cos(angle + math.pi / 6.0) * arrow_size,
-                    end_point.y() + math.sin(angle + math.pi / 6.0) * arrow_size,
-                )
-                right = QtCore.QPointF(
-                    end_point.x() + math.cos(angle - math.pi / 6.0) * arrow_size,
-                    end_point.y() + math.sin(angle - math.pi / 6.0) * arrow_size,
-                )
-                svg_lines.append(
-                    (
-                        f"<line x1=\"{start_point.x():.2f}\" y1=\"{start_point.y():.2f}\" "
-                        f"x2=\"{end_point.x():.2f}\" y2=\"{end_point.y():.2f}\" "
-                        f"stroke=\"#000000\" stroke-width=\"2\" />"
+        selected, overlay_visible = self._prepare_export()
+        try:
+            for item in self._scene.items():
+                if isinstance(item, ArrowAnnotationItem):
+                    if not item.sceneBoundingRect().intersects(export_rect):
+                        continue
+                    start_point, end_point = item.svg_geometry()
+                    start_point -= origin
+                    end_point -= origin
+                    angle = math.atan2(
+                        start_point.y() - end_point.y(),
+                        start_point.x() - end_point.x(),
                     )
-                )
-                svg_lines.append(
-                    (
-                        "<polygon "
-                        f"points=\"{end_point.x():.2f},{end_point.y():.2f} "
-                        f"{left.x():.2f},{left.y():.2f} "
-                        f"{right.x():.2f},{right.y():.2f}\" "
-                        "fill=\"#000000\" />"
+                    arrow_size = 12.0 + item.line_thickness()
+                    left = QtCore.QPointF(
+                        end_point.x() + math.cos(angle + math.pi / 6.0) * arrow_size,
+                        end_point.y() + math.sin(angle + math.pi / 6.0) * arrow_size,
                     )
-                )
-            elif isinstance(item, ReportTextItem):
-                scene_pos = item.scenePos()
-                font = item.font()
-                svg_lines.append(
-                    (
-                        f"<text x=\"{scene_pos.x():.2f}\" y=\"{scene_pos.y() + font.pointSizeF():.2f}\" "
-                        f"font-family=\"{html.escape(font.family())}\" "
-                        f"font-size=\"{font.pointSizeF():.2f}\" "
-                        f"font-weight=\"{'700' if font.bold() else '400'}\" "
-                        "fill=\"#000000\">"
-                        f"{html.escape(item.toPlainText())}</text>"
+                    right = QtCore.QPointF(
+                        end_point.x() + math.cos(angle - math.pi / 6.0) * arrow_size,
+                        end_point.y() + math.sin(angle - math.pi / 6.0) * arrow_size,
                     )
-                )
+                    svg_lines.append(
+                        (
+                            f"<line x1=\"{start_point.x():.2f}\" y1=\"{start_point.y():.2f}\" "
+                            f"x2=\"{end_point.x():.2f}\" y2=\"{end_point.y():.2f}\" "
+                            f"stroke=\"#000000\" stroke-width=\"{item.line_thickness():.2f}\" />"
+                        )
+                    )
+                    svg_lines.append(
+                        (
+                            "<polygon "
+                            f"points=\"{end_point.x():.2f},{end_point.y():.2f} "
+                            f"{left.x():.2f},{left.y():.2f} "
+                            f"{right.x():.2f},{right.y():.2f}\" "
+                            "fill=\"#000000\" />"
+                        )
+                    )
 
-        caption_text = html.escape(self._caption_item.toPlainText())
-        caption_font = self._caption_item.font()
-        caption_pos = self._caption_item.scenePos()
-        svg_lines.append(
-            (
-                f"<text x=\"{caption_pos.x():.2f}\" y=\"{caption_pos.y() + caption_font.pointSizeF():.2f}\" "
-                f"font-family=\"{html.escape(caption_font.family())}\" "
-                f"font-size=\"{caption_font.pointSizeF():.2f}\" font-weight=\"700\" fill=\"#000000\">"
-                f"{caption_text}</text>"
+            for item in self._scene.items():
+                if not isinstance(item, ReportTextItem):
+                    continue
+                if not item.sceneBoundingRect().intersects(export_rect):
+                    continue
+                svg_lines.extend(item.svg_elements(origin))
+
+            caption_text = html.escape(self._caption_item.toPlainText())
+            caption_font = self._caption_item.font()
+            caption_pos = self._caption_item.scenePos() - origin
+            svg_lines.append(
+                (
+                    f"<text x=\"{caption_pos.x():.2f}\" y=\"{caption_pos.y() + caption_font.pointSizeF():.2f}\" "
+                    f"font-family=\"{html.escape(caption_font.family())}\" "
+                    f"font-size=\"{caption_font.pointSizeF():.2f}\" font-weight=\"700\" fill=\"#000000\">"
+                    f"{caption_text}</text>"
+                )
             )
-        )
-        svg_lines.append("</svg>")
+        finally:
+            self._restore_export(selected, overlay_visible)
 
+        svg_lines.append("</svg>")
         with open(path, "w", encoding="utf-8") as svg_file:
             svg_file.write("\n".join(svg_lines))
 
@@ -892,9 +2015,11 @@ class ScadaTrendView(QtWidgets.QWidget):
         self._report_font_point_size = int(max(12, min(24, value)))
         self.update()
 
-    def build_report_capture(self, dpi: int = 300) -> ChartReportCapture:
+    def prepare_for_report(self, dpi: int = 300) -> ChartReportCapture:
         if not self._render_times:
             self.refresh_from_buffer()
+        previous_report_mode = self._report_mode
+        self._report_mode = True
         scale = float(dpi) / 96.0
         image = QtGui.QImage(
             int(self.width() * scale),
@@ -903,14 +2028,17 @@ class ScadaTrendView(QtWidgets.QWidget):
         )
         image.setDotsPerMeterX(int(dpi / 25.4 * 1000.0))
         image.setDotsPerMeterY(int(dpi / 25.4 * 1000.0))
-        image.fill(QtGui.QColor("#ffffff") if self._report_mode else self.palette().base().color())
+        image.fill(QtGui.QColor("#ffffff"))
 
         previous_hover = self._hover_index
         self._hover_index = None
         painter = QtGui.QPainter(image)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.scale(scale, scale)
-        self.render(painter)
+        try:
+            self.render(painter)
+        finally:
+            self._report_mode = previous_report_mode
         painter.end()
         self._hover_index = previous_hover
 
@@ -919,8 +2047,12 @@ class ScadaTrendView(QtWidgets.QWidget):
             image=image,
             series_endpoints=self._series_endpoint_map(scale_factor=scale),
             series_labels={key: TREND_SERIES_META[key]["label"] for key in self._series_keys},
+            series_points=self._series_point_map(scale_factor=scale),
             dpi=dpi,
         )
+
+    def build_report_capture(self, dpi: int = 300) -> ChartReportCapture:
+        return self.prepare_for_report(dpi=dpi)
 
     def refresh_from_buffer(self) -> None:
         anchor_s = self._buffer.latest_timestamp()
@@ -993,12 +2125,13 @@ class ScadaTrendView(QtWidgets.QWidget):
         scale = self._render_scale()
         title_height = QtGui.QFontMetrics(self._title_font()).height() + int(4 * scale)
         legend_height = max(QtGui.QFontMetrics(self._legend_font()).height(), int(10 * scale)) + int(8 * scale)
-        bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(18 * scale)
+        bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(30 * scale)
+        right_axis_space = int(42 * scale)
         legend_y = rect.top() + title_height + int(6 * scale)
         plot_rect = QtCore.QRectF(
             rect.left(),
             legend_y + legend_height + int(8 * scale),
-            rect.width(),
+            rect.width() - right_axis_space,
             rect.height() - title_height - legend_height - bottom_space - int(16 * scale),
         )
         return plot_rect, title_height, legend_height, bottom_space
@@ -1007,6 +2140,9 @@ class ScadaTrendView(QtWidgets.QWidget):
         metrics = QtGui.QFontMetrics(self._legend_font())
         scale = self._render_scale()
         return max(int(metrics.horizontalAdvance(TREND_SERIES_META[key]["label"]) + (42 * scale)), 96)
+
+    def _y_axis_unit(self) -> str:
+        return _common_unit([TREND_SERIES_META[key]["unit"] for key in self._series_keys])
 
     def _series_endpoint_map(self, scale_factor: float = 1.0) -> dict[str, QtCore.QPointF]:
         if not self._render_times:
@@ -1035,6 +2171,44 @@ class ScadaTrendView(QtWidgets.QWidget):
             endpoint_map[key] = QtCore.QPointF(x * scale_factor, y * scale_factor)
         return endpoint_map
 
+    def _series_point_map(
+        self,
+        *,
+        scale_factor: float = 1.0,
+        point_limit: int = 220,
+    ) -> dict[str, list[QtCore.QPointF]]:
+        if not self._render_times:
+            return {}
+        rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
+        plot_rect, _, _, _ = self._plot_geometry(rect)
+        if plot_rect.height() <= 0:
+            return {}
+        y_min, y_max = self._frozen_range
+        y_span = max(y_max - y_min, 0.1)
+        start_time = self._render_anchor_s - self._time_window_s
+        point_map: dict[str, list[QtCore.QPointF]] = {}
+        for key in self._series_keys:
+            series = self._render_values.get(key, [])
+            if not series:
+                continue
+            step = max(1, len(series) // point_limit)
+            indices = list(range(0, len(series), step))
+            if indices[-1] != len(series) - 1:
+                indices.append(len(series) - 1)
+            points: list[QtCore.QPointF] = []
+            for index in indices:
+                time_ratio = (
+                    (self._render_times[index] - start_time) / self._time_window_s
+                    if self._time_window_s > 0
+                    else 1.0
+                )
+                time_ratio = min(max(time_ratio, 0.0), 1.0)
+                x = plot_rect.left() + (plot_rect.width() * time_ratio)
+                y = plot_rect.bottom() - (((series[index] - y_min) / y_span) * plot_rect.height())
+                points.append(QtCore.QPointF(x * scale_factor, y * scale_factor))
+            point_map[key] = points
+        return point_map
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         super().paintEvent(event)
 
@@ -1058,28 +2232,41 @@ class ScadaTrendView(QtWidgets.QWidget):
         legend_y = rect.top() + title_height + int(6 * self._render_scale())
         legend_x = rect.left()
         painter.setFont(self._legend_font())
-        for key in self._series_keys:
-            legend_color = QtGui.QColor(TREND_SERIES_META[key]["color"]) if not self._report_mode else QtGui.QColor("#000000")
-            painter.fillRect(
-                QtCore.QRect(
+        for series_index, key in enumerate(self._series_keys):
+            legend_scale = self._render_scale()
+            if self._report_mode:
+                _draw_report_legend_sample(
+                    painter,
                     legend_x,
-                    legend_y,
-                    int(10 * self._render_scale()),
-                    int(10 * self._render_scale()),
-                ),
-                legend_color,
-            )
+                    legend_y + (legend_height * 0.5) - (5.0 * legend_scale),
+                    28.0 * legend_scale,
+                    TREND_SERIES_META[key]["label"],
+                    key,
+                    series_index,
+                    colors["text"],
+                )
+            else:
+                legend_color = QtGui.QColor(TREND_SERIES_META[key]["color"])
+                painter.fillRect(
+                    QtCore.QRect(
+                        legend_x,
+                        legend_y,
+                        int(10 * legend_scale),
+                        int(10 * legend_scale),
+                    ),
+                    legend_color,
+                )
             painter.drawText(
                 QtCore.QRect(
-                    legend_x + int(14 * self._render_scale()),
-                    legend_y - int(3 * self._render_scale()),
+                    legend_x + int((42 if self._report_mode else 14) * legend_scale),
+                    legend_y - int(3 * legend_scale),
                     self._legend_step_width(key),
                     legend_height,
                 ),
                 QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
                 TREND_SERIES_META[key]["label"],
             )
-            legend_x += self._legend_step_width(key) + int(18 * self._render_scale())
+            legend_x += self._legend_step_width(key) + int((22 if self._report_mode else 18) * legend_scale)
 
         if plot_rect.height() <= 0:
             return
@@ -1113,32 +2300,46 @@ class ScadaTrendView(QtWidgets.QWidget):
 
         painter.setFont(self._tick_font())
         value_text_rect = QtCore.QRectF(
-            plot_rect.right() - (90 * self._render_scale()),
-            plot_rect.top() + (4 * self._render_scale()),
-            86 * self._render_scale(),
+            plot_rect.right() - (78 * self._render_scale()),
+            plot_rect.top() + (6 * self._render_scale()),
+            74 * self._render_scale(),
             18 * self._render_scale(),
         )
         painter.setPen(colors["text"])
-        painter.drawText(value_text_rect, QtCore.Qt.AlignmentFlag.AlignRight, f"{y_max:.2f}")
-        value_text_rect.moveBottom(plot_rect.bottom() - 4)
-        painter.drawText(value_text_rect, QtCore.Qt.AlignmentFlag.AlignRight, f"{y_min:.2f}")
+        y_unit = self._y_axis_unit()
+        painter.drawText(
+            value_text_rect,
+            QtCore.Qt.AlignmentFlag.AlignRight,
+            _format_axis_value(y_max, unit=y_unit, decimals=2),
+        )
+        value_text_rect.moveTop(plot_rect.bottom() - (28 * self._render_scale()))
+        painter.drawText(
+            value_text_rect,
+            QtCore.Qt.AlignmentFlag.AlignRight,
+            _format_axis_value(y_min, unit=y_unit, decimals=2),
+        )
 
-        time_labels = [0.0, self._time_window_s / 2.0, self._time_window_s]
-        for offset_s in time_labels:
-            ratio = offset_s / self._time_window_s if self._time_window_s > 0 else 0.0
-            x = plot_rect.right() - (plot_rect.width() * ratio)
+        time_labels = [0.0, self._time_window_s * 0.5, self._time_window_s]
+        for time_index, elapsed_s in enumerate(time_labels):
+            ratio = elapsed_s / self._time_window_s if self._time_window_s > 0 else 0.0
+            x = plot_rect.left() + (plot_rect.width() * ratio)
             painter.drawLine(
                 QtCore.QPointF(x, plot_rect.bottom()),
                 QtCore.QPointF(x, plot_rect.bottom() + 4),
             )
-            label = "now" if offset_s == 0.0 else f"-{offset_s:.0f}s"
+            label = _format_elapsed_time_label(elapsed_s)
+            label_rect = QtCore.QRectF(
+                x - (34 * self._render_scale()),
+                plot_rect.bottom() + (10 * self._render_scale()),
+                68 * self._render_scale(),
+                18 * self._render_scale(),
+            )
+            if time_index == 0:
+                label_rect.moveLeft(plot_rect.left())
+            elif time_index == len(time_labels) - 1:
+                label_rect.moveRight(plot_rect.right() - (4 * self._render_scale()))
             painter.drawText(
-                QtCore.QRectF(
-                    x - (28 * self._render_scale()),
-                    plot_rect.bottom() + (6 * self._render_scale()),
-                    56 * self._render_scale(),
-                    16 * self._render_scale(),
-                ),
+                label_rect,
                 QtCore.Qt.AlignmentFlag.AlignCenter,
                 label,
             )
@@ -1173,14 +2374,11 @@ class ScadaTrendView(QtWidgets.QWidget):
             painter.setPen(series_pen)
             painter.drawPath(path)
             if self._report_mode:
-                marker_step = max(1, len(series) // 6)
                 marker_color = QtGui.QColor("#000000")
-                for marker_index in range(marker_step - 1, len(series), marker_step):
-                    time_ratio = (
-                        (self._render_times[marker_index] - (self._render_anchor_s - self._time_window_s))
-                        / self._time_window_s
-                    )
-                    time_ratio = min(max(time_ratio, 0.0), 1.0)
+                window_start = self._render_anchor_s - self._time_window_s
+                for time_ratio in _report_marker_ratios(plot_rect.width(), min_spacing_px=64.0):
+                    target_time = window_start + (time_ratio * self._time_window_s)
+                    marker_index = _nearest_sorted_index(self._render_times, target_time)
                     x = plot_rect.left() + (plot_rect.width() * time_ratio)
                     y = plot_rect.bottom() - (((series[marker_index] - y_min) / y_span) * plot_rect.height())
                     _draw_series_marker(
@@ -1370,7 +2568,9 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._report_font_point_size = int(max(12, min(24, value)))
         self.update()
 
-    def build_report_capture(self, dpi: int = 300) -> ChartReportCapture:
+    def prepare_for_report(self, dpi: int = 300) -> ChartReportCapture:
+        previous_report_mode = self._report_mode
+        self._report_mode = True
         scale = float(dpi) / 96.0
         image = QtGui.QImage(
             int(self.width() * scale),
@@ -1379,14 +2579,17 @@ class ScopeCaptureView(QtWidgets.QWidget):
         )
         image.setDotsPerMeterX(int(dpi / 25.4 * 1000.0))
         image.setDotsPerMeterY(int(dpi / 25.4 * 1000.0))
-        image.fill(QtGui.QColor("#ffffff") if self._report_mode else self.palette().base().color())
+        image.fill(QtGui.QColor("#ffffff"))
 
         previous_hover = self._hover_index
         self._hover_index = None
         painter = QtGui.QPainter(image)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.scale(scale, scale)
-        self.render(painter)
+        try:
+            self.render(painter)
+        finally:
+            self._report_mode = previous_report_mode
         painter.end()
         self._hover_index = previous_hover
 
@@ -1397,8 +2600,12 @@ class ScopeCaptureView(QtWidgets.QWidget):
             series_labels={
                 series_def["label"]: series_def["label"] for series_def in self._series_defs
             },
+            series_points=self._series_point_map(scale_factor=scale),
             dpi=dpi,
         )
+
+    def build_report_capture(self, dpi: int = 300) -> ChartReportCapture:
+        return self.prepare_for_report(dpi=dpi)
 
     def set_capture(
         self,
@@ -1475,12 +2682,14 @@ class ScopeCaptureView(QtWidgets.QWidget):
         scale = self._render_scale()
         title_height = QtGui.QFontMetrics(self._title_font()).height() + int(4 * scale)
         legend_height = max(QtGui.QFontMetrics(self._legend_font()).height(), int(10 * scale)) + int(8 * scale)
-        bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(18 * scale)
+        bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(38 * scale)
         legend_y = rect.top() + title_height + int(8 * scale)
+        left_axis_space = int(8 * scale)
+        right_axis_space = int(62 * scale)
         plot_rect = QtCore.QRectF(
-            rect.left(),
+            rect.left() + left_axis_space,
             legend_y + legend_height + int(8 * scale),
-            rect.width(),
+            max(80.0, rect.width() - left_axis_space - right_axis_space),
             rect.height() - title_height - legend_height - bottom_space - int(18 * scale),
         )
         return plot_rect, title_height, legend_height
@@ -1505,6 +2714,41 @@ class ScopeCaptureView(QtWidgets.QWidget):
             endpoint_map[series_def["label"]] = QtCore.QPointF(x * scale_factor, y * scale_factor)
         return endpoint_map
 
+    def _y_axis_unit(self) -> str:
+        return _common_unit([series_def.get("unit", "") for series_def in self._series_defs])
+
+    def _series_point_map(
+        self,
+        *,
+        scale_factor: float = 1.0,
+        point_limit: int = 220,
+    ) -> dict[str, list[QtCore.QPointF]]:
+        if not self._series_data or not self._series_data[0]:
+            return {}
+        rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
+        plot_rect, _, _ = self._plot_geometry(rect)
+        if plot_rect.height() <= 0:
+            return {}
+        y_min, y_max = self._frozen_range
+        y_span = max(y_max - y_min, 0.1)
+        sample_count = len(self._series_data[0])
+        point_map: dict[str, list[QtCore.QPointF]] = {}
+        for series_def, series in zip(self._series_defs, self._series_data):
+            if not series:
+                continue
+            step = max(1, len(series) // point_limit)
+            indices = list(range(0, len(series), step))
+            if indices[-1] != len(series) - 1:
+                indices.append(len(series) - 1)
+            points: list[QtCore.QPointF] = []
+            for index in indices:
+                ratio = index / max(sample_count - 1, 1)
+                x = plot_rect.left() + plot_rect.width() * ratio
+                y = plot_rect.bottom() - (((series[index] - y_min) / y_span) * plot_rect.height())
+                points.append(QtCore.QPointF(x * scale_factor, y * scale_factor))
+            point_map[series_def["label"]] = points
+        return point_map
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         super().paintEvent(event)
         painter = QtGui.QPainter(self)
@@ -1525,28 +2769,41 @@ class ScopeCaptureView(QtWidgets.QWidget):
         legend_y = rect.top() + title_height + int(8 * self._render_scale())
         legend_x = rect.left()
         painter.setFont(self._legend_font())
-        for series_def in self._series_defs:
-            painter.fillRect(
-                QtCore.QRect(
+        for series_index, series_def in enumerate(self._series_defs):
+            legend_scale = self._render_scale()
+            if self._report_mode:
+                _draw_report_legend_sample(
+                    painter,
                     legend_x,
-                    legend_y,
-                    int(10 * self._render_scale()),
-                    int(10 * self._render_scale()),
-                ),
-                QtGui.QColor(series_def["color"]) if not self._report_mode else QtGui.QColor("#000000"),
-            )
+                    legend_y + (legend_height * 0.5) - (5.0 * legend_scale),
+                    28.0 * legend_scale,
+                    series_def["label"],
+                    None,
+                    series_index,
+                    colors["text"],
+                )
+            else:
+                painter.fillRect(
+                    QtCore.QRect(
+                        legend_x,
+                        legend_y,
+                        int(10 * legend_scale),
+                        int(10 * legend_scale),
+                    ),
+                    QtGui.QColor(series_def["color"]),
+                )
             text_width = QtGui.QFontMetrics(self._legend_font()).horizontalAdvance(series_def["label"])
             painter.drawText(
                 QtCore.QRect(
-                    legend_x + int(14 * self._render_scale()),
-                    legend_y - int(3 * self._render_scale()),
-                    max(text_width + int(32 * self._render_scale()), 120),
+                    legend_x + int((42 if self._report_mode else 14) * legend_scale),
+                    legend_y - int(3 * legend_scale),
+                    max(text_width + int(50 * self._render_scale()), 120),
                     legend_height,
                 ),
                 QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
                 series_def["label"],
             )
-            legend_x += max(text_width + int(42 * self._render_scale()), 124)
+            legend_x += max(text_width + int((70 if self._report_mode else 42) * legend_scale), 124)
 
         self._plot_rect = plot_rect
         painter.setPen(QtGui.QPen(colors["border"], 1.2 if self._report_mode else 1.0))
@@ -1571,14 +2828,48 @@ class ScopeCaptureView(QtWidgets.QWidget):
 
         painter.setPen(colors["text"])
         painter.setFont(self._tick_font())
-        painter.drawText(QtCore.QRectF(plot_rect.right() - 90, plot_rect.top() + 4, 86, 16), QtCore.Qt.AlignmentFlag.AlignRight, f"{y_max:.3f}")
-        painter.drawText(QtCore.QRectF(plot_rect.right() - 90, plot_rect.bottom() - 18, 86, 16), QtCore.Qt.AlignmentFlag.AlignRight, f"{y_min:.3f}")
+        scale = self._render_scale()
+        y_unit = self._y_axis_unit()
+        painter.drawText(
+            QtCore.QRectF(
+                plot_rect.right() - (88 * scale),
+                plot_rect.top() + (6 * scale),
+                84 * scale,
+                18 * scale,
+            ),
+            QtCore.Qt.AlignmentFlag.AlignRight,
+            _format_axis_value(y_max, unit=y_unit, decimals=3),
+        )
+        painter.drawText(
+            QtCore.QRectF(
+                plot_rect.right() - (88 * scale),
+                plot_rect.bottom() - (34 * scale),
+                84 * scale,
+                18 * scale,
+            ),
+            QtCore.Qt.AlignmentFlag.AlignRight,
+            _format_axis_value(y_min, unit=y_unit, decimals=3),
+        )
 
         for marker_ratio in (0.0, 0.5, 1.0):
             x = plot_rect.left() + plot_rect.width() * marker_ratio
             marker_ms = total_ms * marker_ratio
             painter.drawLine(QtCore.QPointF(x, plot_rect.bottom()), QtCore.QPointF(x, plot_rect.bottom() + 4))
-            painter.drawText(QtCore.QRectF(x - 28, plot_rect.bottom() + 6, 56, 14), QtCore.Qt.AlignmentFlag.AlignCenter, f"{marker_ms:.1f} ms")
+            label_rect = QtCore.QRectF(
+                x - (38 * scale),
+                plot_rect.bottom() + (14 * scale),
+                76 * scale,
+                16 * scale,
+            )
+            if marker_ratio <= 0.0:
+                label_rect.moveLeft(plot_rect.left() + (2 * scale))
+            elif marker_ratio >= 1.0:
+                label_rect.moveRight(plot_rect.right() - (14 * scale))
+            painter.drawText(
+                label_rect,
+                QtCore.Qt.AlignmentFlag.AlignCenter,
+                f"{marker_ms:.1f} ms",
+            )
 
         for series_index, series in enumerate(self._series_data):
             if len(series) < 2:
@@ -1603,8 +2894,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
             painter.setPen(series_pen)
             painter.drawPath(path)
             if self._report_mode:
-                marker_step = max(1, len(series) // 6)
-                for marker_index in range(marker_step - 1, len(series), marker_step):
+                for marker_index in _report_marker_indices(len(series), 16):
                     ratio = marker_index / max(sample_count - 1, 1)
                     x = plot_rect.left() + plot_rect.width() * ratio
                     y = plot_rect.bottom() - (((series[marker_index] - y_min) / y_span) * plot_rect.height())
@@ -1696,6 +2986,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._monitor_timer.timeout.connect(self._queue_monitor_poll)
 
         self._trend_refresh_timer = QtCore.QTimer(self)
+        self._trend_refresh_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self._trend_refresh_timer.setInterval(TREND_REFRESH_INTERVAL_MS)
         self._trend_refresh_timer.timeout.connect(self._refresh_scada_ui)
 

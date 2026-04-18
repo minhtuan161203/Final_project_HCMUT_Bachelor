@@ -83,7 +83,7 @@ SRAM_HandleTypeDef hsram2;
 float DriverParameter[16];
 float MotorParameter[32];
 uint16_t FaultCode = NO_ERROR;
-float globalcontrolthetatune = 0.0f;
+float globalcontrolthetatune = -0.05f;
 uint8_t system_on = 0;
 volatile float gTargetSpeedRpm = 0.0f;
 volatile uint8_t gRunMode = RUN_MODE_FOC;
