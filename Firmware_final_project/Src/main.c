@@ -131,9 +131,9 @@ volatile uint8_t gServoArmOnlyRequested = 0u;
 volatile uint8_t gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
 volatile uint8_t gFocCurrentUvSwapTest = 0u;
 volatile uint8_t gFocCurrentPolarityInvertTest = 0u;
-volatile uint8_t gFocDirectionTestStatus = FOC_DIRECTION_TEST_IDLE;
-volatile int32_t gFocDirectionTestOpenLoopDeltaPos = 0;
-volatile int32_t gFocDirectionTestFocDeltaPos = 0;
+volatile uint8_t gFpgaEncoderParserConfigured = 0u;
+volatile uint8_t gFpgaDoneLatched = 0u;
+volatile uint32_t gFpgaDoneTickMs = 0u;
 volatile uint8_t gFocRotatingThetaTestRunning = 0u;
 volatile float gFocRotatingThetaDebugThetaDeg = 0.0f;
 volatile int32_t gFocRotatingThetaDebugDeltaPos = 0;
@@ -141,18 +141,6 @@ volatile uint8_t gFocRotatingThetaVoltageTestRunning = 0u;
 volatile float gFocRotatingThetaVoltageDebugThetaDeg = 0.0f;
 volatile int32_t gFocRotatingThetaVoltageDebugDeltaPos = 0;
 volatile uint8_t gFocCurrentFeedbackMapTestRunning = 0u;
-volatile uint8_t gFocDirectionTestDebugStage = 0u;
-volatile float gFocDirectionTestDebugAngleDeg = 0.0f;
-volatile float gFocDirectionTestDebugCandidate0Deg = 0.0f;
-volatile float gFocDirectionTestDebugCandidate1Deg = 0.0f;
-volatile int32_t gFocDirectionTestDebugCandidate0DeltaPos = 0;
-volatile int32_t gFocDirectionTestDebugCandidate1DeltaPos = 0;
-volatile uint8_t gFocAngleFitDebugStage = 0u;
-volatile float gFocAngleFitDebugCurrentAngleDeg = 0.0f;
-volatile float gFocAngleFitDebugBestAngleDeg = 0.0f;
-volatile float gFocAngleFitDebugBestDelta = 0.0f;
-volatile int32_t gFocAngleFitDebugVerifyOpenDeltaPos = 0;
-volatile int32_t gFocAngleFitDebugVerifyFocDeltaPos = 0;
 volatile float gFaultPhaseU = 0.0f;
 volatile float gFaultPhaseV = 0.0f;
 volatile float gFaultPhaseW = 0.0f;
@@ -244,22 +232,16 @@ static float GetAngleTestModeOffsetRad(uint8_t electrical_angle_test_mode);
 static float GetAngleTestModeOffsetDeg(uint8_t electrical_angle_test_mode);
 static int32_t ElectricalAngleDegToEncoderCounts(float electrical_deg, float encoder_resolution, uint8_t pole_pairs);
 static void ApplyEncoderOffsetElectricalDelta(float electrical_deg, float encoder_resolution);
-static void LoadAngleFitSweepAngles(float preferred_q_deg);
 static void FinalizeEncoderAlignment(uint8_t alignment_successful);
-static void FinalizeFocDirectionTest(uint8_t result);
-static void RunFocDirectionTestLoop(void);
-static void RunFocAngleFitLoop(void);
 static void RunFocRotatingThetaTestLoop(void);
 static void RunFocRotatingThetaVoltageTestLoop(void);
 static void RunFocCurrentFeedbackMapTestLoop(void);
 static void LoadDiagnosticCurrentPiGains(void);
-static void RestoreFocAngleFitOffsetIfNeeded(void);
 static uint8_t LoadParametersFromFlashIfAvailable(void);
 static const char *GetCurrentFeedbackMapCaseName(uint8_t index);
+static void ServiceFpgaStartup(void);
 void ApplyControlTimingMode(uint8_t mode);
 void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode);
-uint8_t StartFocDirectionTest(void);
-uint8_t StartFocAngleFit(void);
 uint8_t StartFocRotatingThetaTest(void);
 uint8_t StartFocRotatingThetaVoltageTest(void);
 uint8_t StartFocCurrentFeedbackMapTest(void);
@@ -302,21 +284,6 @@ uint8_t SaveParametersToFlash(void);
 #define DIRECTION_TEST_VOLTAGE_LIMIT_RATIO 0.10f
 #define DIRECTION_TEST_MIN_VOLTAGE_LIMIT_V 2.0f
 #define DIRECTION_TEST_MAX_VOLTAGE_LIMIT_V 6.0f
-#define DIRECTION_TEST_CANDIDATE_COUNT 2u
-#define ANGLE_FIT_PRIMARY_CANDIDATE_COUNT 2u
-#define ANGLE_FIT_SWEEP_COUNT 7u
-#define ANGLE_FIT_IQ_RATIO 0.01f
-#define ANGLE_FIT_MIN_IQ_A 0.01f
-#define ANGLE_FIT_MAX_IQ_A 0.08f
-#define ANGLE_FIT_MOVE_TIME_S 0.18f
-#define ANGLE_FIT_SETTLE_TIME_S 0.08f
-#define ANGLE_FIT_VOLTAGE_LIMIT_RATIO 0.15f
-#define ANGLE_FIT_MIN_VOLTAGE_LIMIT_V 2.0f
-#define ANGLE_FIT_MAX_VOLTAGE_LIMIT_V 6.0f
-#define ANGLE_FIT_Q_AXIS_DEG 90.0f
-#define ANGLE_FIT_SWEEP_MIN_DEG 75.0f
-#define ANGLE_FIT_SWEEP_STEP_DEG 5.0f
-#define ANGLE_FIT_VERIFY_FLIP_DEG 180.0f
 #define ROTATING_THETA_TEST_ELECTRICAL_FREQ_HZ 1.0f
 #define ROTATING_THETA_TEST_IQ_A 0.20f
 #define ROTATING_THETA_TEST_FRAME_DEG (-DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG)
@@ -352,30 +319,6 @@ static float sEncoderAlignCosAccum = 0.0f;
 static uint16_t sEncoderAlignSampleCount = 0u;
 static uint8_t sIdSquareTuningOffsetGuardActive = 0u;
 static int32_t sIdSquareTuningSavedOffset = 0;
-static uint8_t sFocDirectionTestStage = 0u;
-static uint16_t sFocDirectionTestCounter = 0u;
-static float sFocDirectionTestStartPosition = 0.0f;
-static uint8_t sFocDirectionTestIndex = 0u;
-static float sFocDirectionTestAnglesDeg[DIRECTION_TEST_CANDIDATE_COUNT] = {0.0f};
-static int32_t sFocDirectionTestCandidateDeltas[DIRECTION_TEST_CANDIDATE_COUNT] = {0};
-static uint8_t gFocAngleFitRunning = 0u;
-static uint8_t sFocAngleFitStage = 0u;
-static uint16_t sFocAngleFitCounter = 0u;
-static float sFocAngleFitBaseTheta = 0.0f;
-static float sFocAngleFitStartPosition = 0.0f;
-static uint8_t sFocAngleFitIndex = 0u;
-static uint8_t sFocAngleFitTestCount = 0u;
-static float sFocAngleFitTestAnglesDeg[ANGLE_FIT_SWEEP_COUNT] = {0.0f};
-static float sFocAngleFitTestDeltas[ANGLE_FIT_SWEEP_COUNT] = {0.0f};
-static float sFocAngleFitPrimaryDeltas[ANGLE_FIT_PRIMARY_CANDIDATE_COUNT] = {0.0f};
-static float sFocAngleFitBestDeg = 0.0f;
-static float sFocAngleFitBestDelta = 0.0f;
-static float sFocAngleFitBestAbsDelta = 0.0f;
-static int32_t sFocAngleFitVerifyOpenLoopDeltaPos = 0;
-static int32_t sFocAngleFitVerifyFocDeltaPos = 0;
-static int32_t sFocAngleFitOriginalOffset = 0;
-static uint8_t sFocAngleFitOffsetApplied = 0u;
-static uint8_t sFocAngleFitAccepted = 0u;
 static float sFocRotatingThetaCommand = 0.0f;
 static float sFocRotatingThetaStartPosition = 0.0f;
 static uint16_t sFocRotatingThetaLogCounter = 0u;
@@ -399,29 +342,6 @@ static float sFocCurrentFeedbackMapIqErrAbsAvg[CURRENT_FEEDBACK_MAP_TEST_CASE_CO
 static float sFocCurrentFeedbackMapSpeedAbsAvg[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0.0f};
 static int32_t sFocCurrentFeedbackMapDeltaPos[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0};
 
-enum
-{
-	FOC_DIRECTION_TEST_STAGE_IDLE = 0u,
-	FOC_DIRECTION_TEST_STAGE_OPEN_LOOP_MOVE,
-	FOC_DIRECTION_TEST_STAGE_OPEN_LOOP_SETTLE,
-	FOC_DIRECTION_TEST_STAGE_FOC_MOVE,
-	FOC_DIRECTION_TEST_STAGE_FOC_SETTLE,
-};
-
-enum
-{
-	FOC_ANGLE_FIT_STAGE_IDLE = 0u,
-	FOC_ANGLE_FIT_STAGE_COMPARE_MOVE,
-	FOC_ANGLE_FIT_STAGE_COMPARE_SETTLE,
-	FOC_ANGLE_FIT_STAGE_SWEEP_MOVE,
-	FOC_ANGLE_FIT_STAGE_SWEEP_SETTLE,
-	FOC_ANGLE_FIT_STAGE_APPLY,
-	FOC_ANGLE_FIT_STAGE_VERIFY_OPEN_LOOP_MOVE,
-	FOC_ANGLE_FIT_STAGE_VERIFY_OPEN_LOOP_SETTLE,
-	FOC_ANGLE_FIT_STAGE_VERIFY_FOC_MOVE,
-	FOC_ANGLE_FIT_STAGE_VERIFY_FOC_SETTLE,
-};
-
 static const char *GetCurrentFeedbackMapCaseName(uint8_t index)
 {
 	switch (index)
@@ -436,6 +356,40 @@ static const char *GetCurrentFeedbackMapCaseName(uint8_t index)
 			return "swap+invert";
 		default:
 			return "unknown";
+	}
+}
+
+static void ServiceFpgaStartup(void)
+{
+	uint32_t now_tick_ms;
+	GPIO_PinState fpga_done_pin;
+
+	now_tick_ms = HAL_GetTick();
+	fpga_done_pin = HAL_GPIO_ReadPin(iFPGA_DONE_GPIO_Port, iFPGA_DONE_Pin);
+
+	if (fpga_done_pin == GPIO_PIN_SET)
+	{
+		if (gFpgaDoneLatched == 0u)
+		{
+			gFpgaDoneLatched = 1u;
+			gFpgaDoneTickMs = now_tick_ms;
+		}
+
+		/* After cold power-up, the MCU can reach REG_ENCODER_ID writes before the
+		 * FPGA encoder parser is ready. Re-apply the parser selection only after
+		 * FPGA_DONE is stably high so encoder updates start without a debugger rerun. */
+		if ((gFpgaEncoderParserConfigured == 0u) &&
+			((now_tick_ms - gFpgaDoneTickMs) >= 10u))
+		{
+			*(__IO uint16_t*)(REG_ENCODER_ID) = (uint16_t)MotorParameter[MOTOR_ENCODER_ID];
+			gFpgaEncoderParserConfigured = 1u;
+		}
+	}
+	else
+	{
+		gFpgaDoneLatched = 0u;
+		gFpgaDoneTickMs = now_tick_ms;
+		gFpgaEncoderParserConfigured = 0u;
 	}
 }
 
@@ -579,40 +533,6 @@ static void LoadDiagnosticCurrentPiGains(void)
 	gIqPi.fKp = diag_kp;
 	gIdPi.fKi = diag_ki;
 	gIqPi.fKi = diag_ki;
-}
-
-static void RestoreFocAngleFitOffsetIfNeeded(void)
-{
-	if ((sFocAngleFitOffsetApplied == 0u) || (sFocAngleFitAccepted != 0u))
-	{
-		return;
-	}
-
-	Parameter.Offset_Enc = sFocAngleFitOriginalOffset;
-	MotorParameter[MOTOR_HALL_OFFSET] = (float)sFocAngleFitOriginalOffset;
-	gEncoderAlignmentLastCapturedOffset = sFocAngleFitOriginalOffset;
-	UpdateMotorParameter(MotorParameter);
-	sFocAngleFitOffsetApplied = 0u;
-}
-
-static void LoadAngleFitSweepAngles(float preferred_q_deg)
-{
-	uint8_t index;
-	float sweep_deg;
-	float sweep_sign = (preferred_q_deg >= 0.0f) ? 1.0f : -1.0f;
-
-	for (index = 0u; index < ANGLE_FIT_SWEEP_COUNT; index++)
-	{
-		sweep_deg = ANGLE_FIT_SWEEP_MIN_DEG + ((float)index * ANGLE_FIT_SWEEP_STEP_DEG);
-		sFocAngleFitTestAnglesDeg[index] = sweep_sign * sweep_deg;
-		sFocAngleFitTestDeltas[index] = 0.0f;
-	}
-
-	sFocAngleFitTestCount = ANGLE_FIT_SWEEP_COUNT;
-	sFocAngleFitIndex = 0u;
-	sFocAngleFitBestDeg = 0.0f;
-	sFocAngleFitBestDelta = 0.0f;
-	sFocAngleFitBestAbsDelta = -1.0f;
 }
 
 static uint8_t ShouldHoldCurrentLoopAtZero(float current_ref, float measured_current)
@@ -1450,160 +1370,6 @@ static int32_t CalcAlignedEncoderOffset(float encoder_resolution)
 		encoder_resolution);
 }
 
-uint8_t StartFocDirectionTest(void)
-{
-	float frame_offset_deg;
-	float candidate_abs_deg;
-
-	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
-	{
-		return 0u;
-	}
-	if (FaultCode != NO_ERROR)
-	{
-		return 0u;
-	}
-	if (Current_Sensor.CalibFinish <= 0)
-	{
-		return 0u;
-	}
-	if (gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE)
-	{
-		return 0u;
-	}
-
-	gRunMode = RUN_MODE_FOC;
-	gVfFrequencyHz = 0.0f;
-	gVfVoltageV = 0.0f;
-	gTargetSpeedRpm = 0.0f;
-	gTargetPositionCounts = Parameter.fPosition;
-	gCommandedSpeedRpm = 0.0f;
-	gTracePosError = 0.0f;
-	gIdRefA = 0.0f;
-	gIqRefA = 0.0f;
-	gFocCurrentUvSwapTest = 0u;
-	gFocCurrentPolarityInvertTest = 0u;
-	gFocDirectionTestStatus = FOC_DIRECTION_TEST_RUNNING;
-	gFocDirectionTestOpenLoopDeltaPos = 0;
-	gFocDirectionTestFocDeltaPos = 0;
-	gFocDirectionTestDebugStage = FOC_DIRECTION_TEST_STAGE_OPEN_LOOP_MOVE;
-	gFocDirectionTestDebugAngleDeg = 0.0f;
-	sFocDirectionTestStage = FOC_DIRECTION_TEST_STAGE_OPEN_LOOP_MOVE;
-	sFocDirectionTestCounter = 0u;
-	sFocDirectionTestStartPosition = Parameter.fPosition;
-	sFocDirectionTestIndex = 0u;
-	sFocDirectionTestCandidateDeltas[0] = 0;
-	sFocDirectionTestCandidateDeltas[1] = 0;
-	frame_offset_deg = GetAngleTestModeOffsetDeg(gFocElectricalAngleTestMode);
-	candidate_abs_deg = fabsf(frame_offset_deg);
-	if ((candidate_abs_deg < 45.0f) || (candidate_abs_deg > 135.0f))
-	{
-		candidate_abs_deg = 90.0f;
-	}
-	if (frame_offset_deg < 0.0f)
-	{
-		sFocDirectionTestAnglesDeg[0] = -candidate_abs_deg;
-		sFocDirectionTestAnglesDeg[1] = candidate_abs_deg;
-	}
-	else
-	{
-		sFocDirectionTestAnglesDeg[0] = candidate_abs_deg;
-		sFocDirectionTestAnglesDeg[1] = -candidate_abs_deg;
-	}
-	gFocDirectionTestDebugCandidate0Deg = sFocDirectionTestAnglesDeg[0];
-	gFocDirectionTestDebugCandidate1Deg = sFocDirectionTestAnglesDeg[1];
-	gFocDirectionTestDebugCandidate0DeltaPos = 0;
-	gFocDirectionTestDebugCandidate1DeltaPos = 0;
-	FOC_DEBUG_PRINTF(
-		"[DIR] start frame=%.1f deg candidates=[%.1f, %.1f] offset=%ld\r\n",
-		frame_offset_deg,
-		sFocDirectionTestAnglesDeg[0],
-		sFocDirectionTestAnglesDeg[1],
-		(long)Parameter.Offset_Enc);
-	USB_QueueFocDebugText(
-		"[DIR] start frame=%.1f c0=%.1f c1=%.1f off=%ld",
-		frame_offset_deg,
-		sFocDirectionTestAnglesDeg[0],
-		sFocDirectionTestAnglesDeg[1],
-		(long)Parameter.Offset_Enc);
-	ResetControlLoops();
-	STM_NextState(&StateMachine, START);
-	return 1u;
-}
-
-uint8_t StartFocAngleFit(void)
-{
-	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
-	{
-		return 0u;
-	}
-	if (FaultCode != NO_ERROR)
-	{
-		return 0u;
-	}
-	if (Current_Sensor.CalibFinish <= 0)
-	{
-		return 0u;
-	}
-	if (gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE)
-	{
-		return 0u;
-	}
-	if (Parameter.u8PolePair == 0u)
-	{
-		return 0u;
-	}
-
-	gRunMode = RUN_MODE_FOC;
-	gVfFrequencyHz = 0.0f;
-	gVfVoltageV = 0.0f;
-	gTargetSpeedRpm = 0.0f;
-	gTargetPositionCounts = Parameter.fPosition;
-	gCommandedSpeedRpm = 0.0f;
-	gTracePosError = 0.0f;
-	gIdRefA = 0.0f;
-	gIqRefA = 0.0f;
-	gFocCurrentUvSwapTest = 0u;
-	gFocCurrentPolarityInvertTest = 0u;
-	gFocAngleFitRunning = 1u;
-	sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_COMPARE_MOVE;
-	sFocAngleFitCounter = 0u;
-	sFocAngleFitBaseTheta = Parameter.fTheta;
-	sFocAngleFitStartPosition = Parameter.fPosition;
-	sFocAngleFitIndex = 0u;
-	sFocAngleFitTestCount = 0u;
-	memset(sFocAngleFitTestAnglesDeg, 0, sizeof(sFocAngleFitTestAnglesDeg));
-	memset(sFocAngleFitTestDeltas, 0, sizeof(sFocAngleFitTestDeltas));
-	memset(sFocAngleFitPrimaryDeltas, 0, sizeof(sFocAngleFitPrimaryDeltas));
-	sFocAngleFitBestDeg = 0.0f;
-	sFocAngleFitBestDelta = 0.0f;
-	sFocAngleFitBestAbsDelta = -1.0f;
-	sFocAngleFitVerifyOpenLoopDeltaPos = 0;
-	sFocAngleFitVerifyFocDeltaPos = 0;
-	sFocAngleFitOriginalOffset = Parameter.Offset_Enc;
-	sFocAngleFitOffsetApplied = 0u;
-	sFocAngleFitAccepted = 0u;
-	gFocAngleFitDebugStage = sFocAngleFitStage;
-	gFocAngleFitDebugCurrentAngleDeg = 0.0f;
-	gFocAngleFitDebugBestAngleDeg = 0.0f;
-	gFocAngleFitDebugBestDelta = 0.0f;
-	gFocAngleFitDebugVerifyOpenDeltaPos = 0;
-	gFocAngleFitDebugVerifyFocDeltaPos = 0;
-	FOC_DEBUG_PRINTF(
-		"[AFIT] start theta=%.3f rad frame=%.1f deg offset=%ld\r\n",
-		sFocAngleFitBaseTheta,
-		GetAngleTestModeOffsetDeg(gFocElectricalAngleTestMode),
-		(long)Parameter.Offset_Enc);
-	USB_QueueFocDebugText(
-		"[AFIT] start th=%.3f frame=%.1f off=%ld",
-		sFocAngleFitBaseTheta,
-		GetAngleTestModeOffsetDeg(gFocElectricalAngleTestMode),
-		(long)Parameter.Offset_Enc);
-	ResetControlLoops();
-	STM_NextState(&StateMachine, START);
-	return 1u;
-}
-
 uint8_t StartFocRotatingThetaTest(void)
 {
 	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
@@ -1789,235 +1555,12 @@ uint8_t StartFocCurrentFeedbackMapTest(void)
 
 void StopFocDiagnosticModes(void)
 {
-	gFocDirectionTestStatus = FOC_DIRECTION_TEST_IDLE;
-	gFocAngleFitRunning = 0u;
 	gFocRotatingThetaTestRunning = 0u;
 	gFocRotatingThetaVoltageTestRunning = 0u;
 	gFocCurrentFeedbackMapTestRunning = 0u;
 	gFocCurrentUvSwapTest = 0u;
 	gFocCurrentPolarityInvertTest = 0u;
 }
-static void FinalizeFocDirectionTest(uint8_t result)
-{
-	gIdRefA = 0.0f;
-	gIqRefA = 0.0f;
-	gTargetSpeedRpm = 0.0f;
-	gCommandedSpeedRpm = 0.0f;
-	gTracePosError = 0.0f;
-	gVfFrequencyHz = 0.0f;
-	gVfVoltageV = 0.0f;
-	sFocDirectionTestStage = FOC_DIRECTION_TEST_STAGE_IDLE;
-	sFocDirectionTestCounter = 0u;
-	sFocDirectionTestStartPosition = Parameter.fPosition;
-	USB_QueueFocDebugText(
-		"[DIR] done r=%u open=%ld foc=%ld off=%ld",
-		(unsigned int)result,
-		(long)gFocDirectionTestOpenLoopDeltaPos,
-		(long)gFocDirectionTestFocDeltaPos,
-		(long)Parameter.Offset_Enc);
-	FOC_DEBUG_PRINTF(
-		"[DIR] result=%u open=%ld foc=%ld offset=%ld\r\n",
-		(unsigned int)result,
-		(long)gFocDirectionTestOpenLoopDeltaPos,
-		(long)gFocDirectionTestFocDeltaPos,
-		(long)Parameter.Offset_Enc);
-	gFocDirectionTestStatus = result;
-	gFocDirectionTestDebugStage = FOC_DIRECTION_TEST_STAGE_IDLE;
-	gFocDirectionTestDebugAngleDeg = 0.0f;
-	ResetControlLoops();
-	STM_NextState(&StateMachine, STOP);
-}
-
-static void RunFocDirectionTestLoop(void)
-{
-	const uint16_t move_samples = (uint16_t)(GetEffectiveCurrentLoopFrequency() * DIRECTION_TEST_MOVE_TIME_S);
-	const uint16_t settle_samples = (uint16_t)(GetEffectiveCurrentLoopFrequency() * DIRECTION_TEST_SETTLE_TIME_S);
-	float encoder_resolution;
-	float rated_current;
-	float iq_test;
-	float voltage_limit;
-	float test_deg;
-	float test_theta;
-	int32_t min_delta_counts;
-	int32_t best_foc_delta;
-
-	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
-		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
-	rated_current = (MotorParameter[MOTOR_RATED_CURRENT_RMS] > 0.0f) ?
-		MotorParameter[MOTOR_RATED_CURRENT_RMS] : DEFAULT_MOTOR_RATED_CURRENT_RMS;
-	iq_test = rated_current * DIRECTION_TEST_IQ_RATIO;
-	if (iq_test < DIRECTION_TEST_MIN_IQ_A)
-	{
-		iq_test = DIRECTION_TEST_MIN_IQ_A;
-	}
-	if (iq_test > DIRECTION_TEST_MAX_IQ_A)
-	{
-		iq_test = DIRECTION_TEST_MAX_IQ_A;
-	}
-	voltage_limit = Parameter.fVdc * DIRECTION_TEST_VOLTAGE_LIMIT_RATIO;
-	if (voltage_limit < DIRECTION_TEST_MIN_VOLTAGE_LIMIT_V)
-	{
-		voltage_limit = DIRECTION_TEST_MIN_VOLTAGE_LIMIT_V;
-	}
-	if (voltage_limit > DIRECTION_TEST_MAX_VOLTAGE_LIMIT_V)
-	{
-		voltage_limit = DIRECTION_TEST_MAX_VOLTAGE_LIMIT_V;
-	}
-	LoadDiagnosticCurrentPiGains();
-	gFocDirectionTestDebugStage = sFocDirectionTestStage;
-	min_delta_counts = (int32_t)lroundf(ClampFloat(encoder_resolution * 0.0001f, 8.0f, 256.0f));
-	best_foc_delta = sFocDirectionTestCandidateDeltas[0];
-	if (labs(sFocDirectionTestCandidateDeltas[1]) > labs(best_foc_delta))
-	{
-		best_foc_delta = sFocDirectionTestCandidateDeltas[1];
-	}
-
-	switch (sFocDirectionTestStage)
-	{
-		case FOC_DIRECTION_TEST_STAGE_OPEN_LOOP_MOVE:
-			ApplyOpenLoopVfCommand(
-				DIRECTION_TEST_OPEN_LOOP_FREQ_HZ,
-				DIRECTION_TEST_OPEN_LOOP_VOLTAGE_V);
-			if (++sFocDirectionTestCounter >= move_samples)
-			{
-				gFocDirectionTestOpenLoopDeltaPos =
-					(int32_t)lroundf(Parameter.fPosition - sFocDirectionTestStartPosition);
-				sFocDirectionTestCounter = 0u;
-				sFocDirectionTestStage = FOC_DIRECTION_TEST_STAGE_OPEN_LOOP_SETTLE;
-			}
-			break;
-
-		case FOC_DIRECTION_TEST_STAGE_OPEN_LOOP_SETTLE:
-			ApplyOpenLoopVfCommand(0.0f, 0.0f);
-			if (++sFocDirectionTestCounter >= settle_samples)
-			{
-				USB_QueueFocDebugText(
-					"[DIR] open d=%ld min=%ld",
-					(long)gFocDirectionTestOpenLoopDeltaPos,
-					(long)min_delta_counts);
-				if (labs(gFocDirectionTestOpenLoopDeltaPos) < min_delta_counts)
-				{
-					FinalizeFocDirectionTest(FOC_DIRECTION_TEST_INCONCLUSIVE);
-				}
-				else
-				{
-					sFocDirectionTestCounter = 0u;
-					sFocDirectionTestIndex = 0u;
-					sFocDirectionTestCandidateDeltas[0] = 0;
-					sFocDirectionTestCandidateDeltas[1] = 0;
-					sFocDirectionTestStartPosition = Parameter.fPosition;
-					ResetControlLoops();
-					sFocDirectionTestStage = FOC_DIRECTION_TEST_STAGE_FOC_MOVE;
-				}
-			}
-			break;
-
-		case FOC_DIRECTION_TEST_STAGE_FOC_MOVE:
-			test_deg = sFocDirectionTestAnglesDeg[sFocDirectionTestIndex];
-			gFocDirectionTestDebugAngleDeg = test_deg;
-			test_theta = WrapAngle(Parameter.fTheta + ((test_deg * PI) / 180.0f));
-			UpdateMeasuredCurrentsForTheta(test_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
-			RunCurrentLoopForTheta(test_theta, 0.0f, iq_test, voltage_limit, 0u);
-			if (++sFocDirectionTestCounter >= move_samples)
-			{
-				sFocDirectionTestCandidateDeltas[sFocDirectionTestIndex] =
-					(int32_t)lroundf(Parameter.fPosition - sFocDirectionTestStartPosition);
-				if (sFocDirectionTestIndex == 0u)
-				{
-					gFocDirectionTestDebugCandidate0DeltaPos =
-						sFocDirectionTestCandidateDeltas[sFocDirectionTestIndex];
-				}
-				else
-				{
-					gFocDirectionTestDebugCandidate1DeltaPos =
-						sFocDirectionTestCandidateDeltas[sFocDirectionTestIndex];
-				}
-				FOC_DEBUG_PRINTF(
-					"[DIR] foc delta[%u]=%ld angle=%.1f iq=%.3fA vlim=%.2fV vdc=%.2fV\r\n",
-					(unsigned int)sFocDirectionTestIndex,
-					(long)sFocDirectionTestCandidateDeltas[sFocDirectionTestIndex],
-					test_deg,
-					iq_test,
-					voltage_limit,
-					Parameter.fVdc);
-				USB_QueueFocDebugText(
-					"[DIR] foc[%u] a=%.1f d=%ld iq=%.3f v=%.2f kp=%.5f ki=%.5f",
-					(unsigned int)sFocDirectionTestIndex,
-					test_deg,
-					(long)sFocDirectionTestCandidateDeltas[sFocDirectionTestIndex],
-					iq_test,
-					voltage_limit,
-					gIqPi.fKp,
-					gIqPi.fKi);
-				sFocDirectionTestCounter = 0u;
-				sFocDirectionTestStage = FOC_DIRECTION_TEST_STAGE_FOC_SETTLE;
-			}
-			break;
-
-		case FOC_DIRECTION_TEST_STAGE_FOC_SETTLE:
-			ApplyVoltageVectorForTheta(Parameter.fTheta, 0.0f, 0.0f);
-			if (++sFocDirectionTestCounter >= settle_samples)
-			{
-				sFocDirectionTestCounter = 0u;
-				sFocDirectionTestIndex++;
-				if (sFocDirectionTestIndex < DIRECTION_TEST_CANDIDATE_COUNT)
-				{
-					sFocDirectionTestStartPosition = Parameter.fPosition;
-					ResetControlLoops();
-					sFocDirectionTestStage = FOC_DIRECTION_TEST_STAGE_FOC_MOVE;
-				}
-				else
-				{
-					best_foc_delta = sFocDirectionTestCandidateDeltas[0];
-					if (labs(sFocDirectionTestCandidateDeltas[1]) > labs(best_foc_delta))
-					{
-						best_foc_delta = sFocDirectionTestCandidateDeltas[1];
-					}
-					gFocDirectionTestFocDeltaPos = best_foc_delta;
-					gFocDirectionTestDebugCandidate0DeltaPos = sFocDirectionTestCandidateDeltas[0];
-					gFocDirectionTestDebugCandidate1DeltaPos = sFocDirectionTestCandidateDeltas[1];
-					USB_QueueFocDebugText(
-						"[DIR] best=%ld open=%ld c0=%.1f=>%ld c1=%.1f=>%ld",
-						(long)best_foc_delta,
-						(long)gFocDirectionTestOpenLoopDeltaPos,
-						sFocDirectionTestAnglesDeg[0],
-						(long)sFocDirectionTestCandidateDeltas[0],
-						sFocDirectionTestAnglesDeg[1],
-						(long)sFocDirectionTestCandidateDeltas[1]);
-					FOC_DEBUG_PRINTF(
-						"[DIR] best foc delta=%ld from [%.1f=>%ld, %.1f=>%ld]\r\n",
-						(long)best_foc_delta,
-						sFocDirectionTestAnglesDeg[0],
-						(long)sFocDirectionTestCandidateDeltas[0],
-						sFocDirectionTestAnglesDeg[1],
-						(long)sFocDirectionTestCandidateDeltas[1]);
-					if ((labs(gFocDirectionTestOpenLoopDeltaPos) < min_delta_counts) ||
-						(labs(best_foc_delta) < min_delta_counts))
-					{
-						FinalizeFocDirectionTest(FOC_DIRECTION_TEST_INCONCLUSIVE);
-					}
-					else if (((gFocDirectionTestOpenLoopDeltaPos > 0) &&
-						(best_foc_delta > 0)) ||
-						((gFocDirectionTestOpenLoopDeltaPos < 0) &&
-						(best_foc_delta < 0)))
-					{
-						FinalizeFocDirectionTest(FOC_DIRECTION_TEST_DONE_OK);
-					}
-					else
-					{
-						FinalizeFocDirectionTest(FOC_DIRECTION_TEST_DONE_FLIPPED);
-					}
-				}
-			}
-			break;
-
-		case FOC_DIRECTION_TEST_STAGE_IDLE:
-		default:
-			FinalizeFocDirectionTest(FOC_DIRECTION_TEST_INCONCLUSIVE);
-			break;
-	}
-}
-
 static void RunFocRotatingThetaTestLoop(void)
 {
 	float voltage_limit;
@@ -2284,388 +1827,6 @@ static void RunFocCurrentFeedbackMapTestLoop(void)
 		(unsigned int)gFocCurrentUvSwapTest,
 		(unsigned int)gFocCurrentPolarityInvertTest);
 }
-
-static void FinalizeFocAngleFit(void)
-{
-	RestoreFocAngleFitOffsetIfNeeded();
-	USB_QueueFocDebugText(
-		"[AFIT] done ok=%u best=%.1f bd=%.1f vo=%ld vf=%ld off=%ld",
-		(unsigned int)sFocAngleFitAccepted,
-		sFocAngleFitBestDeg,
-		sFocAngleFitBestDelta,
-		(long)sFocAngleFitVerifyOpenLoopDeltaPos,
-		(long)sFocAngleFitVerifyFocDeltaPos,
-		(long)Parameter.Offset_Enc);
-	FOC_DEBUG_PRINTF(
-		"[AFIT] done best_deg=%.1f best_delta=%.1f offset=%ld\r\n",
-		sFocAngleFitBestDeg,
-		sFocAngleFitBestDelta,
-		(long)Parameter.Offset_Enc);
-	gIdRefA = 0.0f;
-	gIqRefA = 0.0f;
-	gTargetSpeedRpm = 0.0f;
-	gTargetPositionCounts = Parameter.fPosition;
-	gCommandedSpeedRpm = 0.0f;
-	gTracePosError = 0.0f;
-	gVfFrequencyHz = 0.0f;
-	gVfVoltageV = 0.0f;
-	gFocAngleFitRunning = 0u;
-	sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_IDLE;
-	sFocAngleFitCounter = 0u;
-	sFocAngleFitBaseTheta = Parameter.fTheta;
-	sFocAngleFitStartPosition = Parameter.fPosition;
-	sFocAngleFitIndex = 0u;
-	sFocAngleFitTestCount = 0u;
-	memset(sFocAngleFitTestAnglesDeg, 0, sizeof(sFocAngleFitTestAnglesDeg));
-	memset(sFocAngleFitTestDeltas, 0, sizeof(sFocAngleFitTestDeltas));
-	memset(sFocAngleFitPrimaryDeltas, 0, sizeof(sFocAngleFitPrimaryDeltas));
-	sFocAngleFitBestDeg = 0.0f;
-	sFocAngleFitBestDelta = 0.0f;
-	sFocAngleFitBestAbsDelta = 0.0f;
-	sFocAngleFitVerifyOpenLoopDeltaPos = 0;
-	sFocAngleFitVerifyFocDeltaPos = 0;
-	sFocAngleFitOriginalOffset = 0;
-	sFocAngleFitOffsetApplied = 0u;
-	sFocAngleFitAccepted = 0u;
-	gFocAngleFitDebugStage = 0u;
-	gFocAngleFitDebugCurrentAngleDeg = 0.0f;
-	gFocAngleFitDebugBestAngleDeg = 0.0f;
-	gFocAngleFitDebugBestDelta = 0.0f;
-	gFocAngleFitDebugVerifyOpenDeltaPos = 0;
-	gFocAngleFitDebugVerifyFocDeltaPos = 0;
-	Parameter.PreEncSingleTurn = Parameter.EncSingleTurn;
-	Parameter.DeltaPos = 0;
-	Parameter.PrevDeltaPos = 0;
-	ResetControlLoops();
-	STM_NextState(&StateMachine, STOP);
-}
-
-static void RunFocAngleFitLoop(void)
-{
-	uint16_t move_samples;
-	uint16_t settle_samples;
-	float encoder_resolution;
-	float rated_current;
-	float iq_test;
-	float voltage_limit;
-	float frame_offset_deg;
-	float frame_offset_rad;
-	float preferred_q_deg;
-	float test_deg;
-	float test_theta;
-	float delta_counts;
-	float abs_delta_counts;
-	int32_t min_delta_counts;
-
-	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
-		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
-	if ((encoder_resolution <= 1.0f) || (Parameter.u8PolePair == 0u))
-	{
-		FinalizeFocAngleFit();
-		return;
-	}
-
-	move_samples = (uint16_t)ClampFloat(
-		GetEffectiveCurrentLoopFrequency() * ANGLE_FIT_MOVE_TIME_S,
-		1.0f,
-		60000.0f);
-	settle_samples = (uint16_t)ClampFloat(
-		GetEffectiveCurrentLoopFrequency() * ANGLE_FIT_SETTLE_TIME_S,
-		1.0f,
-		60000.0f);
-	rated_current = (MotorParameter[MOTOR_RATED_CURRENT_RMS] > 0.0f) ?
-		MotorParameter[MOTOR_RATED_CURRENT_RMS] : DEFAULT_MOTOR_RATED_CURRENT_RMS;
-	iq_test = rated_current * ANGLE_FIT_IQ_RATIO;
-	if (iq_test < ANGLE_FIT_MIN_IQ_A)
-	{
-		iq_test = ANGLE_FIT_MIN_IQ_A;
-	}
-	if (iq_test > ANGLE_FIT_MAX_IQ_A)
-	{
-		iq_test = ANGLE_FIT_MAX_IQ_A;
-	}
-	voltage_limit = Parameter.fVdc * ANGLE_FIT_VOLTAGE_LIMIT_RATIO;
-	if (voltage_limit < ANGLE_FIT_MIN_VOLTAGE_LIMIT_V)
-	{
-		voltage_limit = ANGLE_FIT_MIN_VOLTAGE_LIMIT_V;
-	}
-	if (voltage_limit > ANGLE_FIT_MAX_VOLTAGE_LIMIT_V)
-	{
-		voltage_limit = ANGLE_FIT_MAX_VOLTAGE_LIMIT_V;
-	}
-	LoadDiagnosticCurrentPiGains();
-	gFocAngleFitDebugStage = sFocAngleFitStage;
-	frame_offset_deg = GetAngleTestModeOffsetDeg(gFocElectricalAngleTestMode);
-	frame_offset_rad = GetAngleTestModeOffsetRad(gFocElectricalAngleTestMode);
-	min_delta_counts = (int32_t)lroundf(ClampFloat(encoder_resolution * 0.00003f, 4.0f, 128.0f));
-
-	switch (sFocAngleFitStage)
-	{
-		case FOC_ANGLE_FIT_STAGE_COMPARE_MOVE:
-			test_deg = (sFocAngleFitIndex == 0u) ? ANGLE_FIT_Q_AXIS_DEG : -ANGLE_FIT_Q_AXIS_DEG;
-			gFocAngleFitDebugCurrentAngleDeg = test_deg;
-			test_theta = WrapAngle(sFocAngleFitBaseTheta + (test_deg * PI / 180.0f));
-			UpdateMeasuredCurrentsForTheta(test_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
-			RunCurrentLoopForTheta(test_theta, 0.0f, iq_test, voltage_limit, 0u);
-			if (++sFocAngleFitCounter >= move_samples)
-			{
-				delta_counts = Parameter.fPosition - sFocAngleFitStartPosition;
-				sFocAngleFitPrimaryDeltas[sFocAngleFitIndex] = delta_counts;
-				FOC_DEBUG_PRINTF(
-					"[AFIT] compare %.1f deg delta=%.1f\r\n",
-					test_deg,
-					delta_counts);
-				USB_QueueFocDebugText(
-					"[AFIT] cmp a=%.1f d=%.1f iq=%.3f v=%.2f kp=%.5f ki=%.5f",
-					test_deg,
-					delta_counts,
-					iq_test,
-					voltage_limit,
-					gIqPi.fKp,
-					gIqPi.fKi);
-				sFocAngleFitCounter = 0u;
-				sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_COMPARE_SETTLE;
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_COMPARE_SETTLE:
-			ApplyVoltageVectorForTheta(Parameter.fTheta, 0.0f, 0.0f);
-			if (++sFocAngleFitCounter >= settle_samples)
-			{
-				sFocAngleFitCounter = 0u;
-				sFocAngleFitIndex++;
-				if (sFocAngleFitIndex < ANGLE_FIT_PRIMARY_CANDIDATE_COUNT)
-				{
-					sFocAngleFitStartPosition = Parameter.fPosition;
-					sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_COMPARE_MOVE;
-				}
-				else
-				{
-					preferred_q_deg = (fabsf(sFocAngleFitPrimaryDeltas[0]) >=
-						fabsf(sFocAngleFitPrimaryDeltas[1])) ?
-						ANGLE_FIT_Q_AXIS_DEG : -ANGLE_FIT_Q_AXIS_DEG;
-					LoadAngleFitSweepAngles(preferred_q_deg);
-					sFocAngleFitStartPosition = Parameter.fPosition;
-					sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_SWEEP_MOVE;
-					FOC_DEBUG_PRINTF(
-						"[AFIT] side %.1f deg wins (d+90=%.1f, d-90=%.1f)\r\n",
-						preferred_q_deg,
-						sFocAngleFitPrimaryDeltas[0],
-						sFocAngleFitPrimaryDeltas[1]);
-				}
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_SWEEP_MOVE:
-			if (sFocAngleFitIndex >= sFocAngleFitTestCount)
-			{
-				sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_APPLY;
-				break;
-			}
-			test_deg = sFocAngleFitTestAnglesDeg[sFocAngleFitIndex];
-			gFocAngleFitDebugCurrentAngleDeg = test_deg;
-			test_theta = WrapAngle(sFocAngleFitBaseTheta + (test_deg * PI / 180.0f));
-			UpdateMeasuredCurrentsForTheta(test_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
-			RunCurrentLoopForTheta(test_theta, 0.0f, iq_test, voltage_limit, 0u);
-			if (++sFocAngleFitCounter >= move_samples)
-			{
-				delta_counts = Parameter.fPosition - sFocAngleFitStartPosition;
-				abs_delta_counts = fabsf(delta_counts);
-				sFocAngleFitTestDeltas[sFocAngleFitIndex] = delta_counts;
-				if (abs_delta_counts > sFocAngleFitBestAbsDelta)
-				{
-					sFocAngleFitBestAbsDelta = abs_delta_counts;
-					sFocAngleFitBestDelta = delta_counts;
-					sFocAngleFitBestDeg = test_deg;
-				}
-				gFocAngleFitDebugBestAngleDeg = sFocAngleFitBestDeg;
-				gFocAngleFitDebugBestDelta = sFocAngleFitBestDelta;
-				FOC_DEBUG_PRINTF(
-					"[AFIT] sweep %.1f deg delta=%.1f\r\n",
-					test_deg,
-					delta_counts);
-				USB_QueueFocDebugText(
-					"[AFIT] sw a=%.1f d=%.1f best=%.1f=>%.1f",
-					test_deg,
-					delta_counts,
-					sFocAngleFitBestDeg,
-					sFocAngleFitBestDelta);
-				sFocAngleFitCounter = 0u;
-				sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_SWEEP_SETTLE;
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_SWEEP_SETTLE:
-			ApplyVoltageVectorForTheta(Parameter.fTheta, 0.0f, 0.0f);
-			if (++sFocAngleFitCounter >= settle_samples)
-			{
-				sFocAngleFitCounter = 0u;
-				sFocAngleFitIndex++;
-				if (sFocAngleFitIndex >= sFocAngleFitTestCount)
-				{
-					sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_APPLY;
-				}
-				else
-				{
-					sFocAngleFitStartPosition = Parameter.fPosition;
-					sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_SWEEP_MOVE;
-				}
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_APPLY:
-			if (sFocAngleFitBestAbsDelta < (float)min_delta_counts)
-			{
-				FOC_DEBUG_PRINTF(
-					"[AFIT] no valid angle, best abs delta=%.1f min=%ld\r\n",
-					sFocAngleFitBestAbsDelta,
-					(long)min_delta_counts);
-				USB_QueueFocDebugText(
-					"[AFIT] no-valid best=%.1f min=%ld",
-					sFocAngleFitBestAbsDelta,
-					(long)min_delta_counts);
-				FinalizeFocAngleFit();
-			}
-			else
-			{
-				ApplyEncoderOffsetElectricalDelta(
-					sFocAngleFitBestDeg - frame_offset_deg,
-					encoder_resolution);
-				sFocAngleFitOffsetApplied = 1u;
-				gFocAngleFitDebugBestAngleDeg = sFocAngleFitBestDeg;
-				gFocAngleFitDebugBestDelta = sFocAngleFitBestDelta;
-				FOC_DEBUG_PRINTF(
-					"[AFIT] apply best=%.1f deg frame=%.1f deg comp=%.1f deg offset=%ld\r\n",
-					sFocAngleFitBestDeg,
-					frame_offset_deg,
-					(sFocAngleFitBestDeg - frame_offset_deg),
-					(long)Parameter.Offset_Enc);
-				USB_QueueFocDebugText(
-					"[AFIT] apply best=%.1f frame=%.1f comp=%.1f off=%ld",
-					sFocAngleFitBestDeg,
-					frame_offset_deg,
-					(sFocAngleFitBestDeg - frame_offset_deg),
-					(long)Parameter.Offset_Enc);
-				sFocAngleFitCounter = 0u;
-				sFocAngleFitStartPosition = Parameter.fPosition;
-				sFocAngleFitVerifyOpenLoopDeltaPos = 0;
-				sFocAngleFitVerifyFocDeltaPos = 0;
-				ResetControlLoops();
-				sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_VERIFY_OPEN_LOOP_MOVE;
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_VERIFY_OPEN_LOOP_MOVE:
-			ApplyOpenLoopVfCommand(
-				DIRECTION_TEST_OPEN_LOOP_FREQ_HZ,
-				DIRECTION_TEST_OPEN_LOOP_VOLTAGE_V);
-			if (++sFocAngleFitCounter >= move_samples)
-			{
-				sFocAngleFitVerifyOpenLoopDeltaPos =
-					(int32_t)lroundf(Parameter.fPosition - sFocAngleFitStartPosition);
-				gFocAngleFitDebugVerifyOpenDeltaPos = sFocAngleFitVerifyOpenLoopDeltaPos;
-				FOC_DEBUG_PRINTF(
-					"[AFIT] verify open-loop delta=%ld\r\n",
-					(long)sFocAngleFitVerifyOpenLoopDeltaPos);
-				USB_QueueFocDebugText(
-					"[AFIT] vopen d=%ld",
-					(long)sFocAngleFitVerifyOpenLoopDeltaPos);
-				sFocAngleFitCounter = 0u;
-				sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_VERIFY_OPEN_LOOP_SETTLE;
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_VERIFY_OPEN_LOOP_SETTLE:
-			ApplyOpenLoopVfCommand(0.0f, 0.0f);
-			if (++sFocAngleFitCounter >= settle_samples)
-			{
-				sFocAngleFitCounter = 0u;
-				if (labs(sFocAngleFitVerifyOpenLoopDeltaPos) < min_delta_counts)
-				{
-					FOC_DEBUG_PRINTF("[AFIT] verify open-loop inconclusive\r\n");
-					USB_QueueFocDebugText(
-						"[AFIT] vopen weak d=%ld min=%ld",
-						(long)sFocAngleFitVerifyOpenLoopDeltaPos,
-						(long)min_delta_counts);
-					FinalizeFocAngleFit();
-				}
-				else
-				{
-					ResetControlLoops();
-					sFocAngleFitStartPosition = Parameter.fPosition;
-					sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_VERIFY_FOC_MOVE;
-				}
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_VERIFY_FOC_MOVE:
-			test_theta = WrapAngle(Parameter.fTheta + frame_offset_rad);
-			UpdateMeasuredCurrentsForTheta(test_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
-			RunCurrentLoopForTheta(test_theta, 0.0f, iq_test, voltage_limit, 0u);
-			if (++sFocAngleFitCounter >= move_samples)
-			{
-				sFocAngleFitVerifyFocDeltaPos =
-					(int32_t)lroundf(Parameter.fPosition - sFocAngleFitStartPosition);
-				gFocAngleFitDebugVerifyFocDeltaPos = sFocAngleFitVerifyFocDeltaPos;
-				FOC_DEBUG_PRINTF(
-					"[AFIT] verify foc delta=%ld\r\n",
-					(long)sFocAngleFitVerifyFocDeltaPos);
-				USB_QueueFocDebugText(
-					"[AFIT] vfoc d=%ld iq=%.3f v=%.2f kp=%.5f ki=%.5f",
-					(long)sFocAngleFitVerifyFocDeltaPos,
-					iq_test,
-					voltage_limit,
-					gIqPi.fKp,
-					gIqPi.fKi);
-				sFocAngleFitCounter = 0u;
-				sFocAngleFitStage = FOC_ANGLE_FIT_STAGE_VERIFY_FOC_SETTLE;
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_VERIFY_FOC_SETTLE:
-			ApplyVoltageVectorForTheta(Parameter.fTheta, 0.0f, 0.0f);
-			if (++sFocAngleFitCounter >= settle_samples)
-			{
-				if ((labs(sFocAngleFitVerifyOpenLoopDeltaPos) >= min_delta_counts) &&
-					(labs(sFocAngleFitVerifyFocDeltaPos) >= min_delta_counts))
-				{
-					sFocAngleFitAccepted = 1u;
-					if (((sFocAngleFitVerifyOpenLoopDeltaPos > 0) &&
-						(sFocAngleFitVerifyFocDeltaPos < 0)) ||
-						((sFocAngleFitVerifyOpenLoopDeltaPos < 0) &&
-						(sFocAngleFitVerifyFocDeltaPos > 0)))
-					{
-						ApplyEncoderOffsetElectricalDelta(
-							ANGLE_FIT_VERIFY_FLIP_DEG,
-							encoder_resolution);
-						FOC_DEBUG_PRINTF(
-							"[AFIT] verify flipped -> add %.1f deg, offset=%ld\r\n",
-							ANGLE_FIT_VERIFY_FLIP_DEG,
-							(long)Parameter.Offset_Enc);
-						USB_QueueFocDebugText(
-							"[AFIT] flip add=%.1f off=%ld",
-							ANGLE_FIT_VERIFY_FLIP_DEG,
-							(long)Parameter.Offset_Enc);
-					}
-				}
-				else
-				{
-					USB_QueueFocDebugText(
-						"[AFIT] weak vo=%ld vf=%ld min=%ld -> rollback",
-						(long)sFocAngleFitVerifyOpenLoopDeltaPos,
-						(long)sFocAngleFitVerifyFocDeltaPos,
-						(long)min_delta_counts);
-				}
-				FinalizeFocAngleFit();
-			}
-			break;
-
-		case FOC_ANGLE_FIT_STAGE_IDLE:
-		default:
-			FinalizeFocAngleFit();
-			break;
-	}
-}
 static float *ResolveTraceChannelPointer(uint8_t channel_code)
 {
 	switch (channel_code)
@@ -2862,6 +2023,9 @@ void UpdateMotorParameter(float *motor_parameter)
 	gIqPi.fLowOutLim = 0.0f;
 
 	*(__IO uint16_t*)(REG_ENCODER_ID) = (uint16_t)motor_parameter[MOTOR_ENCODER_ID];
+	gFpgaEncoderParserConfigured = 0u;
+	gFpgaDoneLatched = 0u;
+	gFpgaDoneTickMs = HAL_GetTick();
 	RefreshEncoderAlignmentPolicy();
 	UpdateDriverParameter(DriverParameter);
 }
@@ -3300,25 +2464,6 @@ static void ReportFault(uint16_t fault)
 	{
 		gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_FAULT;
 	}
-	if (gFocDirectionTestStatus == FOC_DIRECTION_TEST_RUNNING)
-	{
-		USB_QueueFocDebugText(
-			"[DIR] fault=0x%04X st=%u off=%ld",
-			(unsigned int)fault,
-			(unsigned int)sFocDirectionTestStage,
-			(long)Parameter.Offset_Enc);
-		gFocDirectionTestStatus = FOC_DIRECTION_TEST_FAULT;
-	}
-	if (gFocAngleFitRunning != 0u)
-	{
-		USB_QueueFocDebugText(
-			"[AFIT] fault=0x%04X st=%u off=%ld",
-			(unsigned int)fault,
-			(unsigned int)sFocAngleFitStage,
-			(long)Parameter.Offset_Enc);
-		RestoreFocAngleFitOffsetIfNeeded();
-		gFocAngleFitRunning = 0u;
-	}
 	if (gFocRotatingThetaTestRunning != 0u)
 	{
 		USB_QueueFocDebugText(
@@ -3375,16 +2520,6 @@ static void RunFocLoop(void)
 		return;
 	}
 
-	if (gFocDirectionTestStatus == FOC_DIRECTION_TEST_RUNNING)
-	{
-		RunFocDirectionTestLoop();
-		return;
-	}
-	if (gFocAngleFitRunning != 0u)
-	{
-		RunFocAngleFitLoop();
-		return;
-	}
 	if (gFocRotatingThetaTestRunning != 0u)
 	{
 		RunFocRotatingThetaTestLoop();
@@ -3860,6 +2995,10 @@ int main(void)
 	
 	// Keep FPGA encoder parser aligned with the active motor parameter set ==> with this driver required for reading encoder value.
 	*(__IO uint16_t*)(REG_ENCODER_ID) = (uint16_t)MotorParameter[MOTOR_ENCODER_ID];
+	gFpgaEncoderParserConfigured = 0u;
+	gFpgaDoneLatched = 0u;
+	gFpgaDoneTickMs = HAL_GetTick();
+	ServiceFpgaStartup();
 
   /* USER CODE END 2 */
 
@@ -3867,6 +3006,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	ServiceFpgaStartup();
 	UpdateIsrMeasureOnlyFrequency();
 	USB_ProcessData(&USB_Comm);
 	USB_TransmitData(&USB_Comm);

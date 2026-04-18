@@ -95,16 +95,11 @@ extern volatile uint8_t gServoArmOnlyRequested;
 extern volatile uint8_t gFocElectricalAngleTestMode;
 extern volatile uint8_t gFocCurrentUvSwapTest;
 extern volatile uint8_t gFocCurrentPolarityInvertTest;
-extern volatile uint8_t gFocDirectionTestStatus;
 extern volatile uint8_t gFocRotatingThetaTestRunning;
 extern volatile uint8_t gFocRotatingThetaVoltageTestRunning;
 extern volatile uint8_t gFocCurrentFeedbackMapTestRunning;
-extern volatile int32_t gFocDirectionTestOpenLoopDeltaPos;
-extern volatile int32_t gFocDirectionTestFocDeltaPos;
 extern void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode);
 extern uint8_t SaveParametersToFlash(void);
-extern uint8_t StartFocDirectionTest(void);
-extern uint8_t StartFocAngleFit(void);
 extern uint8_t StartFocRotatingThetaTest(void);
 extern uint8_t StartFocRotatingThetaVoltageTest(void);
 extern uint8_t StartFocCurrentFeedbackMapTest(void);
@@ -113,8 +108,6 @@ extern void StopFocDiagnosticModes(void);
 static void USB_StartServoSequence(uint8_t allow_auto_encoder_alignment);
 static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_length);
 static void USB_HandleFocControlStop(void);
-static uint8_t USB_HandleStartFocDirectionTest(void);
-static uint8_t USB_HandleStartFocAngleFit(void);
 static uint8_t USB_HandleStartFocRotatingThetaTest(void);
 static uint8_t USB_HandleStartFocRotatingThetaVoltageTest(void);
 static uint8_t USB_HandleStartFocCurrentFeedbackMapTest(void);
@@ -132,20 +125,6 @@ static uint8_t USB_RingPush(uint8_t byte)
 	s_rx_buffer[s_rx_head] = byte;
 	s_rx_head = next;
 	return USB_COMM_OK;
-}
-
-
-static uint8_t USB_HandleStartFocAngleFit(void)
-{
-    if (StartFocAngleFit() == 0u)
-    {
-        return USB_COMM_FAIL;
-    }
-    if (Trace_Data.Enable != 0u)
-    {
-        USB_ResetTraceCaptureState();
-    }
-    return USB_COMM_OK;
 }
 
 static uint8_t USB_HandleStartFocRotatingThetaTest(void)
@@ -355,9 +334,9 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	uint8_t autotune_error = (uint8_t)gMotorAutoTune.error;
 	uint8_t autotune_progress = gMotorAutoTune.progress_percent;
 	uint8_t autotune_data_ready = gMotorAutoTune.tuning_data_ready;
-	uint8_t foc_direction_test_status = gFocDirectionTestStatus;
-	int32_t foc_direction_test_open_loop_delta_pos = gFocDirectionTestOpenLoopDeltaPos;
-	int32_t foc_direction_test_foc_delta_pos = gFocDirectionTestFocDeltaPos;
+	uint8_t foc_direction_test_status = FOC_DIRECTION_TEST_IDLE;
+	int32_t foc_direction_test_open_loop_delta_pos = 0;
+	int32_t foc_direction_test_foc_delta_pos = 0;
 	uint16_t adc_offset_ia = Parameter.u16Offset_Ia;
 	uint16_t adc_offset_ib = Parameter.u16Offset_Ib;
 	uint8_t calibration_status = USB_GetCurrentCalibrationStatus();
@@ -1021,19 +1000,6 @@ static uint8_t USB_HandleStartEncoderAlignment(void)
 	return USB_COMM_OK;
 }
 
-static uint8_t USB_HandleStartFocDirectionTest(void)
-{
-	if (StartFocDirectionTest() == 0u)
-	{
-		return USB_COMM_FAIL;
-	}
-	if (Trace_Data.Enable != 0u)
-	{
-		USB_ResetTraceCaptureState();
-	}
-	return USB_COMM_OK;
-}
-
 static uint8_t USB_HandleWriteToFlash(void)
 {
 	return (SaveParametersToFlash() != 0u) ? USB_COMM_OK : USB_COMM_FAIL;
@@ -1623,25 +1589,11 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 			break;
 
 		case CMD_START_FOC_DIRECTION_TEST:
-			if (USB_HandleStartFocDirectionTest() == USB_COMM_OK)
-			{
-				USB_SendAckPacket(ACK, command, payload, payload_length);
-			}
-			else
-			{
-				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
-			}
+			USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
 			break;
 
 		case CMD_START_FOC_ANGLE_FIT:
-			if (USB_HandleStartFocAngleFit() == USB_COMM_OK)
-			{
-				USB_SendAckPacket(ACK, command, payload, payload_length);
-			}
-			else
-			{
-				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
-			}
+			USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
 			break;
 
 		case CMD_START_FOC_ROTATING_THETA_TEST:

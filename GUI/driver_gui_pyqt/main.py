@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 from collections import deque
 from dataclasses import dataclass
+import html
+import math
 import struct
 import sys
 import time
@@ -27,12 +30,6 @@ from protocol import (
     ENCODER_ALIGNMENT_STATUS_REQUESTED,
     ENCODER_ALIGNMENT_STATUS_RUNNING,
     CURRENT_LOOP_FREQUENCY_HZ,
-    FOC_DIRECTION_TEST_DONE_FLIPPED,
-    FOC_DIRECTION_TEST_DONE_OK,
-    FOC_DIRECTION_TEST_FAULT,
-    FOC_DIRECTION_TEST_IDLE,
-    FOC_DIRECTION_TEST_INCONCLUSIVE,
-    FOC_DIRECTION_TEST_RUNNING,
     ID_SQUARE_ANGLE_TEST_NONE,
     ID_SQUARE_TUNING_MODE_ALIGNMENT_HOLD,
     ID_SQUARE_TUNING_MODE_SQUARE_WAVE,
@@ -222,6 +219,552 @@ class PendingFrame:
     quiet: bool = False
 
 
+@dataclass(slots=True)
+class ChartReportCapture:
+    title: str
+    image: QtGui.QImage
+    series_endpoints: dict[str, QtCore.QPointF]
+    series_labels: dict[str, str]
+    dpi: int = 300
+
+
+def _chart_scale_from_font_size(font_pt: int) -> float:
+    return max(1.0, float(font_pt) / 12.0)
+
+
+def _series_role_key(series_key: str | None, label: str, index: int) -> str:
+    token = (series_key or label).lower()
+    if "ref" in token or "cmd" in token or "target" in token:
+        return "reference"
+    if "iq" in token or "act_speed" in token or "feedback" in token:
+        return "feedback"
+    if "id" in token or "error" in token or "secondary" in token:
+        return "secondary"
+    return ("reference", "feedback", "secondary")[index % 3]
+
+
+def _series_pen_spec(
+    series_key: str | None,
+    label: str,
+    index: int,
+    *,
+    report_mode: bool,
+    fallback_color: str,
+) -> tuple[QtGui.QPen, str | None]:
+    if not report_mode:
+        return QtGui.QPen(QtGui.QColor(fallback_color), 1.8), None
+
+    role = _series_role_key(series_key, label, index)
+    if role == "reference":
+        pen = QtGui.QPen(QtGui.QColor("#000000"), 3.3)
+        pen.setStyle(QtCore.Qt.PenStyle.SolidLine)
+        return pen, None
+    if role == "feedback":
+        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.7)
+        pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        return pen, "square"
+
+    pen = QtGui.QPen(QtGui.QColor("#000000"), 2.0)
+    pen.setStyle(QtCore.Qt.PenStyle.DotLine)
+    return pen, "circle"
+
+
+def _draw_series_marker(
+    painter: QtGui.QPainter,
+    center: QtCore.QPointF,
+    marker_shape: str | None,
+    size_px: float,
+    color: QtGui.QColor,
+) -> None:
+    if marker_shape is None:
+        return
+
+    painter.save()
+    painter.setPen(QtGui.QPen(color, 1.0))
+    painter.setBrush(QtGui.QBrush(color))
+    half = size_px * 0.5
+    if marker_shape == "square":
+        painter.drawRect(
+            QtCore.QRectF(center.x() - half, center.y() - half, size_px, size_px)
+        )
+    else:
+        painter.drawEllipse(center, half, half)
+    painter.restore()
+
+
+def _qimage_to_png_bytes(image: QtGui.QImage) -> bytes:
+    byte_array = QtCore.QByteArray()
+    buffer = QtCore.QBuffer(byte_array)
+    buffer.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    buffer.close()
+    return bytes(byte_array)
+
+
+class ReportTextItem(QtWidgets.QGraphicsTextItem):
+    def __init__(
+        self,
+        text: str,
+        *,
+        bold: bool = False,
+        parent: QtWidgets.QGraphicsItem | None = None,
+    ) -> None:
+        super().__init__(text, parent)
+        font = QtGui.QFont("Times New Roman", 13)
+        font.setBold(bold)
+        self.setFont(font)
+        self.setDefaultTextColor(QtGui.QColor("#000000"))
+        self.setFlags(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+        )
+        self.setZValue(20.0)
+
+    def mouseDoubleClickEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        text, accepted = QtWidgets.QInputDialog.getText(
+            None,
+            "Edit Label",
+            "Annotation Text",
+            QtWidgets.QLineEdit.EchoMode.Normal,
+            self.toPlainText(),
+        )
+        if accepted and text.strip():
+            self.setPlainText(text.strip())
+        super().mouseDoubleClickEvent(event)
+
+
+class ArrowHandleItem(QtWidgets.QGraphicsEllipseItem):
+    def __init__(
+        self,
+        owner: "ArrowAnnotationItem",
+        initial_pos: QtCore.QPointF,
+        parent: QtWidgets.QGraphicsItem | None = None,
+    ) -> None:
+        super().__init__(-5.0, -5.0, 10.0, 10.0, parent)
+        self._owner = owner
+        self.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
+        self.setPen(QtGui.QPen(QtGui.QColor("#000000"), 1.0))
+        self.setPos(initial_pos)
+        self.setFlags(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self.setZValue(30.0)
+
+    def itemChange(
+        self,
+        change: QtWidgets.QGraphicsItem.GraphicsItemChange,
+        value,
+    ):
+        if (
+            change
+            == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
+            and self._owner is not None
+        ):
+            self._owner.handle_moved()
+        return super().itemChange(change, value)
+
+
+class ArrowAnnotationItem(QtWidgets.QGraphicsObject):
+    def __init__(
+        self,
+        start_point: QtCore.QPointF,
+        end_point: QtCore.QPointF,
+        parent: QtWidgets.QGraphicsItem | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._padding = 14.0
+        self.start_handle = ArrowHandleItem(self, start_point, self)
+        self.end_handle = ArrowHandleItem(self, end_point, self)
+        self.setFlags(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        )
+        self.setZValue(15.0)
+
+    def boundingRect(self) -> QtCore.QRectF:  # noqa: N802
+        line_rect = QtCore.QRectF(self.start_handle.pos(), self.end_handle.pos()).normalized()
+        return line_rect.adjusted(
+            -self._padding,
+            -self._padding,
+            self._padding,
+            self._padding,
+        )
+
+    def handle_moved(self) -> None:
+        self.prepareGeometryChange()
+        self.update()
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: QtWidgets.QWidget | None = None,
+    ) -> None:
+        _ = option
+        _ = widget
+        start_point = self.start_handle.pos()
+        end_point = self.end_handle.pos()
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.0)
+        painter.setPen(pen)
+        painter.drawLine(start_point, end_point)
+
+        angle = math.atan2(
+            start_point.y() - end_point.y(),
+            start_point.x() - end_point.x(),
+        )
+        arrow_size = 11.0
+        left = QtCore.QPointF(
+            end_point.x() + math.cos(angle + math.pi / 6.0) * arrow_size,
+            end_point.y() + math.sin(angle + math.pi / 6.0) * arrow_size,
+        )
+        right = QtCore.QPointF(
+            end_point.x() + math.cos(angle - math.pi / 6.0) * arrow_size,
+            end_point.y() + math.sin(angle - math.pi / 6.0) * arrow_size,
+        )
+        painter.setBrush(QtGui.QBrush(QtGui.QColor("#000000")))
+        painter.drawPolygon(QtGui.QPolygonF([end_point, left, right]))
+        painter.restore()
+
+    def svg_geometry(self) -> tuple[QtCore.QPointF, QtCore.QPointF]:
+        return (
+            self.mapToScene(self.start_handle.pos()),
+            self.mapToScene(self.end_handle.pos()),
+        )
+
+
+class ReportEditorDialog(QtWidgets.QDialog):
+    def __init__(
+        self,
+        capture: ChartReportCapture,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Report Editor - {capture.title}")
+        self.resize(1320, 860)
+        self.setModal(True)
+
+        self._capture = capture
+        self._base_image = capture.image
+        self._base_endpoints = dict(capture.series_endpoints)
+        self._series_labels = dict(capture.series_labels)
+        self._caption_prefix = "Figure 1."
+        self._current_endpoints: dict[str, QtCore.QPointF] = {}
+
+        self._scene = QtWidgets.QGraphicsScene(self)
+        self._view = QtWidgets.QGraphicsView(self._scene, self)
+        self._view.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        self._view.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        self._view.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+        self._base_pixmap_item = QtWidgets.QGraphicsPixmapItem()
+        self._base_pixmap_item.setZValue(0.0)
+        self._scene.addItem(self._base_pixmap_item)
+        self._caption_item = QtWidgets.QGraphicsTextItem()
+        caption_font = QtGui.QFont("Times New Roman", 14)
+        caption_font.setBold(True)
+        self._caption_item.setFont(caption_font)
+        self._caption_item.setDefaultTextColor(QtGui.QColor("#000000"))
+        self._caption_item.setZValue(5.0)
+        self._scene.addItem(self._caption_item)
+
+        controls_layout = QtWidgets.QVBoxLayout()
+        instructions = QtWidgets.QLabel(
+            "Workflow: crop the captured chart, add draggable labels or signal tags, place arrow callouts, then export to clipboard or disk. Double-click any text label to rename it."
+        )
+        instructions.setWordWrap(True)
+        controls_layout.addWidget(instructions)
+
+        caption_group = QtWidgets.QGroupBox("Caption / Figure")
+        caption_layout = QtWidgets.QGridLayout(caption_group)
+        self.figure_prefix_edit = QtWidgets.QLineEdit("Figure 1.")
+        self.caption_edit = QtWidgets.QLineEdit(capture.title)
+        caption_layout.addWidget(QtWidgets.QLabel("Figure Prefix"), 0, 0)
+        caption_layout.addWidget(self.figure_prefix_edit, 0, 1)
+        caption_layout.addWidget(QtWidgets.QLabel("Caption"), 1, 0)
+        caption_layout.addWidget(self.caption_edit, 1, 1)
+        controls_layout.addWidget(caption_group)
+
+        crop_group = QtWidgets.QGroupBox("Crop Margins (px)")
+        crop_layout = QtWidgets.QGridLayout(crop_group)
+        self.crop_left_spin = QtWidgets.QSpinBox()
+        self.crop_right_spin = QtWidgets.QSpinBox()
+        self.crop_top_spin = QtWidgets.QSpinBox()
+        self.crop_bottom_spin = QtWidgets.QSpinBox()
+        for spin in (
+            self.crop_left_spin,
+            self.crop_right_spin,
+            self.crop_top_spin,
+            self.crop_bottom_spin,
+        ):
+            spin.setRange(0, 4000)
+        crop_layout.addWidget(QtWidgets.QLabel("Left"), 0, 0)
+        crop_layout.addWidget(self.crop_left_spin, 0, 1)
+        crop_layout.addWidget(QtWidgets.QLabel("Right"), 0, 2)
+        crop_layout.addWidget(self.crop_right_spin, 0, 3)
+        crop_layout.addWidget(QtWidgets.QLabel("Top"), 1, 0)
+        crop_layout.addWidget(self.crop_top_spin, 1, 1)
+        crop_layout.addWidget(QtWidgets.QLabel("Bottom"), 1, 2)
+        crop_layout.addWidget(self.crop_bottom_spin, 1, 3)
+        controls_layout.addWidget(crop_group)
+
+        annotation_group = QtWidgets.QGroupBox("Annotations")
+        annotation_layout = QtWidgets.QGridLayout(annotation_group)
+        self.annotation_text_button = QtWidgets.QPushButton("Add Text Label")
+        self.add_arrow_button = QtWidgets.QPushButton("Add Arrow")
+        self.remove_selected_button = QtWidgets.QPushButton("Remove Selected")
+        self.signal_tag_combo = QtWidgets.QComboBox()
+        self.signal_tag_combo.addItems(list(self._series_labels.keys()))
+        self.add_signal_tag_button = QtWidgets.QPushButton("Add Signal Tag")
+        annotation_layout.addWidget(self.annotation_text_button, 0, 0, 1, 2)
+        annotation_layout.addWidget(self.add_arrow_button, 1, 0)
+        annotation_layout.addWidget(self.remove_selected_button, 1, 1)
+        annotation_layout.addWidget(QtWidgets.QLabel("Signal"), 2, 0)
+        annotation_layout.addWidget(self.signal_tag_combo, 2, 1)
+        annotation_layout.addWidget(self.add_signal_tag_button, 3, 0, 1, 2)
+        controls_layout.addWidget(annotation_group)
+
+        export_group = QtWidgets.QGroupBox("Final Export")
+        export_layout = QtWidgets.QVBoxLayout(export_group)
+        self.copy_clipboard_button = QtWidgets.QPushButton("Save to Clipboard")
+        self.save_png_button = QtWidgets.QPushButton("Save PNG")
+        self.save_svg_button = QtWidgets.QPushButton("Save SVG")
+        export_layout.addWidget(self.copy_clipboard_button)
+        export_layout.addWidget(self.save_png_button)
+        export_layout.addWidget(self.save_svg_button)
+        controls_layout.addWidget(export_group)
+        controls_layout.addStretch(1)
+
+        right_layout = QtWidgets.QVBoxLayout()
+        right_layout.addWidget(self._view, 1)
+
+        main_layout = QtWidgets.QHBoxLayout(self)
+        main_layout.addLayout(controls_layout, 0)
+        main_layout.addLayout(right_layout, 1)
+
+        self.figure_prefix_edit.textChanged.connect(self._update_caption_item)
+        self.caption_edit.textChanged.connect(self._update_caption_item)
+        self.crop_left_spin.valueChanged.connect(self._refresh_base_image)
+        self.crop_right_spin.valueChanged.connect(self._refresh_base_image)
+        self.crop_top_spin.valueChanged.connect(self._refresh_base_image)
+        self.crop_bottom_spin.valueChanged.connect(self._refresh_base_image)
+        self.annotation_text_button.clicked.connect(self._add_annotation_label)
+        self.add_arrow_button.clicked.connect(self._add_arrow)
+        self.remove_selected_button.clicked.connect(self._remove_selected_items)
+        self.add_signal_tag_button.clicked.connect(self._add_signal_tag)
+        self.copy_clipboard_button.clicked.connect(self._copy_to_clipboard)
+        self.save_png_button.clicked.connect(self._save_png)
+        self.save_svg_button.clicked.connect(self._save_svg)
+
+        self._refresh_base_image()
+
+    def _crop_rect(self) -> QtCore.QRect:
+        width = self._base_image.width()
+        height = self._base_image.height()
+        left = min(self.crop_left_spin.value(), width - 10)
+        top = min(self.crop_top_spin.value(), height - 10)
+        right = min(self.crop_right_spin.value(), max(0, width - left - 10))
+        bottom = min(self.crop_bottom_spin.value(), max(0, height - top - 10))
+        return QtCore.QRect(left, top, width - left - right, height - top - bottom)
+
+    def _refresh_base_image(self) -> None:
+        crop = self._crop_rect()
+        cropped_image = self._base_image.copy(crop)
+        self._current_endpoints = {}
+        for series_key, point in self._base_endpoints.items():
+            adjusted = QtCore.QPointF(point.x() - crop.left(), point.y() - crop.top())
+            if 0.0 <= adjusted.x() <= cropped_image.width() and 0.0 <= adjusted.y() <= cropped_image.height():
+                self._current_endpoints[series_key] = adjusted
+
+        self._base_pixmap_item.setPixmap(QtGui.QPixmap.fromImage(cropped_image))
+        self._base_pixmap_item.setPos(0.0, 0.0)
+        self._update_caption_item()
+        self._scene.setSceneRect(self._scene.itemsBoundingRect().adjusted(-20, -20, 20, 20))
+        self._view.fitInView(self._scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _update_caption_item(self) -> None:
+        figure_prefix = self.figure_prefix_edit.text().strip() or "Figure 1."
+        caption_text = self.caption_edit.text().strip() or self._capture.title
+        self._caption_item.setPlainText(f"{figure_prefix} {caption_text}")
+        base_rect = self._base_pixmap_item.boundingRect()
+        caption_rect = self._caption_item.boundingRect()
+        self._caption_item.setPos(
+            max(0.0, (base_rect.width() - caption_rect.width()) * 0.5),
+            base_rect.height() + 18.0,
+        )
+        self._scene.setSceneRect(self._scene.itemsBoundingRect().adjusted(-20, -20, 20, 20))
+
+    def _add_annotation_label(self) -> None:
+        text, accepted = QtWidgets.QInputDialog.getText(
+            self,
+            "Add Annotation",
+            "Label",
+            QtWidgets.QLineEdit.EchoMode.Normal,
+            "Overshoot",
+        )
+        if not accepted or not text.strip():
+            return
+        item = ReportTextItem(text.strip())
+        base_rect = self._base_pixmap_item.boundingRect()
+        item.setPos(base_rect.center() + QtCore.QPointF(-40.0, -20.0))
+        self._scene.addItem(item)
+
+    def _add_signal_tag(self) -> None:
+        series_key = self.signal_tag_combo.currentText()
+        label = self._series_labels.get(series_key, series_key)
+        item = ReportTextItem(label, bold=True)
+        endpoint = self._current_endpoints.get(series_key)
+        if endpoint is None:
+            base_rect = self._base_pixmap_item.boundingRect()
+            item.setPos(base_rect.topRight() + QtCore.QPointF(-140.0, 20.0))
+        else:
+            item.setPos(endpoint + QtCore.QPointF(14.0, -18.0))
+        self._scene.addItem(item)
+
+    def _add_arrow(self) -> None:
+        base_rect = self._base_pixmap_item.boundingRect()
+        center = base_rect.center()
+        arrow = ArrowAnnotationItem(
+            center + QtCore.QPointF(-70.0, -40.0),
+            center + QtCore.QPointF(30.0, 10.0),
+        )
+        self._scene.addItem(arrow)
+
+    def _remove_selected_items(self) -> None:
+        for item in list(self._scene.selectedItems()):
+            if item in (self._base_pixmap_item, self._caption_item):
+                continue
+            self._scene.removeItem(item)
+
+    def _render_scene_to_image(self) -> QtGui.QImage:
+        scene_rect = self._scene.itemsBoundingRect().adjusted(10.0, 10.0, 10.0, 10.0)
+        image = QtGui.QImage(
+            int(scene_rect.width()),
+            int(scene_rect.height()),
+            QtGui.QImage.Format.Format_ARGB32,
+        )
+        image.fill(QtGui.QColor("#ffffff"))
+        painter = QtGui.QPainter(image)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        self._scene.render(
+            painter,
+            QtCore.QRectF(image.rect()),
+            scene_rect,
+        )
+        painter.end()
+        return image
+
+    def _copy_to_clipboard(self) -> None:
+        QtWidgets.QApplication.clipboard().setImage(self._render_scene_to_image())
+
+    def _save_png(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save Report PNG",
+            "chart_report.png",
+            "PNG Files (*.png)",
+        )
+        if not path:
+            return
+        self._render_scene_to_image().save(path, "PNG")
+
+    def _save_svg(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save Report SVG",
+            "chart_report.svg",
+            "SVG Files (*.svg)",
+        )
+        if not path:
+            return
+
+        crop_image = self._base_pixmap_item.pixmap().toImage()
+        png_b64 = base64.b64encode(_qimage_to_png_bytes(crop_image)).decode("ascii")
+        scene_rect = self._scene.itemsBoundingRect().adjusted(10.0, 10.0, 10.0, 10.0)
+        width = max(1.0, scene_rect.width())
+        height = max(1.0, scene_rect.height())
+
+        svg_lines = [
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+            (
+                f"<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                f"xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+                f"width=\"{width:.0f}\" height=\"{height:.0f}\" "
+                f"viewBox=\"{scene_rect.x():.2f} {scene_rect.y():.2f} {width:.2f} {height:.2f}\">"
+            ),
+            "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>",
+            (
+                f"<image x=\"0\" y=\"0\" width=\"{crop_image.width()}\" height=\"{crop_image.height()}\" "
+                f"xlink:href=\"data:image/png;base64,{png_b64}\" />"
+            ),
+        ]
+
+        for item in self._scene.items():
+            if isinstance(item, ArrowAnnotationItem):
+                start_point, end_point = item.svg_geometry()
+                angle = math.atan2(
+                    start_point.y() - end_point.y(),
+                    start_point.x() - end_point.x(),
+                )
+                arrow_size = 11.0
+                left = QtCore.QPointF(
+                    end_point.x() + math.cos(angle + math.pi / 6.0) * arrow_size,
+                    end_point.y() + math.sin(angle + math.pi / 6.0) * arrow_size,
+                )
+                right = QtCore.QPointF(
+                    end_point.x() + math.cos(angle - math.pi / 6.0) * arrow_size,
+                    end_point.y() + math.sin(angle - math.pi / 6.0) * arrow_size,
+                )
+                svg_lines.append(
+                    (
+                        f"<line x1=\"{start_point.x():.2f}\" y1=\"{start_point.y():.2f}\" "
+                        f"x2=\"{end_point.x():.2f}\" y2=\"{end_point.y():.2f}\" "
+                        f"stroke=\"#000000\" stroke-width=\"2\" />"
+                    )
+                )
+                svg_lines.append(
+                    (
+                        "<polygon "
+                        f"points=\"{end_point.x():.2f},{end_point.y():.2f} "
+                        f"{left.x():.2f},{left.y():.2f} "
+                        f"{right.x():.2f},{right.y():.2f}\" "
+                        "fill=\"#000000\" />"
+                    )
+                )
+            elif isinstance(item, ReportTextItem):
+                scene_pos = item.scenePos()
+                font = item.font()
+                svg_lines.append(
+                    (
+                        f"<text x=\"{scene_pos.x():.2f}\" y=\"{scene_pos.y() + font.pointSizeF():.2f}\" "
+                        f"font-family=\"{html.escape(font.family())}\" "
+                        f"font-size=\"{font.pointSizeF():.2f}\" "
+                        f"font-weight=\"{'700' if font.bold() else '400'}\" "
+                        "fill=\"#000000\">"
+                        f"{html.escape(item.toPlainText())}</text>"
+                    )
+                )
+
+        caption_text = html.escape(self._caption_item.toPlainText())
+        caption_font = self._caption_item.font()
+        caption_pos = self._caption_item.scenePos()
+        svg_lines.append(
+            (
+                f"<text x=\"{caption_pos.x():.2f}\" y=\"{caption_pos.y() + caption_font.pointSizeF():.2f}\" "
+                f"font-family=\"{html.escape(caption_font.family())}\" "
+                f"font-size=\"{caption_font.pointSizeF():.2f}\" font-weight=\"700\" fill=\"#000000\">"
+                f"{caption_text}</text>"
+            )
+        )
+        svg_lines.append("</svg>")
+
+        with open(path, "w", encoding="utf-8") as svg_file:
+            svg_file.write("\n".join(svg_lines))
+
+
 class CircularSeriesBuffer:
     def __init__(
         self,
@@ -315,6 +858,8 @@ class ScadaTrendView(QtWidgets.QWidget):
         self._render_anchor_s = 0.0
         self._plot_rect = QtCore.QRectF()
         self._hover_index: int | None = None
+        self._report_mode = False
+        self._report_font_point_size = 14
         self.setMinimumHeight(220)
         self.setMouseTracking(True)
 
@@ -339,6 +884,44 @@ class ScadaTrendView(QtWidgets.QWidget):
     def set_time_window_s(self, value: float) -> None:
         self._time_window_s = max(1.0, float(value))
 
+    def set_report_mode(self, enabled: bool) -> None:
+        self._report_mode = bool(enabled)
+        self.update()
+
+    def set_report_font_point_size(self, value: int) -> None:
+        self._report_font_point_size = int(max(12, min(24, value)))
+        self.update()
+
+    def build_report_capture(self, dpi: int = 300) -> ChartReportCapture:
+        if not self._render_times:
+            self.refresh_from_buffer()
+        scale = float(dpi) / 96.0
+        image = QtGui.QImage(
+            int(self.width() * scale),
+            int(self.height() * scale),
+            QtGui.QImage.Format.Format_ARGB32,
+        )
+        image.setDotsPerMeterX(int(dpi / 25.4 * 1000.0))
+        image.setDotsPerMeterY(int(dpi / 25.4 * 1000.0))
+        image.fill(QtGui.QColor("#ffffff") if self._report_mode else self.palette().base().color())
+
+        previous_hover = self._hover_index
+        self._hover_index = None
+        painter = QtGui.QPainter(image)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.scale(scale, scale)
+        self.render(painter)
+        painter.end()
+        self._hover_index = previous_hover
+
+        return ChartReportCapture(
+            title=self._title,
+            image=image,
+            series_endpoints=self._series_endpoint_map(scale_factor=scale),
+            series_labels={key: TREND_SERIES_META[key]["label"] for key in self._series_keys},
+            dpi=dpi,
+        )
+
     def refresh_from_buffer(self) -> None:
         anchor_s = self._buffer.latest_timestamp()
         if anchor_s is None:
@@ -361,6 +944,97 @@ class ScadaTrendView(QtWidgets.QWidget):
             self._frozen_range = self._calculate_y_range()
         self.update()
 
+    def _render_scale(self) -> float:
+        return _chart_scale_from_font_size(self._report_font_point_size) if self._report_mode else 1.0
+
+    def _title_font(self) -> QtGui.QFont:
+        font = QtGui.QFont(self.font())
+        if self._report_mode:
+            font.setFamily("Times New Roman")
+            font.setPointSize(max(14, self._report_font_point_size + 2))
+            font.setBold(True)
+        return font
+
+    def _legend_font(self) -> QtGui.QFont:
+        font = QtGui.QFont(self.font())
+        if self._report_mode:
+            font.setFamily("Times New Roman")
+            font.setPointSize(self._report_font_point_size)
+        return font
+
+    def _tick_font(self) -> QtGui.QFont:
+        font = QtGui.QFont(self.font())
+        if self._report_mode:
+            font.setFamily("Times New Roman")
+            font.setPointSize(max(12, self._report_font_point_size - 1))
+        return font
+
+    def _chart_colors(self) -> dict[str, QtGui.QColor]:
+        if self._report_mode:
+            return {
+                "background": QtGui.QColor("#FFFFFF"),
+                "text": QtGui.QColor("#000000"),
+                "border": QtGui.QColor("#000000"),
+                "grid": QtGui.QColor("#B8B8B8"),
+                "cursor": QtGui.QColor("#666666"),
+            }
+        return {
+            "background": self.palette().base().color(),
+            "text": self.palette().text().color(),
+            "border": self.palette().mid().color(),
+            "grid": self.palette().midlight().color(),
+            "cursor": QtGui.QColor("#888888"),
+        }
+
+    def _plot_geometry(
+        self,
+        rect: QtCore.QRectF,
+    ) -> tuple[QtCore.QRectF, int, int, int]:
+        scale = self._render_scale()
+        title_height = QtGui.QFontMetrics(self._title_font()).height() + int(4 * scale)
+        legend_height = max(QtGui.QFontMetrics(self._legend_font()).height(), int(10 * scale)) + int(8 * scale)
+        bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(18 * scale)
+        legend_y = rect.top() + title_height + int(6 * scale)
+        plot_rect = QtCore.QRectF(
+            rect.left(),
+            legend_y + legend_height + int(8 * scale),
+            rect.width(),
+            rect.height() - title_height - legend_height - bottom_space - int(16 * scale),
+        )
+        return plot_rect, title_height, legend_height, bottom_space
+
+    def _legend_step_width(self, key: str) -> int:
+        metrics = QtGui.QFontMetrics(self._legend_font())
+        scale = self._render_scale()
+        return max(int(metrics.horizontalAdvance(TREND_SERIES_META[key]["label"]) + (42 * scale)), 96)
+
+    def _series_endpoint_map(self, scale_factor: float = 1.0) -> dict[str, QtCore.QPointF]:
+        if not self._render_times:
+            return {}
+        rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
+        plot_rect, _, _, _ = self._plot_geometry(rect)
+        if plot_rect.height() <= 0:
+            return {}
+        y_min, y_max = self._frozen_range
+        y_span = max(y_max - y_min, 0.1)
+        endpoint_map: dict[str, QtCore.QPointF] = {}
+        start_time = self._render_anchor_s - self._time_window_s
+        for key in self._series_keys:
+            series = self._render_values.get(key, [])
+            if not series:
+                continue
+            index = len(series) - 1
+            time_ratio = (
+                (self._render_times[index] - start_time) / self._time_window_s
+                if self._time_window_s > 0
+                else 1.0
+            )
+            time_ratio = min(max(time_ratio, 0.0), 1.0)
+            x = plot_rect.left() + plot_rect.width() * time_ratio
+            y = plot_rect.bottom() - (((series[index] - y_min) / y_span) * plot_rect.height())
+            endpoint_map[key] = QtCore.QPointF(x * scale_factor, y * scale_factor)
+        return endpoint_map
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         super().paintEvent(event)
 
@@ -368,38 +1042,55 @@ class ScadaTrendView(QtWidgets.QWidget):
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
         rect = self.rect().adjusted(8, 8, -8, -8)
-        painter.fillRect(rect, self.palette().base())
+        colors = self._chart_colors()
+        painter.fillRect(rect, colors["background"])
 
-        title_rect = QtCore.QRect(rect.left(), rect.top(), rect.width(), 20)
-        painter.setPen(self.palette().text().color())
+        painter.setFont(self._title_font())
+        plot_rect, title_height, legend_height, _ = self._plot_geometry(QtCore.QRectF(rect))
+        title_rect = QtCore.QRect(rect.left(), rect.top(), rect.width(), title_height)
+        painter.setPen(colors["text"])
         painter.drawText(
             title_rect,
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
             self._title,
         )
 
-        legend_y = title_rect.bottom() + 8
+        legend_y = rect.top() + title_height + int(6 * self._render_scale())
         legend_x = rect.left()
+        painter.setFont(self._legend_font())
         for key in self._series_keys:
-            color = QtGui.QColor(TREND_SERIES_META[key]["color"])
-            painter.fillRect(QtCore.QRect(legend_x, legend_y, 10, 10), color)
+            legend_color = QtGui.QColor(TREND_SERIES_META[key]["color"]) if not self._report_mode else QtGui.QColor("#000000")
+            painter.fillRect(
+                QtCore.QRect(
+                    legend_x,
+                    legend_y,
+                    int(10 * self._render_scale()),
+                    int(10 * self._render_scale()),
+                ),
+                legend_color,
+            )
             painter.drawText(
-                QtCore.QRect(legend_x + 14, legend_y - 3, 90, 18),
+                QtCore.QRect(
+                    legend_x + int(14 * self._render_scale()),
+                    legend_y - int(3 * self._render_scale()),
+                    self._legend_step_width(key),
+                    legend_height,
+                ),
                 QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
                 TREND_SERIES_META[key]["label"],
             )
-            legend_x += 95
+            legend_x += self._legend_step_width(key) + int(18 * self._render_scale())
 
-        plot_rect = QtCore.QRectF(rect.left(), legend_y + 20, rect.width(), rect.height() - 54)
         if plot_rect.height() <= 0:
             return
         self._plot_rect = plot_rect
 
-        border_pen = QtGui.QPen(self.palette().mid().color())
+        border_pen = QtGui.QPen(colors["border"], 1.2 if self._report_mode else 1.0)
         painter.setPen(border_pen)
         painter.drawRect(plot_rect)
 
         if not self._render_times:
+            painter.setFont(self._legend_font())
             painter.drawText(
                 plot_rect.toRect(),
                 QtCore.Qt.AlignmentFlag.AlignCenter,
@@ -410,8 +1101,8 @@ class ScadaTrendView(QtWidgets.QWidget):
         y_min, y_max = self._frozen_range
         y_span = max(y_max - y_min, 0.1)
 
-        grid_pen = QtGui.QPen(self.palette().midlight().color())
-        grid_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        grid_pen = QtGui.QPen(colors["grid"], 1.0)
+        grid_pen.setStyle(QtCore.Qt.PenStyle.DotLine if self._report_mode else QtCore.Qt.PenStyle.DashLine)
         painter.setPen(grid_pen)
         for grid_index in range(1, 5):
             y = plot_rect.top() + (plot_rect.height() * grid_index / 5.0)
@@ -420,8 +1111,14 @@ class ScadaTrendView(QtWidgets.QWidget):
                 QtCore.QPointF(plot_rect.right(), y),
             )
 
-        value_text_rect = QtCore.QRectF(plot_rect.right() - 80, plot_rect.top() + 4, 76, 16)
-        painter.setPen(self.palette().text().color())
+        painter.setFont(self._tick_font())
+        value_text_rect = QtCore.QRectF(
+            plot_rect.right() - (90 * self._render_scale()),
+            plot_rect.top() + (4 * self._render_scale()),
+            86 * self._render_scale(),
+            18 * self._render_scale(),
+        )
+        painter.setPen(colors["text"])
         painter.drawText(value_text_rect, QtCore.Qt.AlignmentFlag.AlignRight, f"{y_max:.2f}")
         value_text_rect.moveBottom(plot_rect.bottom() - 4)
         painter.drawText(value_text_rect, QtCore.Qt.AlignmentFlag.AlignRight, f"{y_min:.2f}")
@@ -436,12 +1133,17 @@ class ScadaTrendView(QtWidgets.QWidget):
             )
             label = "now" if offset_s == 0.0 else f"-{offset_s:.0f}s"
             painter.drawText(
-                QtCore.QRectF(x - 22, plot_rect.bottom() + 6, 44, 14),
+                QtCore.QRectF(
+                    x - (28 * self._render_scale()),
+                    plot_rect.bottom() + (6 * self._render_scale()),
+                    56 * self._render_scale(),
+                    16 * self._render_scale(),
+                ),
                 QtCore.Qt.AlignmentFlag.AlignCenter,
                 label,
             )
 
-        for key in self._series_keys:
+        for series_index, key in enumerate(self._series_keys):
             series = self._render_values[key]
             if len(series) < 2:
                 continue
@@ -461,9 +1163,33 @@ class ScadaTrendView(QtWidgets.QWidget):
                 else:
                     path.lineTo(point)
 
-            series_pen = QtGui.QPen(QtGui.QColor(TREND_SERIES_META[key]["color"]), 1.8)
+            series_pen, marker_shape = _series_pen_spec(
+                key,
+                TREND_SERIES_META[key]["label"],
+                series_index,
+                report_mode=self._report_mode,
+                fallback_color=TREND_SERIES_META[key]["color"],
+            )
             painter.setPen(series_pen)
             painter.drawPath(path)
+            if self._report_mode:
+                marker_step = max(1, len(series) // 6)
+                marker_color = QtGui.QColor("#000000")
+                for marker_index in range(marker_step - 1, len(series), marker_step):
+                    time_ratio = (
+                        (self._render_times[marker_index] - (self._render_anchor_s - self._time_window_s))
+                        / self._time_window_s
+                    )
+                    time_ratio = min(max(time_ratio, 0.0), 1.0)
+                    x = plot_rect.left() + (plot_rect.width() * time_ratio)
+                    y = plot_rect.bottom() - (((series[marker_index] - y_min) / y_span) * plot_rect.height())
+                    _draw_series_marker(
+                        painter,
+                        QtCore.QPointF(x, y),
+                        marker_shape,
+                        7.0 * self._render_scale(),
+                        marker_color,
+                    )
 
         if self._hover_index is not None and 0 <= self._hover_index < len(self._render_times):
             hover_time = self._render_times[self._hover_index]
@@ -471,7 +1197,7 @@ class ScadaTrendView(QtWidgets.QWidget):
                 (hover_time - (self._render_anchor_s - self._time_window_s)) / self._time_window_s
             )
             x = plot_rect.left() + (plot_rect.width() * ratio)
-            cursor_pen = QtGui.QPen(QtGui.QColor("#888888"))
+            cursor_pen = QtGui.QPen(colors["cursor"])
             cursor_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
             painter.setPen(cursor_pen)
             painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
@@ -542,6 +1268,7 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         title: str,
         trend_buffer: CircularSeriesBuffer,
         series_keys: list[str],
+        on_export_requested=None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -555,11 +1282,23 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         self.time_window_combo = QtWidgets.QComboBox()
         self.time_window_combo.addItems(["5 s", "10 s", "20 s", "30 s"])
         self.time_window_combo.setCurrentText("10 s")
+        self.report_mode_checkbox = QtWidgets.QCheckBox("Report Mode")
+        self.report_font_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.report_font_slider.setRange(12, 24)
+        self.report_font_slider.setValue(14)
+        self.report_font_slider.setFixedWidth(110)
+        self.report_font_label = QtWidgets.QLabel("14 pt")
+        self.export_report_button = QtWidgets.QPushButton("Capture & Edit")
 
         toolbar.addWidget(self.pause_button)
         toolbar.addWidget(self.auto_scale_checkbox)
         toolbar.addWidget(QtWidgets.QLabel("Window"))
         toolbar.addWidget(self.time_window_combo)
+        toolbar.addWidget(self.report_mode_checkbox)
+        toolbar.addWidget(QtWidgets.QLabel("Font"))
+        toolbar.addWidget(self.report_font_slider)
+        toolbar.addWidget(self.report_font_label)
+        toolbar.addWidget(self.export_report_button)
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
@@ -569,6 +1308,10 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         self.pause_button.toggled.connect(self._handle_pause_toggled)
         self.auto_scale_checkbox.toggled.connect(self.plot_view.set_auto_scale)
         self.time_window_combo.currentTextChanged.connect(self._handle_window_changed)
+        self.report_mode_checkbox.toggled.connect(self.plot_view.set_report_mode)
+        self.report_font_slider.valueChanged.connect(self._handle_report_font_changed)
+        if on_export_requested is not None:
+            self.export_report_button.clicked.connect(lambda: on_export_requested(self.plot_view))
 
     def _handle_pause_toggled(self, checked: bool) -> None:
         self.pause_button.setText("Resume" if checked else "Pause")
@@ -577,6 +1320,10 @@ class ScadaTrendPanel(QtWidgets.QWidget):
     def _handle_window_changed(self, text: str) -> None:
         value = float(text.split()[0])
         self.plot_view.set_time_window_s(value)
+
+    def _handle_report_font_changed(self, value: int) -> None:
+        self.report_font_label.setText(f"{int(value)} pt")
+        self.plot_view.set_report_font_point_size(int(value))
 
     def refresh(self) -> None:
         self.plot_view.refresh_from_buffer()
@@ -597,6 +1344,8 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._auto_scale = True
         self._frozen_range = (-1.0, 1.0)
         self._status_text = "Waiting for capture..."
+        self._report_mode = False
+        self._report_font_point_size = 14
         self.setMinimumHeight(340)
         self.setMouseTracking(True)
 
@@ -612,6 +1361,44 @@ class ScopeCaptureView(QtWidgets.QWidget):
         if not enabled:
             self._frozen_range = self._calculate_y_range()
         self.update()
+
+    def set_report_mode(self, enabled: bool) -> None:
+        self._report_mode = bool(enabled)
+        self.update()
+
+    def set_report_font_point_size(self, value: int) -> None:
+        self._report_font_point_size = int(max(12, min(24, value)))
+        self.update()
+
+    def build_report_capture(self, dpi: int = 300) -> ChartReportCapture:
+        scale = float(dpi) / 96.0
+        image = QtGui.QImage(
+            int(self.width() * scale),
+            int(self.height() * scale),
+            QtGui.QImage.Format.Format_ARGB32,
+        )
+        image.setDotsPerMeterX(int(dpi / 25.4 * 1000.0))
+        image.setDotsPerMeterY(int(dpi / 25.4 * 1000.0))
+        image.fill(QtGui.QColor("#ffffff") if self._report_mode else self.palette().base().color())
+
+        previous_hover = self._hover_index
+        self._hover_index = None
+        painter = QtGui.QPainter(image)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.scale(scale, scale)
+        self.render(painter)
+        painter.end()
+        self._hover_index = previous_hover
+
+        return ChartReportCapture(
+            title=self._title,
+            image=image,
+            series_endpoints=self._series_endpoint_map(scale_factor=scale),
+            series_labels={
+                series_def["label"]: series_def["label"] for series_def in self._series_defs
+            },
+            dpi=dpi,
+        )
 
     def set_capture(
         self,
@@ -642,40 +1429,131 @@ class ScopeCaptureView(QtWidgets.QWidget):
         margin = (y_max - y_min) * 0.12
         return (y_min - margin, y_max + margin)
 
+    def _render_scale(self) -> float:
+        return _chart_scale_from_font_size(self._report_font_point_size) if self._report_mode else 1.0
+
+    def _title_font(self) -> QtGui.QFont:
+        font = QtGui.QFont(self.font())
+        if self._report_mode:
+            font.setFamily("Times New Roman")
+            font.setPointSize(max(14, self._report_font_point_size + 2))
+            font.setBold(True)
+        return font
+
+    def _legend_font(self) -> QtGui.QFont:
+        font = QtGui.QFont(self.font())
+        if self._report_mode:
+            font.setFamily("Times New Roman")
+            font.setPointSize(self._report_font_point_size)
+        return font
+
+    def _tick_font(self) -> QtGui.QFont:
+        font = QtGui.QFont(self.font())
+        if self._report_mode:
+            font.setFamily("Times New Roman")
+            font.setPointSize(max(12, self._report_font_point_size - 1))
+        return font
+
+    def _chart_colors(self) -> dict[str, QtGui.QColor]:
+        if self._report_mode:
+            return {
+                "background": QtGui.QColor("#FFFFFF"),
+                "text": QtGui.QColor("#000000"),
+                "border": QtGui.QColor("#000000"),
+                "grid": QtGui.QColor("#B8B8B8"),
+                "cursor": QtGui.QColor("#666666"),
+            }
+        return {
+            "background": self.palette().base().color(),
+            "text": self.palette().text().color(),
+            "border": self.palette().mid().color(),
+            "grid": self.palette().midlight().color(),
+            "cursor": QtGui.QColor("#888888"),
+        }
+
+    def _plot_geometry(self, rect: QtCore.QRectF) -> tuple[QtCore.QRectF, int, int]:
+        scale = self._render_scale()
+        title_height = QtGui.QFontMetrics(self._title_font()).height() + int(4 * scale)
+        legend_height = max(QtGui.QFontMetrics(self._legend_font()).height(), int(10 * scale)) + int(8 * scale)
+        bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(18 * scale)
+        legend_y = rect.top() + title_height + int(8 * scale)
+        plot_rect = QtCore.QRectF(
+            rect.left(),
+            legend_y + legend_height + int(8 * scale),
+            rect.width(),
+            rect.height() - title_height - legend_height - bottom_space - int(18 * scale),
+        )
+        return plot_rect, title_height, legend_height
+
+    def _series_endpoint_map(self, scale_factor: float = 1.0) -> dict[str, QtCore.QPointF]:
+        if not self._series_data or not self._series_data[0]:
+            return {}
+        rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
+        plot_rect, _, _ = self._plot_geometry(rect)
+        if plot_rect.height() <= 0:
+            return {}
+        y_min, y_max = self._frozen_range
+        y_span = max(y_max - y_min, 0.1)
+        sample_count = len(self._series_data[0])
+        endpoint_map: dict[str, QtCore.QPointF] = {}
+        for series_def, series in zip(self._series_defs, self._series_data):
+            if not series:
+                continue
+            ratio = (len(series) - 1) / max(sample_count - 1, 1)
+            x = plot_rect.left() + plot_rect.width() * ratio
+            y = plot_rect.bottom() - (((series[-1] - y_min) / y_span) * plot_rect.height())
+            endpoint_map[series_def["label"]] = QtCore.QPointF(x * scale_factor, y * scale_factor)
+        return endpoint_map
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         super().paintEvent(event)
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
         rect = self.rect().adjusted(8, 8, -8, -8)
-        painter.fillRect(rect, self.palette().base())
-        painter.setPen(self.palette().text().color())
+        colors = self._chart_colors()
+        painter.fillRect(rect, colors["background"])
+        painter.setPen(colors["text"])
+        painter.setFont(self._title_font())
         painter.drawText(
-            QtCore.QRect(rect.left(), rect.top(), rect.width(), 20),
+            QtCore.QRect(rect.left(), rect.top(), rect.width(), QtGui.QFontMetrics(self._title_font()).height() + int(4 * self._render_scale())),
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
             self._title,
         )
 
-        legend_y = rect.top() + 28
+        plot_rect, title_height, legend_height = self._plot_geometry(QtCore.QRectF(rect))
+        legend_y = rect.top() + title_height + int(8 * self._render_scale())
         legend_x = rect.left()
+        painter.setFont(self._legend_font())
         for series_def in self._series_defs:
             painter.fillRect(
-                QtCore.QRect(legend_x, legend_y, 10, 10),
-                QtGui.QColor(series_def["color"]),
+                QtCore.QRect(
+                    legend_x,
+                    legend_y,
+                    int(10 * self._render_scale()),
+                    int(10 * self._render_scale()),
+                ),
+                QtGui.QColor(series_def["color"]) if not self._report_mode else QtGui.QColor("#000000"),
             )
+            text_width = QtGui.QFontMetrics(self._legend_font()).horizontalAdvance(series_def["label"])
             painter.drawText(
-                QtCore.QRect(legend_x + 14, legend_y - 3, 120, 18),
+                QtCore.QRect(
+                    legend_x + int(14 * self._render_scale()),
+                    legend_y - int(3 * self._render_scale()),
+                    max(text_width + int(32 * self._render_scale()), 120),
+                    legend_height,
+                ),
                 QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
                 series_def["label"],
             )
-            legend_x += 124
+            legend_x += max(text_width + int(42 * self._render_scale()), 124)
 
-        plot_rect = QtCore.QRectF(rect.left(), legend_y + 22, rect.width(), rect.height() - 64)
         self._plot_rect = plot_rect
-        painter.setPen(QtGui.QPen(self.palette().mid().color()))
+        painter.setPen(QtGui.QPen(colors["border"], 1.2 if self._report_mode else 1.0))
         painter.drawRect(plot_rect)
 
         if not self._series_data or not self._series_data[0]:
+            painter.setFont(self._legend_font())
             painter.drawText(plot_rect.toRect(), QtCore.Qt.AlignmentFlag.AlignCenter, self._status_text)
             return
 
@@ -684,14 +1562,15 @@ class ScopeCaptureView(QtWidgets.QWidget):
         sample_count = len(self._series_data[0])
         total_ms = (sample_count - 1) * self._sample_period_s * 1000.0
 
-        grid_pen = QtGui.QPen(self.palette().midlight().color())
-        grid_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        grid_pen = QtGui.QPen(colors["grid"], 1.0)
+        grid_pen.setStyle(QtCore.Qt.PenStyle.DotLine if self._report_mode else QtCore.Qt.PenStyle.DashLine)
         painter.setPen(grid_pen)
         for grid_index in range(1, 5):
             y = plot_rect.top() + (plot_rect.height() * grid_index / 5.0)
             painter.drawLine(QtCore.QPointF(plot_rect.left(), y), QtCore.QPointF(plot_rect.right(), y))
 
-        painter.setPen(self.palette().text().color())
+        painter.setPen(colors["text"])
+        painter.setFont(self._tick_font())
         painter.drawText(QtCore.QRectF(plot_rect.right() - 90, plot_rect.top() + 4, 86, 16), QtCore.Qt.AlignmentFlag.AlignRight, f"{y_max:.3f}")
         painter.drawText(QtCore.QRectF(plot_rect.right() - 90, plot_rect.bottom() - 18, 86, 16), QtCore.Qt.AlignmentFlag.AlignRight, f"{y_min:.3f}")
 
@@ -714,13 +1593,33 @@ class ScopeCaptureView(QtWidgets.QWidget):
                     path.moveTo(point)
                 else:
                     path.lineTo(point)
-            painter.setPen(QtGui.QPen(QtGui.QColor(self._series_defs[series_index]["color"]), 1.8))
+            series_pen, marker_shape = _series_pen_spec(
+                None,
+                self._series_defs[series_index]["label"],
+                series_index,
+                report_mode=self._report_mode,
+                fallback_color=self._series_defs[series_index]["color"],
+            )
+            painter.setPen(series_pen)
             painter.drawPath(path)
+            if self._report_mode:
+                marker_step = max(1, len(series) // 6)
+                for marker_index in range(marker_step - 1, len(series), marker_step):
+                    ratio = marker_index / max(sample_count - 1, 1)
+                    x = plot_rect.left() + plot_rect.width() * ratio
+                    y = plot_rect.bottom() - (((series[marker_index] - y_min) / y_span) * plot_rect.height())
+                    _draw_series_marker(
+                        painter,
+                        QtCore.QPointF(x, y),
+                        marker_shape,
+                        7.0 * self._render_scale(),
+                        QtGui.QColor("#000000"),
+                    )
 
         if self._hover_index is not None and 0 <= self._hover_index < sample_count:
             ratio = self._hover_index / max(sample_count - 1, 1)
             x = plot_rect.left() + plot_rect.width() * ratio
-            cursor_pen = QtGui.QPen(QtGui.QColor("#888888"))
+            cursor_pen = QtGui.QPen(colors["cursor"])
             cursor_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
             painter.setPen(cursor_pen)
             painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
@@ -996,21 +1895,25 @@ class MainWindow(QtWidgets.QMainWindow):
             "Phase Currents",
             self._trend_buffer,
             ["phase_u", "phase_v", "phase_w"],
+            on_export_requested=self._open_report_editor_for_chart,
         )
         self.dq_current_panel = ScadaTrendPanel(
             "D/Q Currents",
             self._trend_buffer,
             ["id_ref", "id_current", "iq_ref", "iq_current"],
+            on_export_requested=self._open_report_editor_for_chart,
         )
         self.vdq_voltage_panel = ScadaTrendPanel(
             "D/Q Voltages",
             self._trend_buffer,
             ["vd", "vq"],
+            on_export_requested=self._open_report_editor_for_chart,
         )
         self.speed_panel = ScadaTrendPanel(
             "Speed Trend",
             self._trend_buffer,
             ["act_speed", "cmd_speed", "speed_error"],
+            on_export_requested=self._open_report_editor_for_chart,
         )
 
         tabs.addTab(self.phase_current_panel, "Phase Currents")
@@ -1187,9 +2090,6 @@ class MainWindow(QtWidgets.QMainWindow):
             "Captured channels: Id Ref, Id, Vd, Vq. Goal: Id tracks the square wave cleanly while the motor stays locked and Iq stays small."
         )
         scope_hint.setWordWrap(True)
-        scope_toolbar.addWidget(self.ctuning_auto_scale_checkbox)
-        scope_toolbar.addWidget(self.ctuning_clear_button)
-        scope_toolbar.addWidget(scope_hint, 1)
 
         self.ctuning_current_scope_view = ScopeCaptureView()
         self.ctuning_current_scope_view.setMinimumHeight(250)
@@ -1202,6 +2102,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_scope_splitter.setStretchFactor(0, 1)
         self.ctuning_scope_splitter.setStretchFactor(1, 1)
         self._update_current_tuning_capture_window_label()
+
+        scope_toolbar.addWidget(self.ctuning_auto_scale_checkbox)
+        scope_toolbar.addWidget(self.ctuning_clear_button)
+        self._append_report_controls(
+            scope_toolbar,
+            [self.ctuning_current_scope_view, self.ctuning_voltage_scope_view],
+            export_targets=[
+                ("Export Id Trace", self.ctuning_current_scope_view),
+                ("Export Vd/Vq Trace", self.ctuning_voltage_scope_view),
+            ],
+        )
+        scope_toolbar.addWidget(scope_hint, 1)
 
         layout.addWidget(control_group)
         layout.addLayout(scope_toolbar)
@@ -1343,12 +2255,18 @@ class MainWindow(QtWidgets.QMainWindow):
             "Rs chart shows Id/Vd during the two-current steady-state test. Ls chart shows the direct d-axis voltage step response used to estimate di/dt with the active loop timing."
         )
         scope_note.setWordWrap(True)
-        scope_toolbar.addWidget(self.autotune_auto_scale_checkbox)
-        scope_toolbar.addWidget(self.autotune_clear_button)
-        scope_toolbar.addWidget(scope_note, 1)
 
         self.autotune_scope_view = ScopeCaptureView()
         self._refresh_autotune_panel(None)
+
+        scope_toolbar.addWidget(self.autotune_auto_scale_checkbox)
+        scope_toolbar.addWidget(self.autotune_clear_button)
+        self._append_report_controls(
+            scope_toolbar,
+            [self.autotune_scope_view],
+            export_targets=[("Capture & Edit", self.autotune_scope_view)],
+        )
+        scope_toolbar.addWidget(scope_note, 1)
 
         layout.addWidget(config_group)
         layout.addWidget(results_group)
@@ -1389,6 +2307,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
         self.trace_auto_scale_checkbox.setChecked(True)
         self.trace_status_label = QtWidgets.QLabel("Idle")
+        self.trace_scope_view = ScopeCaptureView()
 
         control_layout.addWidget(QtWidgets.QLabel("Preset"), 0, 0)
         control_layout.addWidget(self.trace_preset_combo, 0, 1)
@@ -1407,9 +2326,14 @@ class MainWindow(QtWidgets.QMainWindow):
         control_layout.addWidget(self.trace_auto_scale_checkbox, 4, 3)
         control_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
         control_layout.addWidget(self.trace_status_label, 5, 1, 1, 3)
-
-        self.trace_scope_view = ScopeCaptureView()
+        report_toolbar = QtWidgets.QHBoxLayout()
+        self._append_report_controls(
+            report_toolbar,
+            [self.trace_scope_view],
+            export_targets=[("Capture & Edit", self.trace_scope_view)],
+        )
         layout.addWidget(control_group)
+        layout.addLayout(report_toolbar)
         layout.addWidget(self.trace_scope_view, 1)
 
         self._apply_trace_preset(self.trace_preset_combo.currentText())
@@ -1552,14 +2476,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.foc_status_value_label = QtWidgets.QLabel("Idle")
         self.foc_status_value_label.setStyleSheet("font-weight: 600;")
-        self.foc_direction_test_status_label = QtWidgets.QLabel("Not run")
+        self.foc_direction_test_status_label = QtWidgets.QLabel("Idle")
         self.foc_live_summary_label = QtWidgets.QLabel(
             "Speed Mode is ready. Enter target speed and gains, then press Start FOC."
         )
         self.foc_live_summary_label.setWordWrap(True)
 
-        self.start_foc_direction_test_button = QtWidgets.QPushButton("Run Direction Test")
-        self.start_foc_angle_fit_button = QtWidgets.QPushButton("Run Angle Fit")
         self.start_foc_rotating_theta_test_button = QtWidgets.QPushButton("Run Rotating Theta Current Test")
         self.start_foc_rotating_theta_voltage_test_button = QtWidgets.QPushButton("Run Rotating Theta Voltage Test")
         self.start_foc_current_feedback_map_test_button = QtWidgets.QPushButton("Run Current Feedback Map Test")
@@ -1586,16 +2508,14 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.foc_decel_spin, 4, 3)
         summary_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
         summary_layout.addWidget(self.foc_status_value_label, 5, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Dir Test"), 5, 2)
+        summary_layout.addWidget(QtWidgets.QLabel("Diag"), 5, 2)
         summary_layout.addWidget(self.foc_direction_test_status_label, 5, 3)
         summary_layout.addWidget(self.foc_live_summary_label, 6, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_direction_test_button, 7, 0, 1, 2)
-        summary_layout.addWidget(self.start_foc_angle_fit_button, 7, 2, 1, 2)
-        summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 8, 0, 1, 2)
-        summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 8, 2, 1, 2)
-        summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 9, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_button, 10, 0, 1, 2)
-        summary_layout.addWidget(self.stop_foc_button, 10, 2, 1, 2)
+        summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 7, 0, 1, 2)
+        summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 7, 2, 1, 2)
+        summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 8, 0, 1, 4)
+        summary_layout.addWidget(self.start_foc_button, 9, 0, 1, 2)
+        summary_layout.addWidget(self.stop_foc_button, 9, 2, 1, 2)
 
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
@@ -1851,8 +2771,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_monitor_button.clicked.connect(self._request_monitor_once)
         self.foc_mode_combo.currentIndexChanged.connect(self._update_foc_mode_ui)
         self.foc_target_speed_spin.valueChanged.connect(self._on_foc_target_speed_value_changed)
-        self.start_foc_direction_test_button.clicked.connect(self._start_foc_direction_test)
-        self.start_foc_angle_fit_button.clicked.connect(self._start_foc_angle_fit)
         self.start_foc_rotating_theta_test_button.clicked.connect(self._start_foc_rotating_theta_test)
         self.start_foc_rotating_theta_voltage_test_button.clicked.connect(self._start_foc_rotating_theta_voltage_test)
         self.start_foc_current_feedback_map_test_button.clicked.connect(self._start_foc_current_feedback_map_test)
@@ -1915,6 +2833,54 @@ class MainWindow(QtWidgets.QMainWindow):
         window.show()
         window.raise_()
         window.activateWindow()
+
+    def _open_report_editor_for_chart(self, chart_widget) -> None:
+        if not hasattr(chart_widget, "build_report_capture"):
+            return
+        capture = chart_widget.build_report_capture(dpi=300)
+        dialog = ReportEditorDialog(capture, self)
+        dialog.exec()
+
+    def _append_report_controls(
+        self,
+        toolbar: QtWidgets.QHBoxLayout,
+        chart_widgets: list[QtWidgets.QWidget],
+        *,
+        export_targets: list[tuple[str, QtWidgets.QWidget]] | None = None,
+    ) -> None:
+        if not chart_widgets:
+            return
+
+        report_toggle = QtWidgets.QCheckBox("Report Mode")
+        report_font_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        report_font_slider.setRange(12, 24)
+        report_font_slider.setValue(14)
+        report_font_slider.setFixedWidth(110)
+        report_font_label = QtWidgets.QLabel("14 pt")
+        toolbar.addWidget(report_toggle)
+        toolbar.addWidget(QtWidgets.QLabel("Font"))
+        toolbar.addWidget(report_font_slider)
+        toolbar.addWidget(report_font_label)
+
+        def _apply_report_mode(enabled: bool) -> None:
+            for widget in chart_widgets:
+                if hasattr(widget, "set_report_mode"):
+                    widget.set_report_mode(enabled)
+
+        def _apply_report_font(value: int) -> None:
+            report_font_label.setText(f"{int(value)} pt")
+            for widget in chart_widgets:
+                if hasattr(widget, "set_report_font_point_size"):
+                    widget.set_report_font_point_size(int(value))
+
+        report_toggle.toggled.connect(_apply_report_mode)
+        report_font_slider.valueChanged.connect(_apply_report_font)
+
+        targets = export_targets or [("Capture & Edit", chart_widgets[0])]
+        for button_label, widget in targets:
+            export_button = QtWidgets.QPushButton(button_label)
+            export_button.clicked.connect(lambda _=False, target=widget: self._open_report_editor_for_chart(target))
+            toolbar.addWidget(export_button)
 
     def _timing_mode_text(self, mode: int) -> str:
         _ = mode
@@ -2185,40 +3151,12 @@ class MainWindow(QtWidgets.QMainWindow):
         debug_suffix = " Electrical frame: none (raw theta)."
         if snapshot is None:
             self.foc_status_value_label.setText("Idle")
-            self.foc_direction_test_status_label.setText("Not run")
+            self.foc_direction_test_status_label.setText("Idle")
             self.foc_live_summary_label.setText(
                 f"{mode_text} is ready. Servo ON runs the arm sequence. Watch Driver Monitor for Cal Status and Align Status, then press Start FOC when the drive is ready.{debug_suffix}"
             )
             return
-
-        direction_status = int(
-            getattr(snapshot, "foc_direction_test_status", FOC_DIRECTION_TEST_IDLE)
-        )
-        direction_open_loop_delta = int(
-            getattr(snapshot, "foc_direction_test_open_loop_delta_pos", 0)
-        )
-        direction_foc_delta = int(
-            getattr(snapshot, "foc_direction_test_foc_delta_pos", 0)
-        )
-        if direction_status == FOC_DIRECTION_TEST_RUNNING:
-            self.foc_direction_test_status_label.setText("Running...")
-            self.foc_status_value_label.setText("Direction test running")
-            self.foc_live_summary_label.setText(
-                f"Open-loop + delta {direction_open_loop_delta:+d} cnt | "
-                f"FOC +Iq delta {direction_foc_delta:+d} cnt. "
-                "Firmware is comparing positive open-loop rotation against a very small +Iq on the raw runtime theta path with no extra frame offset. If the signs disagree, encoder direction will be flipped and alignment must be rerun."
-            )
-            return
-        if direction_status == FOC_DIRECTION_TEST_DONE_OK:
-            self.foc_direction_test_status_label.setText("Matched open-loop +")
-        elif direction_status == FOC_DIRECTION_TEST_DONE_FLIPPED:
-            self.foc_direction_test_status_label.setText("Flipped / rerun align")
-        elif direction_status == FOC_DIRECTION_TEST_INCONCLUSIVE:
-            self.foc_direction_test_status_label.setText("Inconclusive")
-        elif direction_status == FOC_DIRECTION_TEST_FAULT:
-            self.foc_direction_test_status_label.setText("Fault")
-        else:
-            self.foc_direction_test_status_label.setText("Idle")
+        self.foc_direction_test_status_label.setText("Idle")
 
         run_mode = getattr(snapshot, "run_mode", None)
         enable_run = bool(getattr(snapshot, "enable_run", False))
@@ -2256,26 +3194,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if int(run_mode) != RUN_MODE_FOC:
             servo_text = "Servo ON" if enable_run else "Servo OFF"
             self.foc_status_value_label.setText(f"{servo_text} | Idle")
-            if direction_status == FOC_DIRECTION_TEST_DONE_OK:
-                self.foc_live_summary_label.setText(
-                    "Direction test passed: positive FOC Iq now matches positive open-loop rotation. Keep an eye on Driver Monitor and start FOC once Align Status stays Done."
-                )
-            elif direction_status == FOC_DIRECTION_TEST_DONE_FLIPPED:
-                self.foc_live_summary_label.setText(
-                    "Direction test found a sign mismatch and flipped the encoder direction chain to match open-loop positive rotation. Toggle Servo ON again and wait for Driver Monitor Align Status = Done before Start FOC."
-                )
-            elif direction_status == FOC_DIRECTION_TEST_INCONCLUSIVE:
-                self.foc_live_summary_label.setText(
-                    "Direction test could not measure a reliable FOC direction response. Check that the rotor can move freely; if it can, this usually points to weak torque production or runtime theta still being off enough that FOC does not move decisively."
-                )
-            elif direction_status == FOC_DIRECTION_TEST_FAULT:
-                self.foc_live_summary_label.setText(
-                    "Direction test faulted before it could finish. Clear alarms, reduce commissioning aggression, and rerun the test."
-                )
-            else:
-                self.foc_live_summary_label.setText(
-                    f"{mode_text} is configured. Servo ON keeps the drive armed at zero references only. Watch Driver Monitor for Cal Status and Align Status, then press Start FOC to run the selected setpoint.{debug_suffix}"
-                )
+            self.foc_live_summary_label.setText(
+                f"{mode_text} is configured. Servo ON keeps the drive armed at zero references only. Watch Driver Monitor for Cal Status and Align Status, then press Start FOC to run the selected setpoint.{debug_suffix}"
+            )
             return
 
         runtime_mode = int(
@@ -2316,64 +3237,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _handle_servo_off(self) -> None:
         self.auto_poll_checkbox.setChecked(True)
         self._enqueue_command(Command.CMD_SERVO_OFF, b"", "Servo OFF")
-        self._request_monitor_once()
-
-    def _start_foc_direction_test(self) -> None:
-        last_monitor = self._latest_monitor_snapshot
-        if last_monitor is not None:
-            alignment_policy = int(last_monitor.debug_alignment_policy)
-            alignment_status = int(last_monitor.debug_alignment_status)
-            if (
-                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
-                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
-            ):
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Direction Test Blocked",
-                    "This incremental encoder profile aligns during Servo ON after every power-up. Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then run the FOC direction test.",
-                )
-                return
-
-        self.auto_poll_checkbox.setChecked(True)
-        self.foc_status_value_label.setText("Direction test starting...")
-        self.foc_direction_test_status_label.setText("Starting...")
-        self.foc_live_summary_label.setText(
-            "Running a short open-loop vs FOC sign comparison. The firmware compares positive open-loop rotation against positive FOC Iq and flips encoder direction automatically if they disagree."
-        )
-        self._enqueue_command(
-            Command.CMD_START_FOC_DIRECTION_TEST,
-            b"",
-            "Run FOC Direction Test",
-        )
-        self._request_monitor_once()
-
-    def _start_foc_angle_fit(self) -> None:
-        last_monitor = self._latest_monitor_snapshot
-        if last_monitor is not None:
-            alignment_policy = int(last_monitor.debug_alignment_policy)
-            alignment_status = int(last_monitor.debug_alignment_status)
-            if (
-                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
-                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
-            ):
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Angle Fit Blocked",
-                    "Toggle Servo ON and wait until Driver Monitor shows Align Status = Done, then run Angle Fit.",
-                )
-                return
-
-        self.auto_poll_checkbox.setChecked(True)
-        self.foc_status_value_label.setText("Angle fit starting...")
-        self.foc_direction_test_status_label.setText("Angle fit")
-        self.foc_live_summary_label.setText(
-            "Running a short angle fit sweep around the current raw theta / encoder offset path to maximize q-axis torque. Watch Enc Offset in Driver Monitor; it should update when the fit completes."
-        )
-        self._enqueue_command(
-            Command.CMD_START_FOC_ANGLE_FIT,
-            b"",
-            "Run FOC Angle Fit",
-        )
         self._request_monitor_once()
 
     def _start_foc_rotating_theta_test(self) -> None:
@@ -2722,22 +3585,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_table_float_value(self.motor_table, MOTOR_PARAM_CURRENT_P_GAIN, current_kp)
         self._set_table_float_value(self.motor_table, MOTOR_PARAM_CURRENT_I_GAIN, current_ki)
 
-        try:
-            values = self._table_values(self.motor_table)
-        except ValueError as exc:
-            QtWidgets.QMessageBox.warning(self, "Invalid Motor Parameters", str(exc))
-            return
-
-        chunks = build_parameter_write_chunks(values, chunk_size=20)
-        for index, payload in enumerate(chunks, start=1):
-            self._enqueue_command(
-                Command.CMD_WRITE_MOTOR,
-                payload,
-                f"Apply Id Gains To FOC chunk {index}/{len(chunks)}",
-            )
+        payload = bytearray()
+        payload.append(MOTOR_PARAM_CURRENT_P_GAIN & 0xFF)
+        payload.extend(struct.pack("<f", current_kp))
+        payload.append(MOTOR_PARAM_CURRENT_I_GAIN & 0xFF)
+        payload.extend(struct.pack("<f", current_ki))
+        self._enqueue_command(
+            Command.CMD_WRITE_MOTOR,
+            bytes(payload),
+            "Apply Current PI To FOC (safe partial write)",
+        )
 
         self.ctuning_status_label.setText(
-            f"Applied scaled current PI to FOC Id/Iq: scale={apply_scale:.2f}x, Kp={current_kp:.4f}, Ki={current_ki:.4f}"
+            f"Applied current PI only (safe partial write): scale={apply_scale:.2f}x, Kp={current_kp:.4f}, Ki={current_ki:.4f}"
         )
         self._request_monitor_once()
 
