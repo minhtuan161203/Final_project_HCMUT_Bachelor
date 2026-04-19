@@ -1131,21 +1131,51 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	{
 		memcpy(&DriverParameter[POSITION_P_GAIN], &payload[8], sizeof(float));
 	}
+	if (payload_length >= 16u)
+	{
+		memcpy(&DriverParameter[POSITION_I_GAIN], &payload[12], sizeof(float));
+	}
 	if (payload_length >= 20u)
+	{
+		memcpy(&DriverParameter[POSITION_FF_GAIN], &payload[16], sizeof(float));
+	}
+	if (payload_length >= 24u)
+	{
+		memcpy(&DriverParameter[POSITION_FF_FILTER], &payload[20], sizeof(float));
+	}
+	if (payload_length >= 32u)
+	{
+		memcpy(&DriverParameter[SPEED_P_GAIN], &payload[24], sizeof(float));
+		memcpy(&DriverParameter[SPEED_I_GAIN], &payload[28], sizeof(float));
+	}
+	else if (payload_length >= 20u)
 	{
 		memcpy(&DriverParameter[SPEED_P_GAIN], &payload[12], sizeof(float));
 		memcpy(&DriverParameter[SPEED_I_GAIN], &payload[16], sizeof(float));
 	}
-	if (payload_length >= 28u)
+	if (payload_length >= 40u)
+	{
+		memcpy(&DriverParameter[ACCELERATION_TIME], &payload[32], sizeof(float));
+		memcpy(&DriverParameter[DECELERATION_TIME], &payload[36], sizeof(float));
+	}
+	else if (payload_length >= 28u)
 	{
 		memcpy(&DriverParameter[ACCELERATION_TIME], &payload[20], sizeof(float));
 		memcpy(&DriverParameter[DECELERATION_TIME], &payload[24], sizeof(float));
 	}
-	if (payload_length >= 29u)
+	if (payload_length >= 41u)
+	{
+		foc_angle_test_mode = payload[40];
+	}
+	else if (payload_length >= 29u)
 	{
 		foc_angle_test_mode = payload[28];
 	}
-	if (payload_length >= 30u)
+	if (payload_length >= 42u)
+	{
+		foc_current_uv_swap_test = payload[41];
+	}
+	else if (payload_length >= 30u)
 	{
 		foc_current_uv_swap_test = payload[29];
 	}
@@ -1174,11 +1204,15 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = gTargetPositionCounts - Parameter.fPosition;
 	USB_QueueFocDebugText(
-		"[FOC] pos start tgt=%.1f lim=%.1f act=%.1f err=%.1f",
+		"[FOC] pos start tgt=%.1f lim=%.1f act=%.1f err=%.1f kp=%.3f ki=%.3f vff=%.3f vf=%.1f",
 		gTargetPositionCounts,
 		DriverParameter[MAXIMUM_SPEED],
 		Parameter.fPosition,
-		gTracePosError);
+		gTracePosError,
+		DriverParameter[POSITION_P_GAIN],
+		DriverParameter[POSITION_I_GAIN],
+		DriverParameter[POSITION_FF_GAIN],
+		DriverParameter[POSITION_FF_FILTER]);
 }
 
 static void USB_HandleFocControlStop(void)

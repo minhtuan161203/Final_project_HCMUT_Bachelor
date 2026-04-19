@@ -160,6 +160,7 @@ tIFClarke gInvClarke = IF_CLARKE_DEFAULTS;
 tPI gIdPi = PI_DEFAULTS;
 tPI gIqPi = PI_DEFAULTS;
 tPI gSpeedPi = PI_DEFAULTS;
+tPI gPositionPi = PI_DEFAULTS;
 static uint8_t gPwmEnabled = 0u;
 static uint8_t gSpeedLoopDivider = 0u;
 
@@ -217,9 +218,15 @@ static float GetEffectiveCurrentLoopFrequency(void);
 static float GetEffectiveSpeedLoopFrequency(void);
 static uint8_t GetActiveFocControlMode(void);
 static float GetConfiguredPositionGain(void);
+static float GetConfiguredPositionIntegralGain(void);
+static float GetConfiguredPositionVffGain(void);
+static float GetConfiguredPositionVffFilterHz(void);
 static float GetConfiguredSpeedLimitRpm(void);
 static float GetConfiguredSpeedIqLimitA(void);
 static float ApplySpeedRampLimit(float current_command, float target_command, float max_speed_rpm, float dt_sec);
+static float WrapPositionErrorCounts(float error_counts, float encoder_resolution);
+static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution);
+static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec);
 static uint8_t IsAbsoluteEncoderId(uint32_t encoder_id);
 static void RefreshEncoderAlignmentPolicy(void);
 static void ResetEncoderAlignmentAveraging(void);
@@ -268,6 +275,9 @@ uint8_t SaveParametersToFlash(void);
 #define FOC_SPEED_LOOP_MIN_IQ_LIMIT_A 0.20f
 #define FOC_ZERO_CMD_REF_DEADBAND_A 0.01f
 #define FOC_ZERO_CMD_MEAS_DEADBAND_A 0.08f
+#define POSITION_LOOP_ERROR_DEADBAND_DEG 0.50f
+#define POSITION_LOOP_FF_DEADBAND_RPM 0.05f
+#define POSITION_VFF_FILTER_DEFAULT_HZ 50.0f
 #define FORCE_DRIVER_CURRENT_POLARITY_INVERT 0u
 #define FORCE_DRIVER_CURRENT_UV_SWAP 1u
 #define ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A 0.2f
@@ -325,6 +335,8 @@ static uint16_t sFocRotatingThetaLogCounter = 0u;
 static float sFocRotatingThetaVoltageCommand = 0.0f;
 static float sFocRotatingThetaVoltageStartPosition = 0.0f;
 static uint16_t sFocRotatingThetaVoltageLogCounter = 0u;
+static float sPositionSetpointPrevCounts = 0.0f;
+static float sPositionSetpointVelocityCountsPerSec = 0.0f;
 static const uint8_t sFocCurrentFeedbackMapSwapCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 0u, 1u, 1u};
 static const uint8_t sFocCurrentFeedbackMapInvertCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 1u, 0u, 1u};
 static uint8_t sFocCurrentFeedbackMapCaseIndex = 0u;
@@ -957,11 +969,14 @@ static void ResetControlLoops(void)
 	gIdPi.m_rst(&gIdPi);
 	gIqPi.m_rst(&gIqPi);
 	gSpeedPi.m_rst(&gSpeedPi);
+	gPositionPi.m_rst(&gPositionPi);
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = 0.0f;
 	gSpeedLoopDivider = 0u;
+	sPositionSetpointPrevCounts = gTargetPositionCounts;
+	sPositionSetpointVelocityCountsPerSec = 0.0f;
 	gDebugOpenLoopElectricalHzCmd = 0.0f;
 	gDebugOpenLoopSyncRpmCmd = 0.0f;
 	gDebugExpectedDeltaPosSync = 0.0f;
@@ -992,6 +1007,36 @@ static float GetConfiguredPositionGain(void)
 		position_gain = 0.0f;
 	}
 	return position_gain;
+}
+
+static float GetConfiguredPositionIntegralGain(void)
+{
+	float position_integral_gain = DriverParameter[POSITION_I_GAIN];
+	if (position_integral_gain < 0.0f)
+	{
+		position_integral_gain = 0.0f;
+	}
+	return position_integral_gain;
+}
+
+static float GetConfiguredPositionVffGain(void)
+{
+	float position_vff_gain = DriverParameter[POSITION_FF_GAIN];
+	if (position_vff_gain < 0.0f)
+	{
+		position_vff_gain = 0.0f;
+	}
+	return position_vff_gain;
+}
+
+static float GetConfiguredPositionVffFilterHz(void)
+{
+	float position_vff_filter_hz = DriverParameter[POSITION_FF_FILTER];
+	if (position_vff_filter_hz <= 0.0f)
+	{
+		position_vff_filter_hz = POSITION_VFF_FILTER_DEFAULT_HZ;
+	}
+	return position_vff_filter_hz;
 }
 
 static float GetConfiguredSpeedLimitRpm(void)
@@ -1027,6 +1072,75 @@ static float GetConfiguredSpeedIqLimitA(void)
 		iq_limit = FOC_SPEED_LOOP_MIN_IQ_LIMIT_A;
 	}
 	return iq_limit;
+}
+
+static float WrapPositionErrorCounts(float error_counts, float encoder_resolution)
+{
+	float half_encoder_resolution;
+
+	if (encoder_resolution <= 1.0f)
+	{
+		return error_counts;
+	}
+
+	error_counts = fmodf(error_counts, encoder_resolution);
+	half_encoder_resolution = 0.5f * encoder_resolution;
+	if (error_counts > half_encoder_resolution)
+	{
+		error_counts -= encoder_resolution;
+	}
+	if (error_counts < -half_encoder_resolution)
+	{
+		error_counts += encoder_resolution;
+	}
+	return error_counts;
+}
+
+static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution)
+{
+	if (encoder_resolution <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	return (POSITION_LOOP_ERROR_DEADBAND_DEG / 360.0f) * encoder_resolution;
+}
+
+static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec)
+{
+	float target_delta_counts;
+	float target_velocity_counts_per_sec;
+	float filter_hz;
+	float filter_tau_sec;
+	float filter_alpha;
+
+	if ((encoder_resolution <= 1.0f) || (dt_sec <= 0.0f))
+	{
+		sPositionSetpointPrevCounts = target_position_counts;
+		sPositionSetpointVelocityCountsPerSec = 0.0f;
+		return 0.0f;
+	}
+
+	target_delta_counts = WrapPositionErrorCounts(
+		target_position_counts - sPositionSetpointPrevCounts,
+		encoder_resolution);
+	sPositionSetpointPrevCounts = target_position_counts;
+	target_velocity_counts_per_sec = target_delta_counts / dt_sec;
+	filter_hz = GetConfiguredPositionVffFilterHz();
+	if (filter_hz > 0.0f)
+	{
+		filter_tau_sec = 1.0f / (2.0f * PI * filter_hz);
+		filter_alpha = dt_sec / (filter_tau_sec + dt_sec);
+		filter_alpha = ClampFloat(filter_alpha, 0.0f, 1.0f);
+		sPositionSetpointVelocityCountsPerSec += filter_alpha *
+			(target_velocity_counts_per_sec - sPositionSetpointVelocityCountsPerSec);
+	}
+	else
+	{
+		sPositionSetpointVelocityCountsPerSec = target_velocity_counts_per_sec;
+	}
+
+	return (sPositionSetpointVelocityCountsPerSec * 60.0f) / encoder_resolution;
 }
 
 static float ApplySpeedRampLimit(float current_command, float target_command, float max_speed_rpm, float dt_sec)
@@ -1914,6 +2028,18 @@ void UpdateDriverParameter(float *driver_parameter)
 	{
 		driver_parameter[POSITION_P_GAIN] = 0.05f;
 	}
+	if (driver_parameter[POSITION_I_GAIN] < 0.0f)
+	{
+		driver_parameter[POSITION_I_GAIN] = 0.50f;
+	}
+	if (driver_parameter[POSITION_FF_GAIN] < 0.0f)
+	{
+		driver_parameter[POSITION_FF_GAIN] = 0.0f;
+	}
+	if (driver_parameter[POSITION_FF_FILTER] <= 0.0f)
+	{
+		driver_parameter[POSITION_FF_FILTER] = POSITION_VFF_FILTER_DEFAULT_HZ;
+	}
 	if (driver_parameter[SPEED_P_GAIN] < 0.0f)
 	{
 		driver_parameter[SPEED_P_GAIN] = 0.02f;
@@ -1942,6 +2068,12 @@ void UpdateDriverParameter(float *driver_parameter)
 	gSpeedPi.fKi = driver_parameter[SPEED_I_GAIN];
 	gSpeedPi.fUpOutLim = GetConfiguredSpeedIqLimitA();
 	gSpeedPi.fLowOutLim = -gSpeedPi.fUpOutLim;
+
+	gPositionPi.fDtSec = 1.0f / GetEffectiveSpeedLoopFrequency();
+	gPositionPi.fKp = driver_parameter[POSITION_P_GAIN];
+	gPositionPi.fKi = GetConfiguredPositionIntegralGain();
+	gPositionPi.fUpOutLim = max_speed;
+	gPositionPi.fLowOutLim = -max_speed;
 
 	gTargetSpeedRpm = ClampFloat(gTargetSpeedRpm, -max_speed, max_speed);
 }
@@ -2037,6 +2169,9 @@ static void LoadDefaultParameters(void)
 
 	DriverParameter[CONTROL_MODE] = (float)SPEED_CONTROL_MODE;
 	DriverParameter[POSITION_P_GAIN] = 0.05f;
+	DriverParameter[POSITION_I_GAIN] = 0.50f;
+	DriverParameter[POSITION_FF_GAIN] = 0.0f;
+	DriverParameter[POSITION_FF_FILTER] = POSITION_VFF_FILTER_DEFAULT_HZ;
 	DriverParameter[SPEED_P_GAIN] = 0.001f;
 	DriverParameter[SPEED_I_GAIN] = 0.001f;
 	DriverParameter[ACCELERATION_TIME] = 1000.0f;
@@ -2690,28 +2825,70 @@ static void RunFocLoop(void)
 			gSpeedLoopDivider = 0u;
 			if (GetActiveFocControlMode() == POSITION_CONTROL_MODE)
 			{
-				float position_error_counts = gTargetPositionCounts - Parameter.fPosition;
+				float position_error_counts = WrapPositionErrorCounts(
+					gTargetPositionCounts - Parameter.fPosition,
+					encoder_resolution);
+				float position_deadband_counts = GetPositionLoopErrorDeadbandCounts(encoder_resolution);
 				float speed_limit_rpm = GetConfiguredSpeedLimitRpm();
+				float setpoint_velocity_rpm = UpdatePositionSetpointVelocityRpm(
+					gTargetPositionCounts,
+					encoder_resolution,
+					gSpeedPi.fDtSec);
+				float position_vff_rpm = -GetConfiguredPositionVffGain() * setpoint_velocity_rpm;
+				float position_pi_limit_rpm;
+				float position_pi_output_rpm;
 				float position_speed_target_rpm;
+				uint8_t position_deadband_hold_active = 0u;
 
-				gTracePosError = position_error_counts;
-				if (fabsf(position_error_counts) < 1.0f)
+				if (fabsf(position_error_counts) < position_deadband_counts)
 				{
+					position_error_counts = 0.0f;
+				}
+				gTracePosError = position_error_counts;
+				if ((fabsf(position_error_counts) < position_deadband_counts) &&
+					(fabsf(setpoint_velocity_rpm) < POSITION_LOOP_FF_DEADBAND_RPM))
+				{
+					gPositionPi.m_rst(&gPositionPi);
+					gSpeedPi.m_rst(&gSpeedPi);
+					position_vff_rpm = 0.0f;
 					position_speed_target_rpm = 0.0f;
+					speed_reference_rpm = 0.0f;
+					gCommandedSpeedRpm = 0.0f;
+					position_deadband_hold_active = 1u;
 				}
 				else
 				{
-					position_speed_target_rpm = - position_error_counts * GetConfiguredPositionGain();
+					position_vff_rpm = ClampFloat(
+						position_vff_rpm,
+						-speed_limit_rpm,
+						speed_limit_rpm);
+					position_pi_limit_rpm = speed_limit_rpm - fabsf(position_vff_rpm);
+					if (position_pi_limit_rpm < 0.0f)
+					{
+						position_pi_limit_rpm = 0.0f;
+					}
+					gPositionPi.fDtSec = gSpeedPi.fDtSec;
+					gPositionPi.fKp = GetConfiguredPositionGain();
+					gPositionPi.fKi = GetConfiguredPositionIntegralGain();
+					gPositionPi.fUpOutLim = position_pi_limit_rpm;
+					gPositionPi.fLowOutLim = -position_pi_limit_rpm;
+					gPositionPi.fIn = position_error_counts;
+					gPositionPi.m_calc(&gPositionPi);
+					position_pi_output_rpm = -gPositionPi.fOut;
+					position_speed_target_rpm = position_pi_output_rpm + position_vff_rpm;
 				}
 				position_speed_target_rpm = ClampFloat(
 					position_speed_target_rpm,
 					-speed_limit_rpm,
 					speed_limit_rpm);
-				speed_reference_rpm = ApplySpeedRampLimit(
-					gCommandedSpeedRpm,
-					position_speed_target_rpm,
-					speed_limit_rpm,
-					gSpeedPi.fDtSec);
+				if (position_deadband_hold_active == 0u)
+				{
+					speed_reference_rpm = ApplySpeedRampLimit(
+						gCommandedSpeedRpm,
+						position_speed_target_rpm,
+						speed_limit_rpm,
+						gSpeedPi.fDtSec);
+				}
 			}
 			else
 			{

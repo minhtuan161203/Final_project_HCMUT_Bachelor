@@ -142,6 +142,8 @@ typedef enum
 //	SPEED_UNIT,															/*16:						32 bit*/
 }DRIVER_PARAMETER_ID;
 
+#define POSITION_I_GAIN SPEED_FF_GAIN
+
 typedef enum
 {
 	MOTOR_RATED_CURRENT_RMS,			/*00:mili ampere:		32 bit*/

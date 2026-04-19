@@ -103,6 +103,9 @@ TREND_SERIES_META = {
     "act_speed": {"label": "Act Speed", "unit": "rpm", "color": "#17becf"},
     "cmd_speed": {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
     "speed_error": {"label": "Speed Error", "unit": "rpm", "color": "#7f7f7f"},
+    "cmd_position_deg": {"label": "Target Position", "unit": "deg", "color": "#bcbd22"},
+    "act_position_deg": {"label": "Act Position", "unit": "deg", "color": "#17becf"},
+    "position_error_deg": {"label": "Position Error", "unit": "deg", "color": "#7f7f7f"},
 }
 TREND_EMA_ALPHA = {
     "phase_u": None,
@@ -117,13 +120,19 @@ TREND_EMA_ALPHA = {
     "act_speed": 0.25,
     "cmd_speed": None,
     "speed_error": 0.22,
+    "cmd_position_deg": None,
+    "act_position_deg": None,
+    "position_error_deg": None,
 }
 
 DEFAULT_DRIVER_PARAMETER_VALUES: dict[int, float] = {
     1: float(SPEED_CONTROL_MODE),
     2: 0.05,
+    3: 0.0,
+    4: 50.0,
     5: 0.02,
     6: 5.0,
+    7: 0.50,
     10: 250.0,
     11: 250.0,
     12: DEFAULT_MOTOR_RATED_SPEED_RPM,
@@ -132,6 +141,7 @@ DEFAULT_DRIVER_PARAMETER_VALUES: dict[int, float] = {
 DEFAULT_MOTOR_PARAMETER_VALUES: dict[int, float] = {
     0: DEFAULT_MOTOR_RATED_CURRENT_RMS,
     1: DEFAULT_MOTOR_PEAK_CURRENT_RMS,
+    8: float(1 << 20),
     9: DEFAULT_MOTOR_MAXIMUM_POWER,
     10: DEFAULT_MOTOR_MAXIMUM_VOLTAGE,
     11: DEFAULT_MOTOR_POLE_PAIRS,
@@ -159,14 +169,18 @@ TRACE_CHANNEL_META = {
 
 DRIVER_PARAM_CONTROL_MODE = 1
 DRIVER_PARAM_POSITION_P_GAIN = 2
+DRIVER_PARAM_POSITION_FF_GAIN = 3
+DRIVER_PARAM_POSITION_FF_FILTER = 4
 DRIVER_PARAM_SPEED_P_GAIN = 5
 DRIVER_PARAM_SPEED_I_GAIN = 6
+DRIVER_PARAM_POSITION_I_GAIN = 7
 DRIVER_PARAM_ACCEL_TIME_MS = 10
 DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
 MOTOR_PARAM_MAXIMUM_SPEED = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_SPEED")
 MOTOR_PARAM_CURRENT_P_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_P_GAIN")
 MOTOR_PARAM_CURRENT_I_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_I_GAIN")
+MOTOR_PARAM_ENCODER_RESOLUTION = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_RESOLUTION")
 
 TRACE_PRESETS = {
     "Encoder Alignment": [12, 11, 4, 14],
@@ -3112,6 +3126,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("act_speed", "Act Speed"),
             ("speed_error", "Speed Error"),
             ("act_position", "Act Position"),
+            ("act_degree", "Act Deg"),
             ("position_error", "Position Error"),
         ]
         current_fields = [
@@ -3206,11 +3221,18 @@ class MainWindow(QtWidgets.QMainWindow):
             ["act_speed", "cmd_speed", "speed_error"],
             on_export_requested=self._open_report_editor_for_chart,
         )
+        self.position_panel = ScadaTrendPanel(
+            "Position Trend",
+            self._trend_buffer,
+            ["act_position_deg", "cmd_position_deg", "position_error_deg"],
+            on_export_requested=self._open_report_editor_for_chart,
+        )
 
         tabs.addTab(self.phase_current_panel, "Phase Currents")
         tabs.addTab(self.dq_current_panel, "D/Q Currents")
         tabs.addTab(self.vdq_voltage_panel, "Vd/Vq")
         tabs.addTab(self.speed_panel, "Speed")
+        tabs.addTab(self.position_panel, "Position")
 
         toolbar = QtWidgets.QHBoxLayout()
         clear_trend_button = QtWidgets.QPushButton("Clear History")
@@ -3230,6 +3252,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.dq_current_panel,
             self.vdq_voltage_panel,
             self.speed_panel,
+            self.position_panel,
         ]
         return dialog
 
@@ -3718,12 +3741,43 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_target_speed_spin.setSingleStep(50.0)
         self.foc_target_speed_spin.setSuffix(" rpm")
 
-        self.foc_target_position_label = QtWidgets.QLabel("Target Position")
+        self.foc_target_position_label = QtWidgets.QLabel("Target Counts")
         self.foc_target_position_spin = QtWidgets.QDoubleSpinBox()
         self.foc_target_position_spin.setRange(-100000000.0, 100000000.0)
         self.foc_target_position_spin.setDecimals(1)
         self.foc_target_position_spin.setSingleStep(1000.0)
         self.foc_target_position_spin.setSuffix(" cnt")
+        self.foc_target_position_spin.setReadOnly(True)
+        self.foc_target_position_spin.setButtonSymbols(
+            QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons
+        )
+
+        self.foc_target_angle_label = QtWidgets.QLabel("Go to Angle")
+        self.foc_target_angle_spin = QtWidgets.QDoubleSpinBox()
+        self.foc_target_angle_spin.setRange(0.0, 360.0)
+        self.foc_target_angle_spin.setDecimals(2)
+        self.foc_target_angle_spin.setSingleStep(1.0)
+        self.foc_target_angle_spin.setSuffix(" deg")
+        self.foc_target_angle_set_button = QtWidgets.QPushButton("Set")
+
+        self.foc_jog_label = QtWidgets.QLabel("Relative Move")
+        self.foc_jog_minus_90_button = QtWidgets.QPushButton("<<")
+        self.foc_jog_minus_10_button = QtWidgets.QPushButton("<")
+        self.foc_jog_plus_10_button = QtWidgets.QPushButton(">")
+        self.foc_jog_plus_90_button = QtWidgets.QPushButton(">>")
+        self.foc_jog_minus_90_button.setToolTip("Move target by -90 deg")
+        self.foc_jog_minus_10_button.setToolTip("Move target by -10 deg")
+        self.foc_jog_plus_10_button.setToolTip("Move target by +10 deg")
+        self.foc_jog_plus_90_button.setToolTip("Move target by +90 deg")
+
+        self.foc_angle_slider_label = QtWidgets.QLabel("Angle Slider")
+        self.foc_angle_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.foc_angle_slider.setRange(0, 3600)
+        self.foc_angle_slider.setSingleStep(10)
+        self.foc_angle_slider.setPageStep(100)
+        self.foc_angle_slider_value_label = QtWidgets.QLabel("0.0 deg")
+        self.foc_target_counts_hint_label = QtWidgets.QLabel("0.0 cnt")
+        self.foc_target_counts_hint_label.setStyleSheet("color: #9aa0a6;")
 
         self.foc_position_kp_label = QtWidgets.QLabel("Position Kp")
         self.foc_position_kp_spin = QtWidgets.QDoubleSpinBox()
@@ -3731,6 +3785,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_kp_spin.setDecimals(5)
         self.foc_position_kp_spin.setSingleStep(0.01)
         self.foc_position_kp_spin.setValue(0.05)
+
+        self.foc_position_ki_label = QtWidgets.QLabel("Position Ki")
+        self.foc_position_ki_spin = QtWidgets.QDoubleSpinBox()
+        self.foc_position_ki_spin.setRange(0.0, 10000.0)
+        self.foc_position_ki_spin.setDecimals(5)
+        self.foc_position_ki_spin.setSingleStep(0.01)
+        self.foc_position_ki_spin.setValue(0.50)
+
+        self.foc_position_vff_gain_label = QtWidgets.QLabel("Pos VFF Gain")
+        self.foc_position_vff_gain_spin = QtWidgets.QDoubleSpinBox()
+        self.foc_position_vff_gain_spin.setRange(0.0, 1000.0)
+        self.foc_position_vff_gain_spin.setDecimals(5)
+        self.foc_position_vff_gain_spin.setSingleStep(0.01)
+        self.foc_position_vff_gain_spin.setValue(0.0)
+
+        self.foc_position_vff_filter_label = QtWidgets.QLabel("Pos VFF Filter")
+        self.foc_position_vff_filter_spin = QtWidgets.QDoubleSpinBox()
+        self.foc_position_vff_filter_spin.setRange(0.1, 5000.0)
+        self.foc_position_vff_filter_spin.setDecimals(2)
+        self.foc_position_vff_filter_spin.setSingleStep(5.0)
+        self.foc_position_vff_filter_spin.setSuffix(" Hz")
+        self.foc_position_vff_filter_spin.setValue(50.0)
 
         self.foc_speed_kp_spin = QtWidgets.QDoubleSpinBox()
         self.foc_speed_kp_spin.setRange(0.0, 1000.0)
@@ -3779,34 +3855,80 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_foc_button = QtWidgets.QPushButton("Start FOC")
         self.stop_foc_button = QtWidgets.QPushButton("Stop FOC")
 
+        jog_button_layout = QtWidgets.QHBoxLayout()
+        jog_button_layout.setContentsMargins(0, 0, 0, 0)
+        jog_button_layout.setSpacing(6)
+        jog_button_layout.addWidget(self.foc_jog_minus_90_button)
+        jog_button_layout.addWidget(self.foc_jog_minus_10_button)
+        jog_button_layout.addWidget(self.foc_jog_plus_10_button)
+        jog_button_layout.addWidget(self.foc_jog_plus_90_button)
+        self.foc_jog_button_widget = QtWidgets.QWidget()
+        self.foc_jog_button_widget.setLayout(jog_button_layout)
+
+        angle_entry_layout = QtWidgets.QHBoxLayout()
+        angle_entry_layout.setContentsMargins(0, 0, 0, 0)
+        angle_entry_layout.setSpacing(6)
+        angle_entry_layout.addWidget(self.foc_target_angle_spin, 1)
+        angle_entry_layout.addWidget(self.foc_target_angle_set_button)
+        self.foc_target_angle_widget = QtWidgets.QWidget()
+        self.foc_target_angle_widget.setLayout(angle_entry_layout)
+
+        angle_slider_layout = QtWidgets.QHBoxLayout()
+        angle_slider_layout.setContentsMargins(0, 0, 0, 0)
+        angle_slider_layout.setSpacing(8)
+        angle_slider_layout.addWidget(self.foc_angle_slider, 1)
+        angle_slider_layout.addWidget(self.foc_angle_slider_value_label)
+        self.foc_angle_slider_widget = QtWidgets.QWidget()
+        self.foc_angle_slider_widget.setLayout(angle_slider_layout)
+
         summary_layout.addWidget(QtWidgets.QLabel("Mode"), 0, 0)
         summary_layout.addWidget(self.foc_mode_combo, 0, 1)
         summary_layout.addWidget(self.foc_target_speed_label, 0, 2)
         summary_layout.addWidget(self.foc_target_speed_spin, 0, 3)
-        summary_layout.addWidget(self.foc_target_position_label, 1, 0)
-        summary_layout.addWidget(self.foc_target_position_spin, 1, 1)
+        summary_layout.addWidget(self.foc_target_angle_label, 1, 0)
+        summary_layout.addWidget(self.foc_target_angle_widget, 1, 1)
         summary_layout.addWidget(self.foc_position_kp_label, 1, 2)
         summary_layout.addWidget(self.foc_position_kp_spin, 1, 3)
-        summary_layout.addWidget(QtWidgets.QLabel("Speed Kp"), 2, 0)
-        summary_layout.addWidget(self.foc_speed_kp_spin, 2, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Speed Ki"), 2, 2)
-        summary_layout.addWidget(self.foc_speed_ki_spin, 2, 3)
-        summary_layout.addWidget(self.foc_debug_angle_label, 3, 0)
-        summary_layout.addWidget(self.foc_debug_angle_value_label, 3, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Acceleration"), 4, 0)
-        summary_layout.addWidget(self.foc_accel_spin, 4, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Deceleration"), 4, 2)
-        summary_layout.addWidget(self.foc_decel_spin, 4, 3)
-        summary_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
-        summary_layout.addWidget(self.foc_status_value_label, 5, 1)
-        summary_layout.addWidget(QtWidgets.QLabel("Diag"), 5, 2)
-        summary_layout.addWidget(self.foc_direction_test_status_label, 5, 3)
-        summary_layout.addWidget(self.foc_live_summary_label, 6, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 7, 0, 1, 2)
-        summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 7, 2, 1, 2)
-        summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 8, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_button, 9, 0, 1, 2)
-        summary_layout.addWidget(self.stop_foc_button, 9, 2, 1, 2)
+        summary_layout.addWidget(self.foc_jog_label, 2, 0)
+        summary_layout.addWidget(self.foc_jog_button_widget, 2, 1)
+        summary_layout.addWidget(self.foc_position_ki_label, 2, 2)
+        summary_layout.addWidget(self.foc_position_ki_spin, 2, 3)
+        summary_layout.addWidget(self.foc_angle_slider_label, 3, 0)
+        summary_layout.addWidget(self.foc_angle_slider_widget, 3, 1, 1, 3)
+        summary_layout.addWidget(self.foc_target_position_label, 4, 0)
+        summary_layout.addWidget(self.foc_target_position_spin, 4, 1)
+        summary_layout.addWidget(self.foc_position_vff_gain_label, 4, 2)
+        summary_layout.addWidget(self.foc_position_vff_gain_spin, 4, 3)
+        summary_layout.addWidget(self.foc_position_vff_filter_label, 5, 0)
+        summary_layout.addWidget(self.foc_position_vff_filter_spin, 5, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Speed Kp"), 6, 0)
+        summary_layout.addWidget(self.foc_speed_kp_spin, 6, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Speed Ki"), 6, 2)
+        summary_layout.addWidget(self.foc_speed_ki_spin, 6, 3)
+        summary_layout.addWidget(self.foc_debug_angle_label, 7, 0)
+        summary_layout.addWidget(self.foc_debug_angle_value_label, 7, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Acceleration"), 8, 0)
+        summary_layout.addWidget(self.foc_accel_spin, 8, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Deceleration"), 8, 2)
+        summary_layout.addWidget(self.foc_decel_spin, 8, 3)
+        summary_layout.addWidget(QtWidgets.QLabel("Status"), 9, 0)
+        summary_layout.addWidget(self.foc_status_value_label, 9, 1)
+        summary_layout.addWidget(QtWidgets.QLabel("Diag"), 9, 2)
+        summary_layout.addWidget(self.foc_direction_test_status_label, 9, 3)
+        summary_layout.addWidget(self.foc_live_summary_label, 10, 0, 1, 4)
+        summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 11, 0, 1, 2)
+        summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 11, 2, 1, 2)
+        summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 12, 0, 1, 4)
+        summary_layout.addWidget(self.start_foc_button, 13, 0, 1, 2)
+        summary_layout.addWidget(self.stop_foc_button, 13, 2, 1, 2)
+
+        self.foc_target_angle_set_button.clicked.connect(self._apply_absolute_angle_target)
+        self.foc_jog_minus_90_button.clicked.connect(lambda: self._apply_relative_angle_delta(-90.0))
+        self.foc_jog_minus_10_button.clicked.connect(lambda: self._apply_relative_angle_delta(-10.0))
+        self.foc_jog_plus_10_button.clicked.connect(lambda: self._apply_relative_angle_delta(10.0))
+        self.foc_jog_plus_90_button.clicked.connect(lambda: self._apply_relative_angle_delta(90.0))
+        self.foc_angle_slider.valueChanged.connect(self._handle_position_angle_slider_changed)
+        self.foc_angle_slider.sliderReleased.connect(self._handle_position_angle_slider_released)
 
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
@@ -4313,6 +4435,78 @@ class MainWindow(QtWidgets.QMainWindow):
             limit_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM
         return float(limit_rpm)
 
+    def _encoder_resolution_counts(self) -> float:
+        if not hasattr(self, "motor_table"):
+            return float(1 << 20)
+        encoder_resolution = self._table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_ENCODER_RESOLUTION,
+            float(1 << 20),
+        )
+        if encoder_resolution <= 1.0:
+            encoder_resolution = float(1 << 20)
+        return float(encoder_resolution)
+
+    def _normalize_single_turn_counts(self, counts: float) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return float(counts)
+        counts = math.fmod(float(counts), encoder_resolution)
+        if counts < 0.0:
+            counts += encoder_resolution
+        return counts
+
+    def _counts_to_degrees(self, counts: float) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return 0.0
+        return (self._normalize_single_turn_counts(counts) * 360.0) / encoder_resolution
+
+    def _degrees_to_counts(self, degrees: float) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return 0.0
+        normalized_degrees = float(degrees) % 360.0
+        return (normalized_degrees / 360.0) * encoder_resolution
+
+    def _set_foc_target_position_counts(self, counts: float) -> None:
+        normalized_counts = self._normalize_single_turn_counts(counts)
+        self.foc_target_position_spin.blockSignals(True)
+        self.foc_target_position_spin.setValue(normalized_counts)
+        self.foc_target_position_spin.blockSignals(False)
+        self.foc_target_counts_hint_label.setText(f"{normalized_counts:.1f} cnt")
+        target_degrees = self._counts_to_degrees(normalized_counts)
+        slider_value = int(round(target_degrees * 10.0))
+        self.foc_target_angle_spin.blockSignals(True)
+        self.foc_target_angle_spin.setValue(target_degrees)
+        self.foc_target_angle_spin.blockSignals(False)
+        self.foc_angle_slider.blockSignals(True)
+        self.foc_angle_slider.setValue(slider_value)
+        self.foc_angle_slider.blockSignals(False)
+        self.foc_angle_slider_value_label.setText(f"{target_degrees:.1f} deg")
+
+    def _apply_absolute_angle_target(self) -> None:
+        self._set_foc_target_position_counts(
+            self._degrees_to_counts(self.foc_target_angle_spin.value())
+        )
+
+    def _apply_relative_angle_delta(self, delta_degrees: float) -> None:
+        base_counts = float(self.foc_target_position_spin.value())
+        if self._latest_monitor_snapshot is not None:
+            base_counts = float(getattr(self._latest_monitor_snapshot, "act_position", base_counts))
+        current_target_degrees = self._counts_to_degrees(base_counts)
+        self._set_foc_target_position_counts(
+            self._degrees_to_counts(current_target_degrees + float(delta_degrees))
+        )
+
+    def _handle_position_angle_slider_changed(self, slider_value: int) -> None:
+        self.foc_angle_slider_value_label.setText(f"{slider_value / 10.0:.1f} deg")
+
+    def _handle_position_angle_slider_released(self) -> None:
+        self._set_foc_target_position_counts(
+            self._degrees_to_counts(self.foc_angle_slider.value() / 10.0)
+        )
+
     def _load_foc_controls_from_driver_table(self) -> None:
         if not hasattr(self, "driver_table"):
             return
@@ -4336,6 +4530,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_kp_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_P_GAIN, 0.05)
         )
+        self.foc_position_ki_spin.setValue(
+            self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_I_GAIN, 0.50)
+        )
+        self.foc_position_vff_gain_spin.setValue(
+            self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_FF_GAIN, 0.0)
+        )
+        self.foc_position_vff_filter_spin.setValue(
+            self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_FF_FILTER, 50.0)
+        )
         self.foc_speed_kp_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_SPEED_P_GAIN, 0.02)
         )
@@ -4350,6 +4553,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if self._foc_speed_target_rpm <= 1.0:
             self._foc_speed_target_rpm = 300.0
+        self._set_foc_target_position_counts(self.foc_target_position_spin.value())
         self._update_foc_mode_ui()
 
     def _sync_foc_controls_to_driver_table(self) -> None:
@@ -4369,6 +4573,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.driver_table,
             DRIVER_PARAM_POSITION_P_GAIN,
             float(self.foc_position_kp_spin.value()),
+        )
+        self._set_table_float_value(
+            self.driver_table,
+            DRIVER_PARAM_POSITION_I_GAIN,
+            float(self.foc_position_ki_spin.value()),
+        )
+        self._set_table_float_value(
+            self.driver_table,
+            DRIVER_PARAM_POSITION_FF_GAIN,
+            float(self.foc_position_vff_gain_spin.value()),
+        )
+        self._set_table_float_value(
+            self.driver_table,
+            DRIVER_PARAM_POSITION_FF_FILTER,
+            float(self.foc_position_vff_filter_spin.value()),
         )
         self._set_table_float_value(
             self.driver_table,
@@ -4407,16 +4626,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_foc_mode_ui = POSITION_CONTROL_MODE if position_mode else SPEED_CONTROL_MODE
         self.foc_target_speed_label.setText("Speed Limit" if position_mode else "Target Speed")
         self.foc_target_position_label.setEnabled(position_mode)
-        self.foc_target_position_spin.setEnabled(position_mode)
+        self.foc_target_position_spin.setEnabled(False)
+        self.foc_target_angle_label.setEnabled(position_mode)
+        self.foc_target_angle_spin.setEnabled(position_mode)
+        self.foc_target_angle_set_button.setEnabled(position_mode)
+        self.foc_jog_label.setEnabled(position_mode)
+        self.foc_jog_minus_90_button.setEnabled(position_mode)
+        self.foc_jog_minus_10_button.setEnabled(position_mode)
+        self.foc_jog_plus_10_button.setEnabled(position_mode)
+        self.foc_jog_plus_90_button.setEnabled(position_mode)
+        self.foc_angle_slider_label.setEnabled(position_mode)
+        self.foc_angle_slider.setEnabled(position_mode)
+        self.foc_angle_slider_value_label.setEnabled(position_mode)
+        self.foc_target_counts_hint_label.setEnabled(position_mode)
         self.foc_position_kp_label.setEnabled(position_mode)
         self.foc_position_kp_spin.setEnabled(position_mode)
+        self.foc_position_ki_label.setEnabled(position_mode)
+        self.foc_position_ki_spin.setEnabled(position_mode)
+        self.foc_position_vff_gain_label.setEnabled(position_mode)
+        self.foc_position_vff_gain_spin.setEnabled(position_mode)
+        self.foc_position_vff_filter_label.setEnabled(position_mode)
+        self.foc_position_vff_filter_spin.setEnabled(position_mode)
         if position_mode:
             self.foc_mode_description_label.setText(
-                "Position Mode: the outer position loop compares Target Position with actual position, converts the error into a commanded speed, then the speed loop generates Iq. The speed field above is used as the motion speed limit, not as a direct speed command."
+                "Position Mode: enter the target in degrees, use relative jog buttons for quick moves, and release the angle slider to send a clean single-turn target. The outer position PI loop adds velocity feed-forward from the setpoint derivative, then generates a commanded speed for the speed loop. The speed field above is used as the motion speed limit, not as a direct speed command."
             )
             if not self._connected:
                 self.foc_live_summary_label.setText(
-                    "Position Mode is ready. Enter target position, speed limit, and gains, then press Start FOC."
+                    "Position Mode is ready. Enter target angle, use relative jog if needed, set the speed limit and PI/VFF gains, then press Start FOC."
                 )
         else:
             self.foc_mode_description_label.setText(
@@ -4467,10 +4704,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 else SPEED_CONTROL_MODE
             )
             if mode == POSITION_CONTROL_MODE:
+                target_deg = self._counts_to_degrees(snapshot.cmd_position)
+                act_deg = self._counts_to_degrees(snapshot.act_position)
                 self.foc_status_value_label.setText("Fault / stopped")
                 self.foc_live_summary_label.setText(
-                    f"Last position target {snapshot.cmd_position:.1f} cnt | "
-                    f"Act {snapshot.act_position:.1f} cnt | "
+                    f"Last position target {target_deg:.2f} deg / {snapshot.cmd_position:.1f} cnt | "
+                    f"Act {act_deg:.2f} deg / {snapshot.act_position:.1f} cnt | "
                     f"Error {snapshot.position_error:.1f} cnt"
                 )
             else:
@@ -4501,10 +4740,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         mode = POSITION_CONTROL_MODE if runtime_mode == POSITION_CONTROL_MODE else SPEED_CONTROL_MODE
         if mode == POSITION_CONTROL_MODE:
+            target_deg = self._counts_to_degrees(snapshot.cmd_position)
+            act_deg = self._counts_to_degrees(snapshot.act_position)
             self.foc_status_value_label.setText("FOC Position Running")
             self.foc_live_summary_label.setText(
-                f"Target {snapshot.cmd_position:.1f} cnt | "
-                f"Act {snapshot.act_position:.1f} cnt | "
+                f"Target {target_deg:.2f} deg / {snapshot.cmd_position:.1f} cnt | "
+                f"Act {act_deg:.2f} deg / {snapshot.act_position:.1f} cnt | "
                 f"Error {snapshot.position_error:.1f} cnt | "
                 f"Cmd Speed {snapshot.cmd_speed:.1f} rpm"
             )
@@ -4644,16 +4885,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if mode == POSITION_CONTROL_MODE:
             position_target = float(self.foc_target_position_spin.value())
+            position_target_degrees = self._counts_to_degrees(position_target)
             current_position = (
                 float(getattr(last_monitor, "act_position", position_target))
                 if last_monitor is not None
                 else position_target
             )
             payload = struct.pack(
-                "<7fBB",
+                "<10fBB",
                 position_target,
                 float(self._foc_position_speed_limit_rpm),
                 float(self.foc_position_kp_spin.value()),
+                float(self.foc_position_ki_spin.value()),
+                float(self.foc_position_vff_gain_spin.value()),
+                float(self.foc_position_vff_filter_spin.value()),
                 float(self.foc_speed_kp_spin.value()),
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
@@ -4663,18 +4908,20 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             description = (
                 f"Start FOC Position Mode "
-                f"(target={self.foc_target_position_spin.value():.1f} cnt, "
+                f"(target={position_target_degrees:.2f} deg / {self.foc_target_position_spin.value():.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
+                f"pi=({self.foc_position_kp_spin.value():.3f}, {self.foc_position_ki_spin.value():.3f}), "
+                f"vff=({self.foc_position_vff_gain_spin.value():.3f}, {self.foc_position_vff_filter_spin.value():.1f} Hz), "
                 "frame=none)"
             )
             command = Command.CMD_START_POSITIONCONTROL
             if abs(position_target - current_position) < 1.0:
                 self.foc_live_summary_label.setText(
-                    "Position Mode start sent, but Target Position already matches the current position within 1 count. Change the target if you expect motion."
+                    "Position Mode start sent, but Target Position already matches the current position within 1 count. Change the target angle if you expect motion."
                 )
             else:
                 self.foc_live_summary_label.setText(
-                    f"Starting Position Mode: target {position_target:.1f} cnt | "
+                    f"Starting Position Mode: target {position_target_degrees:.2f} deg / {position_target:.1f} cnt | "
                     f"current {current_position:.1f} cnt | "
                     f"speed limit {self._foc_position_speed_limit_rpm:.1f} rpm"
                 )
@@ -5819,6 +6066,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_scope_view(view, capture, prefix)
 
     def _append_snapshot_to_trend_buffer(self, snapshot) -> None:
+        cmd_position_deg = self._counts_to_degrees(snapshot.cmd_position)
+        act_position_deg = self._counts_to_degrees(snapshot.act_position)
+        position_error_deg = self._counts_to_degrees(snapshot.act_position + snapshot.position_error) - act_position_deg
+        if position_error_deg > 180.0:
+            position_error_deg -= 360.0
+        elif position_error_deg < -180.0:
+            position_error_deg += 360.0
         self._trend_buffer.append_sample(
             time.monotonic(),
             {
@@ -5834,11 +6088,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 "act_speed": snapshot.act_speed,
                 "cmd_speed": snapshot.cmd_speed,
                 "speed_error": snapshot.speed_error,
+                "cmd_position_deg": cmd_position_deg,
+                "act_position_deg": act_position_deg,
+                "position_error_deg": position_error_deg,
             },
         )
 
     def _append_error_snapshot_to_trend_buffer(self, snapshot) -> None:
         last_monitor = self._latest_monitor_snapshot
+        cmd_position_counts = float(last_monitor.cmd_position) if last_monitor is not None else 0.0
+        act_position_counts = float(snapshot.act_position)
+        position_error_counts = float(snapshot.position_error)
+        cmd_position_deg = self._counts_to_degrees(cmd_position_counts)
+        act_position_deg = self._counts_to_degrees(act_position_counts)
+        position_error_deg = self._counts_to_degrees(act_position_counts + position_error_counts) - act_position_deg
+        if position_error_deg > 180.0:
+            position_error_deg -= 360.0
+        elif position_error_deg < -180.0:
+            position_error_deg += 360.0
         self._trend_buffer.append_sample(
             time.monotonic(),
             {
@@ -5862,6 +6129,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 "act_speed": snapshot.act_speed,
                 "cmd_speed": snapshot.cmd_speed,
                 "speed_error": snapshot.speed_error,
+                "cmd_position_deg": cmd_position_deg,
+                "act_position_deg": act_position_deg,
+                "position_error_deg": position_error_deg,
             },
         )
 
@@ -5925,6 +6195,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Act Speed: {snapshot.act_speed:.3f}",
             f"Speed Error: {snapshot.speed_error:.3f}",
             f"Act Position: {snapshot.act_position:.3f}",
+            f"Act Deg: {self._counts_to_degrees(snapshot.act_position):.3f} deg",
             "",
             "[Currents]",
             f"Id Ref / Id: {snapshot.id_ref:.3f} A / {snapshot.id_current:.3f} A",
@@ -6247,6 +6518,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
         self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
+        self._set_monitor_value("act_degree", f"{self._counts_to_degrees(snapshot.act_position):.3f} deg")
         self._set_monitor_value("position_error", f"{snapshot.position_error:.3f}")
         self._set_monitor_value("id_ref", f"{snapshot.id_ref:.3f} A")
         self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
@@ -6279,6 +6551,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
         self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
+        self._set_monitor_value("act_degree", f"{self._counts_to_degrees(snapshot.act_position):.3f} deg")
         self._set_monitor_value("position_error", f"{snapshot.position_error:.3f}")
         self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
         self._set_fault_label(snapshot.fault_code)
