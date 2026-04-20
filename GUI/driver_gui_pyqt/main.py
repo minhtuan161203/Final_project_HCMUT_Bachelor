@@ -91,6 +91,12 @@ KNOWN_DEVICE_PID = 22336
 TREND_BUFFER_CAPACITY = 4000
 TREND_REFRESH_INTERVAL_MS = 20
 TRACE_CAPTURE_REFRESH_INTERVAL_MS = 100
+SPEED_TEST_TIMER_INTERVAL_MS = 20
+SPEED_TEST_TRAPEZOID_UPDATE_INTERVAL_MS = 20
+SPEED_TEST_PROFILE_STEP = "step_response"
+SPEED_TEST_PROFILE_REVERSE = "reversing"
+SPEED_TEST_PROFILE_LOW_SPEED = "low_speed"
+SPEED_TEST_PROFILE_TRAPEZOID = "trapezoidal"
 
 TREND_SERIES_META = {
     "phase_u": {"label": "Iu", "unit": "A", "color": "#1f77b4"},
@@ -246,6 +252,19 @@ class ChartReportCapture:
     series_labels: dict[str, str]
     series_points: dict[str, list[QtCore.QPointF]] = field(default_factory=dict)
     dpi: int = 300
+
+
+@dataclass(slots=True)
+class SpeedTestSession:
+    profile_key: str
+    sequence: list[dict[str, object]]
+    preparing_write: bool = True
+    step_index: int = 0
+    step_started_at: float = 0.0
+    steady_since_at: float | None = None
+    last_target_send_at: float = 0.0
+    last_target_rpm: float | None = None
+    completion_text: str = "Completed"
 
 
 def _chart_scale_from_font_size(font_pt: int) -> float:
@@ -2994,6 +3013,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._foc_speed_target_rpm = 300.0
         self._foc_position_speed_limit_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM
         self._last_foc_mode_ui = SPEED_CONTROL_MODE
+        self._speed_test_session: SpeedTestSession | None = None
 
         self._ack_timer = QtCore.QTimer(self)
         self._ack_timer.setSingleShot(True)
@@ -3007,6 +3027,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trend_refresh_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self._trend_refresh_timer.setInterval(TREND_REFRESH_INTERVAL_MS)
         self._trend_refresh_timer.timeout.connect(self._refresh_scada_ui)
+
+        self._speed_test_timer = QtCore.QTimer(self)
+        self._speed_test_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
+        self._speed_test_timer.setInterval(SPEED_TEST_TIMER_INTERVAL_MS)
+        self._speed_test_timer.timeout.connect(self._on_speed_test_timer)
 
         self._build_ui()
         self._connect_signals()
@@ -3686,6 +3711,7 @@ class MainWindow(QtWidgets.QMainWindow):
         drive_layout.addWidget(drive_hint)
         drive_layout.addStretch(1)
 
+        test_tab = self._build_test_mode_tab()
         foc_tab = self._build_foc_control_tab()
 
         vf_tab = QtWidgets.QWidget()
@@ -3722,6 +3748,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.quick_command_tabs.addTab(drive_tab, "Drive")
         self.quick_command_tabs.addTab(foc_tab, "FOC Control")
+        self.quick_command_tabs.addTab(test_tab, "Test Mode")
         self.quick_command_tabs.addTab(vf_tab, "Open Loop V/F")
         self.quick_command_tabs.addTab(self.alarm_tab, "Alarms")
         layout.addWidget(self.quick_command_tabs)
@@ -3965,6 +3992,175 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_foc_mode_ui()
         return widget
 
+    def _build_test_mode_tab(self) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.addWidget(self._build_speed_test_group())
+        note = QtWidgets.QLabel(
+            "Use this tab for automated command sequences only. Configure gains, ramps, and speed targets on the FOC Control tab first, then return here to run repeatable speed profiles. This keeps the core FOC page uncluttered and leaves room for future position-test automation."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return widget
+
+    def _build_speed_test_group(self) -> QtWidgets.QGroupBox:
+        box = QtWidgets.QGroupBox("Speed Test Mode")
+        self.speed_test_group = box
+        layout = QtWidgets.QGridLayout(box)
+
+        self.speed_test_profile_combo = QtWidgets.QComboBox()
+        self.speed_test_profile_combo.addItem("Step Response", SPEED_TEST_PROFILE_STEP)
+        self.speed_test_profile_combo.addItem("Reversing Test", SPEED_TEST_PROFILE_REVERSE)
+        self.speed_test_profile_combo.addItem("Low-speed Stability", SPEED_TEST_PROFILE_LOW_SPEED)
+        self.speed_test_profile_combo.addItem("Trapezoidal Profile", SPEED_TEST_PROFILE_TRAPEZOID)
+
+        self.speed_test_stack = QtWidgets.QStackedWidget()
+
+        step_page = QtWidgets.QWidget()
+        step_layout = QtWidgets.QGridLayout(step_page)
+        self.speed_test_step_target_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_step_target_spin.setRange(-2.0 * DEFAULT_MOTOR_RATED_SPEED_RPM, 2.0 * DEFAULT_MOTOR_RATED_SPEED_RPM)
+        self.speed_test_step_target_spin.setDecimals(1)
+        self.speed_test_step_target_spin.setSingleStep(50.0)
+        self.speed_test_step_target_spin.setSuffix(" rpm")
+        self.speed_test_step_target_spin.setValue(1000.0)
+        self.speed_test_step_pre_delay_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_step_pre_delay_spin.setRange(0.0, 10000.0)
+        self.speed_test_step_pre_delay_spin.setDecimals(0)
+        self.speed_test_step_pre_delay_spin.setSingleStep(100.0)
+        self.speed_test_step_pre_delay_spin.setSuffix(" ms")
+        self.speed_test_step_pre_delay_spin.setValue(500.0)
+        self.speed_test_step_run_time_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_step_run_time_spin.setRange(0.1, 120.0)
+        self.speed_test_step_run_time_spin.setDecimals(2)
+        self.speed_test_step_run_time_spin.setSingleStep(0.5)
+        self.speed_test_step_run_time_spin.setSuffix(" s")
+        self.speed_test_step_run_time_spin.setValue(3.0)
+        step_layout.addWidget(QtWidgets.QLabel("Target"), 0, 0)
+        step_layout.addWidget(self.speed_test_step_target_spin, 0, 1)
+        step_layout.addWidget(QtWidgets.QLabel("Pre-step Wait"), 0, 2)
+        step_layout.addWidget(self.speed_test_step_pre_delay_spin, 0, 3)
+        step_layout.addWidget(QtWidgets.QLabel("Run Time"), 1, 0)
+        step_layout.addWidget(self.speed_test_step_run_time_spin, 1, 1)
+        step_layout.setColumnStretch(4, 1)
+        self.speed_test_stack.addWidget(step_page)
+
+        reverse_page = QtWidgets.QWidget()
+        reverse_layout = QtWidgets.QGridLayout(reverse_page)
+        self.speed_test_reverse_target_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_reverse_target_spin.setRange(1.0, 2.0 * DEFAULT_MOTOR_RATED_SPEED_RPM)
+        self.speed_test_reverse_target_spin.setDecimals(1)
+        self.speed_test_reverse_target_spin.setSingleStep(50.0)
+        self.speed_test_reverse_target_spin.setSuffix(" rpm")
+        self.speed_test_reverse_target_spin.setValue(1000.0)
+        self.speed_test_reverse_tolerance_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_reverse_tolerance_spin.setRange(0.5, 500.0)
+        self.speed_test_reverse_tolerance_spin.setDecimals(1)
+        self.speed_test_reverse_tolerance_spin.setSingleStep(1.0)
+        self.speed_test_reverse_tolerance_spin.setSuffix(" rpm")
+        self.speed_test_reverse_tolerance_spin.setValue(25.0)
+        self.speed_test_reverse_hold_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_reverse_hold_spin.setRange(50.0, 10000.0)
+        self.speed_test_reverse_hold_spin.setDecimals(0)
+        self.speed_test_reverse_hold_spin.setSingleStep(100.0)
+        self.speed_test_reverse_hold_spin.setSuffix(" ms")
+        self.speed_test_reverse_hold_spin.setValue(800.0)
+        self.speed_test_reverse_timeout_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_reverse_timeout_spin.setRange(0.5, 120.0)
+        self.speed_test_reverse_timeout_spin.setDecimals(2)
+        self.speed_test_reverse_timeout_spin.setSingleStep(0.5)
+        self.speed_test_reverse_timeout_spin.setSuffix(" s")
+        self.speed_test_reverse_timeout_spin.setValue(5.0)
+        reverse_layout.addWidget(QtWidgets.QLabel("Magnitude"), 0, 0)
+        reverse_layout.addWidget(self.speed_test_reverse_target_spin, 0, 1)
+        reverse_layout.addWidget(QtWidgets.QLabel("Steady Tol"), 0, 2)
+        reverse_layout.addWidget(self.speed_test_reverse_tolerance_spin, 0, 3)
+        reverse_layout.addWidget(QtWidgets.QLabel("Hold"), 1, 0)
+        reverse_layout.addWidget(self.speed_test_reverse_hold_spin, 1, 1)
+        reverse_layout.addWidget(QtWidgets.QLabel("Timeout"), 1, 2)
+        reverse_layout.addWidget(self.speed_test_reverse_timeout_spin, 1, 3)
+        reverse_layout.setColumnStretch(4, 1)
+        self.speed_test_stack.addWidget(reverse_page)
+
+        low_speed_page = QtWidgets.QWidget()
+        low_speed_layout = QtWidgets.QGridLayout(low_speed_page)
+        self.speed_test_low_target_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_low_target_spin.setRange(-200.0, 200.0)
+        self.speed_test_low_target_spin.setDecimals(1)
+        self.speed_test_low_target_spin.setSingleStep(1.0)
+        self.speed_test_low_target_spin.setSuffix(" rpm")
+        self.speed_test_low_target_spin.setValue(15.0)
+        self.speed_test_low_duration_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_low_duration_spin.setRange(1.0, 300.0)
+        self.speed_test_low_duration_spin.setDecimals(1)
+        self.speed_test_low_duration_spin.setSingleStep(1.0)
+        self.speed_test_low_duration_spin.setSuffix(" s")
+        self.speed_test_low_duration_spin.setValue(10.0)
+        low_speed_layout.addWidget(QtWidgets.QLabel("Target"), 0, 0)
+        low_speed_layout.addWidget(self.speed_test_low_target_spin, 0, 1)
+        low_speed_layout.addWidget(QtWidgets.QLabel("Run Time"), 0, 2)
+        low_speed_layout.addWidget(self.speed_test_low_duration_spin, 0, 3)
+        low_speed_layout.setColumnStretch(4, 1)
+        self.speed_test_stack.addWidget(low_speed_page)
+
+        trapezoid_page = QtWidgets.QWidget()
+        trapezoid_layout = QtWidgets.QGridLayout(trapezoid_page)
+        self.speed_test_trapezoid_target_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_trapezoid_target_spin.setRange(-2.0 * DEFAULT_MOTOR_RATED_SPEED_RPM, 2.0 * DEFAULT_MOTOR_RATED_SPEED_RPM)
+        self.speed_test_trapezoid_target_spin.setDecimals(1)
+        self.speed_test_trapezoid_target_spin.setSingleStep(50.0)
+        self.speed_test_trapezoid_target_spin.setSuffix(" rpm")
+        self.speed_test_trapezoid_target_spin.setValue(1000.0)
+        self.speed_test_trapezoid_lower_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_trapezoid_lower_spin.setRange(-2.0 * DEFAULT_MOTOR_RATED_SPEED_RPM, 2.0 * DEFAULT_MOTOR_RATED_SPEED_RPM)
+        self.speed_test_trapezoid_lower_spin.setDecimals(1)
+        self.speed_test_trapezoid_lower_spin.setSingleStep(50.0)
+        self.speed_test_trapezoid_lower_spin.setSuffix(" rpm")
+        self.speed_test_trapezoid_lower_spin.setValue(0.0)
+        self.speed_test_trapezoid_accel_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_trapezoid_accel_spin.setRange(0.1, 60.0)
+        self.speed_test_trapezoid_accel_spin.setDecimals(2)
+        self.speed_test_trapezoid_accel_spin.setSingleStep(0.1)
+        self.speed_test_trapezoid_accel_spin.setSuffix(" s")
+        self.speed_test_trapezoid_accel_spin.setValue(1.0)
+        self.speed_test_trapezoid_hold_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_test_trapezoid_hold_spin.setRange(0.1, 300.0)
+        self.speed_test_trapezoid_hold_spin.setDecimals(2)
+        self.speed_test_trapezoid_hold_spin.setSingleStep(0.5)
+        self.speed_test_trapezoid_hold_spin.setSuffix(" s")
+        self.speed_test_trapezoid_hold_spin.setValue(3.0)
+        trapezoid_layout.addWidget(QtWidgets.QLabel("Upper Speed"), 0, 0)
+        trapezoid_layout.addWidget(self.speed_test_trapezoid_target_spin, 0, 1)
+        trapezoid_layout.addWidget(QtWidgets.QLabel("Accel / Decel"), 0, 2)
+        trapezoid_layout.addWidget(self.speed_test_trapezoid_accel_spin, 0, 3)
+        trapezoid_layout.addWidget(QtWidgets.QLabel("Lower Speed"), 1, 0)
+        trapezoid_layout.addWidget(self.speed_test_trapezoid_lower_spin, 1, 1)
+        trapezoid_layout.addWidget(QtWidgets.QLabel("Hold"), 1, 2)
+        trapezoid_layout.addWidget(self.speed_test_trapezoid_hold_spin, 1, 3)
+        trapezoid_layout.setColumnStretch(4, 1)
+        self.speed_test_stack.addWidget(trapezoid_page)
+
+        self.speed_test_status_label = QtWidgets.QLabel("Idle")
+        self.speed_test_status_label.setWordWrap(True)
+        self.speed_test_status_label.setStyleSheet("font-weight: 600;")
+        self.speed_test_run_button = QtWidgets.QPushButton("Run Test")
+        self.speed_test_note_label = QtWidgets.QLabel(
+            "Edit the profile here, then confirm. The GUI will copy the active FOC speed gains and ramp settings from the FOC Control tab into Driver Parameters, write them first, and only then start the automated test sequence."
+        )
+        self.speed_test_note_label.setWordWrap(True)
+
+        layout.addWidget(QtWidgets.QLabel("Profile"), 0, 0)
+        layout.addWidget(self.speed_test_profile_combo, 0, 1)
+        layout.addWidget(self.speed_test_run_button, 0, 2)
+        layout.addWidget(self.speed_test_stack, 1, 0, 1, 3)
+        layout.addWidget(QtWidgets.QLabel("Status"), 2, 0)
+        layout.addWidget(self.speed_test_status_label, 2, 1, 1, 2)
+        layout.addWidget(self.speed_test_note_label, 3, 0, 1, 3)
+        layout.setColumnStretch(1, 1)
+
+        return box
+
     def _build_alarm_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
@@ -4202,6 +4398,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_monitor_button.clicked.connect(self._request_monitor_once)
         self.foc_mode_combo.currentIndexChanged.connect(self._update_foc_mode_ui)
         self.foc_target_speed_spin.valueChanged.connect(self._on_foc_target_speed_value_changed)
+        self.speed_test_profile_combo.currentIndexChanged.connect(self._update_speed_test_profile_ui)
+        self.speed_test_run_button.clicked.connect(self._toggle_speed_test_run)
         self.start_foc_rotating_theta_test_button.clicked.connect(self._start_foc_rotating_theta_test)
         self.start_foc_rotating_theta_voltage_test_button.clicked.connect(self._start_foc_rotating_theta_voltage_test)
         self.start_foc_current_feedback_map_test_button.clicked.connect(self._start_foc_current_feedback_map_test)
@@ -4774,6 +4972,442 @@ class MainWindow(QtWidgets.QMainWindow):
             maximum_speed_rpm,
         )
 
+    def _update_speed_test_profile_ui(self) -> None:
+        profile_key = self._speed_test_profile_key()
+        page_index = {
+            SPEED_TEST_PROFILE_STEP: 0,
+            SPEED_TEST_PROFILE_REVERSE: 1,
+            SPEED_TEST_PROFILE_LOW_SPEED: 2,
+            SPEED_TEST_PROFILE_TRAPEZOID: 3,
+        }.get(profile_key, 0)
+        self.speed_test_stack.setCurrentIndex(page_index)
+
+    def _speed_test_profile_key(self) -> str:
+        return str(self.speed_test_profile_combo.currentData() or SPEED_TEST_PROFILE_STEP)
+
+    def _communication_idle(self) -> bool:
+        return bool(self._connected and (not self._awaiting_ack) and (not self._pending_frames))
+
+    def _queue_driver_parameter_write_chunks(
+        self,
+        values: list[float],
+        description_prefix: str = "Write Driver Parameters",
+    ) -> None:
+        chunks = build_parameter_write_chunks(values, chunk_size=16)
+        total_chunks = len(chunks)
+        for index, payload in enumerate(chunks, start=1):
+            self._enqueue_command(
+                Command.CMD_WRITE_DRIVER,
+                payload,
+                f"{description_prefix} chunk {index}/{total_chunks}",
+            )
+
+    def _build_speed_start_payload(self, target_rpm: float) -> tuple[bytes, float]:
+        speed_limit_rpm = max(
+            abs(float(target_rpm)),
+            self._driver_max_speed_rpm(),
+            self._motor_max_speed_rpm(),
+        )
+        if speed_limit_rpm <= 0.0:
+            speed_limit_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM
+        payload = struct.pack(
+            "<6fBB",
+            float(target_rpm),
+            float(self.foc_speed_kp_spin.value()),
+            float(self.foc_speed_ki_spin.value()),
+            float(self.foc_accel_spin.value()),
+            float(self.foc_decel_spin.value()),
+            float(speed_limit_rpm),
+            ID_SQUARE_ANGLE_TEST_NONE,
+            0,
+        )
+        return payload, float(speed_limit_rpm)
+
+    def _apply_speed_target_to_ui(self, target_rpm: float) -> None:
+        self.foc_target_speed_spin.blockSignals(True)
+        self.foc_target_speed_spin.setValue(float(target_rpm))
+        self.foc_target_speed_spin.blockSignals(False)
+        self._on_foc_target_speed_value_changed(float(target_rpm))
+
+    def _apply_speed_ramp_to_ui(self, accel_ms: float, decel_ms: float) -> None:
+        self.foc_accel_spin.blockSignals(True)
+        self.foc_accel_spin.setValue(float(accel_ms))
+        self.foc_accel_spin.blockSignals(False)
+        self.foc_decel_spin.blockSignals(True)
+        self.foc_decel_spin.setValue(float(decel_ms))
+        self.foc_decel_spin.blockSignals(False)
+
+    def _enqueue_speed_start_command(
+        self,
+        target_rpm: float,
+        description: str,
+        quiet: bool = False,
+        request_monitor: bool = False,
+    ) -> None:
+        self._apply_speed_target_to_ui(target_rpm)
+        self._sync_foc_controls_to_driver_table()
+        payload, _ = self._build_speed_start_payload(target_rpm)
+        self._enqueue_command(Command.CMD_START_SPEEDCONTROL, payload, description, quiet=quiet)
+        if request_monitor:
+            self._request_monitor_once()
+
+    def _enqueue_speed_stop_command(
+        self,
+        description: str = "Stop FOC",
+        quiet: bool = False,
+        request_monitor: bool = False,
+    ) -> None:
+        self._enqueue_command(Command.CMD_STOP_SPEEDCONTROL, b"", description, quiet=quiet)
+        if request_monitor:
+            self._request_monitor_once()
+
+    def _speed_test_summary_lines(self, profile_key: str) -> list[str]:
+        if profile_key == SPEED_TEST_PROFILE_REVERSE:
+            return [
+                f"Profile: Reversing Test",
+                f"Magnitude: {self.speed_test_reverse_target_spin.value():.1f} rpm",
+                f"Steady tolerance: {self.speed_test_reverse_tolerance_spin.value():.1f} rpm",
+                f"Steady hold: {self.speed_test_reverse_hold_spin.value():.0f} ms",
+                f"Timeout per direction: {self.speed_test_reverse_timeout_spin.value():.2f} s",
+            ]
+        if profile_key == SPEED_TEST_PROFILE_LOW_SPEED:
+            return [
+                f"Profile: Low-speed Stability",
+                f"Target: {self.speed_test_low_target_spin.value():.1f} rpm",
+                f"Run time: {self.speed_test_low_duration_spin.value():.1f} s",
+            ]
+        if profile_key == SPEED_TEST_PROFILE_TRAPEZOID:
+            return [
+                f"Profile: Trapezoidal Profile",
+                f"Upper Speed: {self.speed_test_trapezoid_target_spin.value():.1f} rpm",
+                f"Lower Speed: {self.speed_test_trapezoid_lower_spin.value():.1f} rpm",
+                f"Accel / Decel: {self.speed_test_trapezoid_accel_spin.value():.2f} s",
+                f"Hold: {self.speed_test_trapezoid_hold_spin.value():.2f} s",
+                "Behavior: Repeats until Cancel",
+            ]
+        return [
+            f"Profile: Step Response",
+            f"Target: {self.speed_test_step_target_spin.value():.1f} rpm",
+            f"Pre-step wait: {self.speed_test_step_pre_delay_spin.value():.0f} ms",
+            f"Run time: {self.speed_test_step_run_time_spin.value():.2f} s",
+        ]
+
+    def _build_speed_test_sequence(self, profile_key: str) -> list[dict[str, object]]:
+        if profile_key == SPEED_TEST_PROFILE_REVERSE:
+            target = abs(float(self.speed_test_reverse_target_spin.value()))
+            tolerance = float(self.speed_test_reverse_tolerance_spin.value())
+            hold_s = float(self.speed_test_reverse_hold_spin.value()) / 1000.0
+            timeout_s = float(self.speed_test_reverse_timeout_spin.value())
+            return [
+                {"type": "prepare_target", "target_rpm": 0.0, "status": "Step 1/8: Priming the target to 0 rpm..."},
+                {"type": "start_foc", "target_rpm": 0.0, "status": "Step 2/8: Starting FOC in Speed Mode..."},
+                {"type": "wait", "duration_s": 0.10, "status": "Step 3/8: Waiting for the drive to arm..."},
+                {"type": "set_speed", "target_rpm": target, "status": f"Step 4/8: Commanding +{target:.1f} rpm..."},
+                {
+                    "type": "wait_steady",
+                    "target_rpm": target,
+                    "tolerance_rpm": tolerance,
+                    "hold_s": hold_s,
+                    "timeout_s": timeout_s,
+                    "status": f"Step 5/8: Waiting for +{target:.1f} rpm steady state...",
+                },
+                {"type": "set_speed", "target_rpm": -target, "status": f"Step 6/8: Reversing to -{target:.1f} rpm..."},
+                {
+                    "type": "wait_steady",
+                    "target_rpm": -target,
+                    "tolerance_rpm": tolerance,
+                    "hold_s": hold_s,
+                    "timeout_s": timeout_s,
+                    "status": f"Step 7/8: Waiting for -{target:.1f} rpm steady state...",
+                },
+                {"type": "stop_foc", "status": "Step 8/8: Stopping FOC..."},
+            ]
+        if profile_key == SPEED_TEST_PROFILE_LOW_SPEED:
+            target = float(self.speed_test_low_target_spin.value())
+            duration_s = float(self.speed_test_low_duration_spin.value())
+            return [
+                {"type": "prepare_target", "target_rpm": 0.0, "status": "Step 1/6: Priming the target to 0 rpm..."},
+                {"type": "start_foc", "target_rpm": 0.0, "status": "Step 2/6: Starting FOC in Speed Mode..."},
+                {"type": "wait", "duration_s": 0.10, "status": "Step 3/6: Waiting for the drive to arm..."},
+                {"type": "set_speed", "target_rpm": target, "status": f"Step 4/6: Commanding {target:.1f} rpm..."},
+                {"type": "wait", "duration_s": duration_s, "status": f"Step 5/6: Monitoring ripple at {target:.1f} rpm..."},
+                {"type": "stop_foc", "status": "Step 6/6: Stopping FOC..."},
+            ]
+        if profile_key == SPEED_TEST_PROFILE_TRAPEZOID:
+            upper_target = float(self.speed_test_trapezoid_target_spin.value())
+            lower_target = float(self.speed_test_trapezoid_lower_spin.value())
+            accel_s = float(self.speed_test_trapezoid_accel_spin.value())
+            hold_s = float(self.speed_test_trapezoid_hold_spin.value())
+            return [
+                {
+                    "type": "prepare_target",
+                    "target_rpm": lower_target,
+                    "status": f"Step 1/8: Priming the target to {lower_target:.1f} rpm...",
+                },
+                {
+                    "type": "start_foc",
+                    "target_rpm": lower_target,
+                    "status": f"Step 2/8: Starting FOC at the lower bound {lower_target:.1f} rpm...",
+                },
+                {"type": "wait", "duration_s": 0.10, "status": "Step 3/8: Waiting for the drive to arm..."},
+                {
+                    "type": "set_speed",
+                    "target_rpm": upper_target,
+                    "status": f"Step 4/8: Ramping linearly up to {upper_target:.1f} rpm...",
+                },
+                {"type": "wait", "duration_s": accel_s + hold_s, "status": f"Step 5/8: Holding the top plateau for {hold_s:.2f} s..."},
+                {
+                    "type": "set_speed",
+                    "target_rpm": lower_target,
+                    "status": f"Step 6/8: Ramping linearly back to {lower_target:.1f} rpm...",
+                },
+                {"type": "wait", "duration_s": accel_s, "status": "Step 7/8: Finishing the down-ramp..."},
+                {"type": "repeat", "to_index": 3, "status": "Step 8/8: Restarting the trapezoid cycle..."},
+            ]
+        target = float(self.speed_test_step_target_spin.value())
+        pre_delay_s = float(self.speed_test_step_pre_delay_spin.value()) / 1000.0
+        run_time_s = float(self.speed_test_step_run_time_spin.value())
+        return [
+            {"type": "prepare_target", "target_rpm": 0.0, "status": "Step 1/6: Priming the target to 0 rpm..."},
+            {"type": "start_foc", "target_rpm": 0.0, "status": "Step 2/6: Starting FOC in Speed Mode..."},
+            {"type": "wait", "duration_s": pre_delay_s, "status": "Step 3/6: Waiting before the step command..."},
+            {"type": "set_speed", "target_rpm": target, "status": f"Step 4/6: Stepping to {target:.1f} rpm..."},
+            {"type": "wait", "duration_s": run_time_s, "status": f"Step 5/6: Holding {target:.1f} rpm for capture..."},
+            {"type": "stop_foc", "status": "Step 6/6: Stopping FOC..."},
+        ]
+
+    def _set_speed_test_running_ui(self, active: bool) -> None:
+        self.speed_test_profile_combo.setEnabled(not active)
+        self.speed_test_stack.setEnabled(not active)
+        self.foc_mode_combo.setEnabled(not active)
+        self.start_foc_button.setEnabled(not active)
+        self.start_foc_rotating_theta_test_button.setEnabled(not active)
+        self.start_foc_rotating_theta_voltage_test_button.setEnabled(not active)
+        self.start_foc_current_feedback_map_test_button.setEnabled(not active)
+        self.speed_test_run_button.setText("Cancel" if active else "Run Test")
+
+    def _toggle_speed_test_run(self) -> None:
+        if self._speed_test_session is not None:
+            self._cancel_speed_test("Cancelled by user.", request_stop=True)
+            return
+        self._start_speed_test()
+
+    def _start_speed_test(self) -> None:
+        if not self._connected:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Speed Test Mode",
+                "Connect to the drive before starting an automated speed test.",
+            )
+            return
+
+        snapshot = self._latest_monitor_snapshot
+        if snapshot is not None:
+            alignment_policy = int(getattr(snapshot, "debug_alignment_policy", ENCODER_ALIGNMENT_POLICY_POWER_ON))
+            alignment_status = int(getattr(snapshot, "debug_alignment_status", ENCODER_ALIGNMENT_STATUS_IDLE))
+            if (
+                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
+                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
+            ):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Speed Test Mode",
+                    "Toggle Servo ON and wait until Driver Monitor shows Align Status = Done before running an automated speed test.",
+                )
+                return
+        active_run_modes = {
+            RUN_MODE_FOC,
+            RUN_MODE_OPEN_LOOP_VF,
+            RUN_MODE_ALIGNMENT_ONLY,
+            RUN_MODE_AUTOTUNE,
+        }
+        if snapshot is not None and (
+            int(getattr(snapshot, "run_mode", -1)) in active_run_modes
+            and (
+                bool(getattr(snapshot, "enable_run", False))
+                or abs(float(getattr(snapshot, "act_speed", 0.0))) > 10.0
+            )
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Speed Test Mode",
+                "Stop the current run first, then launch the automated speed test from a clean idle state.",
+            )
+            return
+
+        if self._current_foc_mode() != SPEED_CONTROL_MODE:
+            combo_index = self.foc_mode_combo.findData(SPEED_CONTROL_MODE)
+            if combo_index >= 0:
+                self.foc_mode_combo.setCurrentIndex(combo_index)
+
+        try:
+            self._sync_foc_controls_to_driver_table()
+            values = self._table_values(self.driver_table)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Invalid Driver Parameters", str(exc))
+            return
+
+        profile_key = self._speed_test_profile_key()
+        if profile_key == SPEED_TEST_PROFILE_TRAPEZOID:
+            accel_ms = float(self.speed_test_trapezoid_accel_spin.value()) * 1000.0
+            self._apply_speed_ramp_to_ui(accel_ms, accel_ms)
+        profile_lines = self._speed_test_summary_lines(profile_key)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm Automated Speed Test",
+            "\n".join(
+                [
+                    *profile_lines,
+                    "",
+                    "Current FOC speed gains, ramps, and max speed from this panel will be written to Driver Parameters before the test starts.",
+                    "Continue?",
+                ]
+            ),
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.Yes,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.speed_test_status_label.setText("Idle")
+            return
+
+        self.auto_poll_checkbox.setChecked(True)
+        sequence = self._build_speed_test_sequence(profile_key)
+        self._queue_driver_parameter_write_chunks(values, "Automated Speed Test: Write Driver Parameters")
+        self._speed_test_session = SpeedTestSession(profile_key=profile_key, sequence=sequence)
+        self._set_speed_test_running_ui(True)
+        self.speed_test_status_label.setText("Preparing: writing driver parameters to the drive...")
+        self._request_monitor_once()
+        self._speed_test_timer.start()
+
+    def _finish_speed_test(self, text: str) -> None:
+        self._speed_test_timer.stop()
+        self._speed_test_session = None
+        self._set_speed_test_running_ui(False)
+        self.speed_test_status_label.setText(text)
+        self._request_monitor_once()
+
+    def _cancel_speed_test(self, text: str, request_stop: bool = True) -> None:
+        self._speed_test_timer.stop()
+        self._speed_test_session = None
+        self._pending_frames.clear()
+        self._set_speed_test_running_ui(False)
+        self.speed_test_status_label.setText(text)
+        if request_stop and self._connected:
+            self._enqueue_speed_stop_command(
+                description="Automated Speed Test: Emergency Stop",
+                request_monitor=True,
+            )
+
+    def _advance_speed_test_step(self) -> None:
+        session = self._speed_test_session
+        if session is None:
+            return
+        session.step_index += 1
+        session.step_started_at = 0.0
+        session.steady_since_at = None
+        if session.step_index >= len(session.sequence):
+            self._finish_speed_test(session.completion_text)
+            return
+        session.sequence[session.step_index].pop("_queued", None)
+
+    def _on_speed_test_timer(self) -> None:
+        session = self._speed_test_session
+        if session is None:
+            return
+
+        now = time.monotonic()
+        if session.preparing_write:
+            if self._communication_idle():
+                session.preparing_write = False
+                session.step_index = 0
+                session.step_started_at = 0.0
+                session.steady_since_at = None
+                session.last_target_send_at = 0.0
+                session.last_target_rpm = None
+            return
+
+        if session.step_index >= len(session.sequence):
+            self._finish_speed_test(session.completion_text)
+            return
+
+        step = session.sequence[session.step_index]
+        if session.step_started_at <= 0.0:
+            session.step_started_at = now
+            session.steady_since_at = None
+            if step.get("status"):
+                self.speed_test_status_label.setText(str(step["status"]))
+
+        step_type = str(step.get("type", ""))
+        if step_type == "prepare_target":
+            self._apply_speed_target_to_ui(float(step.get("target_rpm", 0.0)))
+            self._advance_speed_test_step()
+            return
+
+        if step_type == "start_foc":
+            if not step.get("_queued") and self._communication_idle():
+                self._enqueue_speed_start_command(
+                    float(step.get("target_rpm", self.foc_target_speed_spin.value())),
+                    "Automated Speed Test: Start FOC Speed Mode",
+                    request_monitor=True,
+                )
+                step["_queued"] = True
+                return
+            if step.get("_queued") and self._communication_idle() and (now - session.step_started_at) >= 0.10:
+                self._advance_speed_test_step()
+            return
+
+        if step_type == "set_speed":
+            if not step.get("_queued") and self._communication_idle():
+                target_rpm = float(step.get("target_rpm", 0.0))
+                self._enqueue_speed_start_command(
+                    target_rpm,
+                    f"Automated Speed Test: Set speed to {target_rpm:.1f} rpm",
+                    request_monitor=True,
+                )
+                step["_queued"] = True
+                session.last_target_rpm = target_rpm
+                session.last_target_send_at = now
+                return
+            if step.get("_queued") and self._communication_idle() and (now - session.step_started_at) >= 0.10:
+                self._advance_speed_test_step()
+            return
+
+        if step_type == "wait":
+            if (now - session.step_started_at) >= float(step.get("duration_s", 0.0)):
+                self._advance_speed_test_step()
+            return
+
+        if step_type == "repeat":
+            session.step_index = max(0, int(step.get("to_index", 0)))
+            session.step_started_at = 0.0
+            session.steady_since_at = None
+            if session.step_index < len(session.sequence):
+                session.sequence[session.step_index].pop("_queued", None)
+            return
+
+        if step_type == "wait_steady":
+            snapshot = self._latest_monitor_snapshot
+            target_rpm = float(step.get("target_rpm", 0.0))
+            tolerance_rpm = float(step.get("tolerance_rpm", 0.0))
+            hold_s = float(step.get("hold_s", 0.0))
+            timeout_s = float(step.get("timeout_s", 0.0))
+            if snapshot is not None:
+                act_speed = float(getattr(snapshot, "act_speed", 0.0))
+                if abs(act_speed - target_rpm) <= tolerance_rpm:
+                    if session.steady_since_at is None:
+                        session.steady_since_at = now
+                    elif (now - session.steady_since_at) >= hold_s:
+                        self._advance_speed_test_step()
+                        return
+                else:
+                    session.steady_since_at = None
+            if (now - session.step_started_at) >= timeout_s:
+                self._cancel_speed_test(
+                    f"Timed out while waiting for {target_rpm:.1f} rpm steady state.",
+                    request_stop=True,
+                )
+            return
+
     def _update_foc_mode_ui(self) -> None:
         position_mode = self._current_foc_mode() == POSITION_CONTROL_MODE
         tracking_mode = self._position_tracking_mode()
@@ -4840,6 +5474,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.foc_live_summary_label.setText(
                     "Speed Mode is ready. Enter target speed and gains, then press Start FOC."
                 )
+        if hasattr(self, "speed_test_group"):
+            speed_test_enabled = (not position_mode) or (self._speed_test_session is not None)
+            self.speed_test_group.setEnabled(speed_test_enabled)
+            if position_mode and self._speed_test_session is None:
+                self.speed_test_status_label.setText("Switch FOC Control to Speed Mode before running automated speed tests.")
+            elif self._speed_test_session is None and self.speed_test_status_label.text().startswith("Switch FOC Control to Speed Mode"):
+                self.speed_test_status_label.setText("Idle")
+        self._update_speed_test_profile_ui()
         self._refresh_foc_control_panel(self._latest_monitor_snapshot)
 
     def _on_foc_target_speed_value_changed(self, value: float) -> None:
@@ -4959,6 +5601,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _handle_servo_off(self) -> None:
         self.auto_poll_checkbox.setChecked(True)
+        if self._speed_test_session is not None:
+            self._cancel_speed_test("Cancelled by Servo OFF.", request_stop=False)
         self._enqueue_command(Command.CMD_SERVO_OFF, b"", "Servo OFF")
         self._request_monitor_once()
 
@@ -5157,6 +5801,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._request_monitor_once()
 
     def _stop_foc_control(self) -> None:
+        if self._speed_test_session is not None:
+            self._cancel_speed_test("Cancelled by manual Stop FOC.", request_stop=False)
         mode = self._current_foc_mode()
         command = (
             Command.CMD_STOP_POSITIONCONTROL
@@ -5758,6 +6404,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 "background-color: #2e7d32; color: white; font-weight: 600;"
             )
             self.statusBar().showMessage("Disconnected")
+            if self._speed_test_session is not None:
+                self._cancel_speed_test("Cancelled because the connection was closed.", request_stop=False)
             self._pending_frames.clear()
             self._awaiting_ack = False
             self._last_sent = None
