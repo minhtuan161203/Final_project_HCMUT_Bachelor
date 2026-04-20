@@ -57,6 +57,8 @@ from protocol import (
     DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ,
     DEFAULT_MOTOR_RATED_SPEED_RPM,
     POSITION_CONTROL_MODE,
+    POSITION_TRACKING_MODE_MULTI_TURN,
+    POSITION_TRACKING_MODE_SINGLE_TURN,
     RUN_MODE_ALIGNMENT_ONLY,
     RUN_MODE_AUTOTUNE,
     RUN_MODE_FOC,
@@ -136,6 +138,7 @@ DEFAULT_DRIVER_PARAMETER_VALUES: dict[int, float] = {
     10: 250.0,
     11: 250.0,
     12: DEFAULT_MOTOR_RATED_SPEED_RPM,
+    16: float(POSITION_TRACKING_MODE_SINGLE_TURN),
 }
 
 DEFAULT_MOTOR_PARAMETER_VALUES: dict[int, float] = {
@@ -177,6 +180,7 @@ DRIVER_PARAM_POSITION_I_GAIN = 7
 DRIVER_PARAM_ACCEL_TIME_MS = 10
 DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
+DRIVER_PARAM_POSITION_TRACKING_MODE = 16
 MOTOR_PARAM_MAXIMUM_SPEED = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_SPEED")
 MOTOR_PARAM_CURRENT_P_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_P_GAIN")
 MOTOR_PARAM_CURRENT_I_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_I_GAIN")
@@ -3343,7 +3347,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_ki_spin.setRange(0.0, 10000.0)
         self.ctuning_ki_spin.setDecimals(5)
         self.ctuning_ki_spin.setSingleStep(0.001)
-        self.ctuning_ki_spin.setValue(100.0)
+        self.ctuning_ki_spin.setValue(10.0)
 
         self.ctuning_theta_mode_value_label = QtWidgets.QLabel("Forced = 0 rad")
         self.ctuning_theta_mode_value_label.setToolTip(
@@ -3752,6 +3756,17 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons
         )
 
+        self.foc_position_tracking_label = QtWidgets.QLabel("Tracking")
+        self.foc_position_tracking_combo = QtWidgets.QComboBox()
+        self.foc_position_tracking_combo.addItem(
+            "Single Turn",
+            POSITION_TRACKING_MODE_SINGLE_TURN,
+        )
+        self.foc_position_tracking_combo.addItem(
+            "Multi Turn",
+            POSITION_TRACKING_MODE_MULTI_TURN,
+        )
+
         self.foc_target_angle_label = QtWidgets.QLabel("Go to Angle")
         self.foc_target_angle_spin = QtWidgets.QDoubleSpinBox()
         self.foc_target_angle_spin.setRange(0.0, 360.0)
@@ -3885,22 +3900,24 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.foc_mode_combo, 0, 1)
         summary_layout.addWidget(self.foc_target_speed_label, 0, 2)
         summary_layout.addWidget(self.foc_target_speed_spin, 0, 3)
-        summary_layout.addWidget(self.foc_target_angle_label, 1, 0)
-        summary_layout.addWidget(self.foc_target_angle_widget, 1, 1)
+        summary_layout.addWidget(self.foc_position_tracking_label, 1, 0)
+        summary_layout.addWidget(self.foc_position_tracking_combo, 1, 1)
         summary_layout.addWidget(self.foc_position_kp_label, 1, 2)
         summary_layout.addWidget(self.foc_position_kp_spin, 1, 3)
-        summary_layout.addWidget(self.foc_jog_label, 2, 0)
-        summary_layout.addWidget(self.foc_jog_button_widget, 2, 1)
+        summary_layout.addWidget(self.foc_target_angle_label, 2, 0)
+        summary_layout.addWidget(self.foc_target_angle_widget, 2, 1)
         summary_layout.addWidget(self.foc_position_ki_label, 2, 2)
         summary_layout.addWidget(self.foc_position_ki_spin, 2, 3)
-        summary_layout.addWidget(self.foc_angle_slider_label, 3, 0)
-        summary_layout.addWidget(self.foc_angle_slider_widget, 3, 1, 1, 3)
-        summary_layout.addWidget(self.foc_target_position_label, 4, 0)
-        summary_layout.addWidget(self.foc_target_position_spin, 4, 1)
-        summary_layout.addWidget(self.foc_position_vff_gain_label, 4, 2)
-        summary_layout.addWidget(self.foc_position_vff_gain_spin, 4, 3)
-        summary_layout.addWidget(self.foc_position_vff_filter_label, 5, 0)
-        summary_layout.addWidget(self.foc_position_vff_filter_spin, 5, 1)
+        summary_layout.addWidget(self.foc_jog_label, 3, 0)
+        summary_layout.addWidget(self.foc_jog_button_widget, 3, 1)
+        summary_layout.addWidget(self.foc_position_vff_gain_label, 3, 2)
+        summary_layout.addWidget(self.foc_position_vff_gain_spin, 3, 3)
+        summary_layout.addWidget(self.foc_angle_slider_label, 4, 0)
+        summary_layout.addWidget(self.foc_angle_slider_widget, 4, 1, 1, 3)
+        summary_layout.addWidget(self.foc_target_position_label, 5, 0)
+        summary_layout.addWidget(self.foc_target_position_spin, 5, 1)
+        summary_layout.addWidget(self.foc_position_vff_filter_label, 5, 2)
+        summary_layout.addWidget(self.foc_position_vff_filter_spin, 5, 3)
         summary_layout.addWidget(QtWidgets.QLabel("Speed Kp"), 6, 0)
         summary_layout.addWidget(self.foc_speed_kp_spin, 6, 1)
         summary_layout.addWidget(QtWidgets.QLabel("Speed Ki"), 6, 2)
@@ -3929,6 +3946,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_jog_plus_90_button.clicked.connect(lambda: self._apply_relative_angle_delta(90.0))
         self.foc_angle_slider.valueChanged.connect(self._handle_position_angle_slider_changed)
         self.foc_angle_slider.sliderReleased.connect(self._handle_position_angle_slider_released)
+        self.foc_position_tracking_combo.currentIndexChanged.connect(self._handle_position_tracking_mode_changed)
 
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
@@ -4456,34 +4474,149 @@ class MainWindow(QtWidgets.QMainWindow):
             counts += encoder_resolution
         return counts
 
-    def _counts_to_degrees(self, counts: float) -> float:
+    def _position_tracking_mode(self) -> int:
+        if not hasattr(self, "foc_position_tracking_combo"):
+            return POSITION_TRACKING_MODE_SINGLE_TURN
+        tracking_mode = int(self.foc_position_tracking_combo.currentData())
+        if tracking_mode not in (
+            POSITION_TRACKING_MODE_SINGLE_TURN,
+            POSITION_TRACKING_MODE_MULTI_TURN,
+        ):
+            tracking_mode = POSITION_TRACKING_MODE_SINGLE_TURN
+        return tracking_mode
+
+    def _counts_to_single_turn_degrees(self, counts: float) -> float:
         encoder_resolution = self._encoder_resolution_counts()
         if encoder_resolution <= 1.0:
             return 0.0
         return (self._normalize_single_turn_counts(counts) * 360.0) / encoder_resolution
 
-    def _degrees_to_counts(self, degrees: float) -> float:
+    def _counts_to_accumulated_degrees(self, counts: float) -> float:
         encoder_resolution = self._encoder_resolution_counts()
         if encoder_resolution <= 1.0:
             return 0.0
+        return (float(counts) * 360.0) / encoder_resolution
+
+    def _counts_to_position_mode_degrees(
+        self,
+        counts: float,
+        tracking_mode: int | None = None,
+    ) -> float:
+        mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
+        if mode == POSITION_TRACKING_MODE_MULTI_TURN:
+            return self._counts_to_accumulated_degrees(counts)
+        return self._counts_to_single_turn_degrees(counts)
+
+    def _counts_to_degrees(self, counts: float) -> float:
+        return self._counts_to_single_turn_degrees(counts)
+
+    def _degrees_to_counts(
+        self,
+        degrees: float,
+        tracking_mode: int | None = None,
+    ) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return 0.0
+        mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
+        if mode == POSITION_TRACKING_MODE_MULTI_TURN:
+            return (float(degrees) / 360.0) * encoder_resolution
         normalized_degrees = float(degrees) % 360.0
         return (normalized_degrees / 360.0) * encoder_resolution
 
+    def _position_angle_range_deg(self, tracking_mode: int | None = None) -> tuple[float, float]:
+        mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
+        if mode == POSITION_TRACKING_MODE_MULTI_TURN:
+            return (-360000.0, 360000.0)
+        return (0.0, 360.0)
+
+    def _position_tracking_mode_text(self, tracking_mode: int | None = None) -> str:
+        mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
+        if mode == POSITION_TRACKING_MODE_MULTI_TURN:
+            return "Multi Turn"
+        return "Single Turn"
+
+    def _counts_to_motion_display_degrees(self, counts: float) -> float:
+        if (
+            self._current_foc_mode() == POSITION_CONTROL_MODE
+            and self._position_tracking_mode() == POSITION_TRACKING_MODE_MULTI_TURN
+        ):
+            return self._counts_to_accumulated_degrees(counts)
+        return self._counts_to_single_turn_degrees(counts)
+
+    def _wrap_position_error_counts(self, error_counts: float) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return float(error_counts)
+        wrapped_error = math.fmod(float(error_counts), encoder_resolution)
+        half_encoder_resolution = 0.5 * encoder_resolution
+        if wrapped_error > half_encoder_resolution:
+            wrapped_error -= encoder_resolution
+        if wrapped_error < -half_encoder_resolution:
+            wrapped_error += encoder_resolution
+        return wrapped_error
+
+    def _display_position_error_counts(
+        self,
+        target_counts: float,
+        actual_counts: float,
+        tracking_mode: int | None = None,
+    ) -> float:
+        mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
+        raw_error_counts = float(target_counts) - float(actual_counts)
+        if mode == POSITION_TRACKING_MODE_MULTI_TURN:
+            return raw_error_counts
+        return self._wrap_position_error_counts(raw_error_counts)
+
+    def _display_position_error_degrees(
+        self,
+        target_counts: float,
+        actual_counts: float,
+        tracking_mode: int | None = None,
+    ) -> float:
+        error_counts = self._display_position_error_counts(
+            target_counts,
+            actual_counts,
+            tracking_mode,
+        )
+        return self._counts_to_position_mode_degrees(error_counts, tracking_mode)
+
     def _set_foc_target_position_counts(self, counts: float) -> None:
-        normalized_counts = self._normalize_single_turn_counts(counts)
+        tracking_mode = self._position_tracking_mode()
+        normalized_counts = (
+            self._normalize_single_turn_counts(counts)
+            if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN
+            else float(counts)
+        )
         self.foc_target_position_spin.blockSignals(True)
         self.foc_target_position_spin.setValue(normalized_counts)
         self.foc_target_position_spin.blockSignals(False)
         self.foc_target_counts_hint_label.setText(f"{normalized_counts:.1f} cnt")
-        target_degrees = self._counts_to_degrees(normalized_counts)
-        slider_value = int(round(target_degrees * 10.0))
+        target_degrees = self._counts_to_position_mode_degrees(normalized_counts, tracking_mode)
         self.foc_target_angle_spin.blockSignals(True)
         self.foc_target_angle_spin.setValue(target_degrees)
         self.foc_target_angle_spin.blockSignals(False)
-        self.foc_angle_slider.blockSignals(True)
-        self.foc_angle_slider.setValue(slider_value)
-        self.foc_angle_slider.blockSignals(False)
-        self.foc_angle_slider_value_label.setText(f"{target_degrees:.1f} deg")
+        if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN:
+            slider_value = int(round(self._counts_to_single_turn_degrees(normalized_counts) * 10.0))
+            self.foc_angle_slider.blockSignals(True)
+            self.foc_angle_slider.setValue(slider_value)
+            self.foc_angle_slider.blockSignals(False)
+            self.foc_angle_slider_value_label.setText(f"{slider_value / 10.0:.1f} deg")
+        else:
+            self.foc_angle_slider_value_label.setText("Disabled in multi-turn")
+
+    def _handle_position_tracking_mode_changed(self) -> None:
+        current_counts = float(self.foc_target_position_spin.value())
+        tracking_mode = self._position_tracking_mode()
+        lower_deg, upper_deg = self._position_angle_range_deg(tracking_mode)
+        self.foc_target_angle_spin.blockSignals(True)
+        self.foc_target_angle_spin.setRange(lower_deg, upper_deg)
+        self.foc_target_angle_spin.setSingleStep(
+            10.0 if tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN else 1.0
+        )
+        self.foc_target_angle_spin.blockSignals(False)
+        self._set_foc_target_position_counts(current_counts)
+        self._update_foc_mode_ui()
 
     def _apply_absolute_angle_target(self) -> None:
         self._set_foc_target_position_counts(
@@ -4494,7 +4627,7 @@ class MainWindow(QtWidgets.QMainWindow):
         base_counts = float(self.foc_target_position_spin.value())
         if self._latest_monitor_snapshot is not None:
             base_counts = float(getattr(self._latest_monitor_snapshot, "act_position", base_counts))
-        current_target_degrees = self._counts_to_degrees(base_counts)
+        current_target_degrees = self._counts_to_position_mode_degrees(base_counts)
         self._set_foc_target_position_counts(
             self._degrees_to_counts(current_target_degrees + float(delta_degrees))
         )
@@ -4503,6 +4636,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_angle_slider_value_label.setText(f"{slider_value / 10.0:.1f} deg")
 
     def _handle_position_angle_slider_released(self) -> None:
+        if self._position_tracking_mode() != POSITION_TRACKING_MODE_SINGLE_TURN:
+            return
         self._set_foc_target_position_counts(
             self._degrees_to_counts(self.foc_angle_slider.value() / 10.0)
         )
@@ -4533,6 +4668,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_ki_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_I_GAIN, 0.50)
         )
+        tracking_mode = int(
+            round(
+                self._table_float_value(
+                    self.driver_table,
+                    DRIVER_PARAM_POSITION_TRACKING_MODE,
+                    float(POSITION_TRACKING_MODE_SINGLE_TURN),
+                )
+            )
+        )
+        if tracking_mode not in (
+            POSITION_TRACKING_MODE_SINGLE_TURN,
+            POSITION_TRACKING_MODE_MULTI_TURN,
+        ):
+            tracking_mode = POSITION_TRACKING_MODE_SINGLE_TURN
+        combo_index = self.foc_position_tracking_combo.findData(tracking_mode)
+        if combo_index >= 0:
+            self.foc_position_tracking_combo.blockSignals(True)
+            self.foc_position_tracking_combo.setCurrentIndex(combo_index)
+            self.foc_position_tracking_combo.blockSignals(False)
         self.foc_position_vff_gain_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_FF_GAIN, 0.0)
         )
@@ -4581,6 +4735,11 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._set_table_float_value(
             self.driver_table,
+            DRIVER_PARAM_POSITION_TRACKING_MODE,
+            float(self._position_tracking_mode()),
+        )
+        self._set_table_float_value(
+            self.driver_table,
             DRIVER_PARAM_POSITION_FF_GAIN,
             float(self.foc_position_vff_gain_spin.value()),
         )
@@ -4617,6 +4776,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_foc_mode_ui(self) -> None:
         position_mode = self._current_foc_mode() == POSITION_CONTROL_MODE
+        tracking_mode = self._position_tracking_mode()
+        lower_deg, upper_deg = self._position_angle_range_deg(tracking_mode)
+        self.foc_target_angle_spin.blockSignals(True)
+        self.foc_target_angle_spin.setRange(lower_deg, upper_deg)
+        self.foc_target_angle_spin.blockSignals(False)
         target_value = (
             abs(self._foc_position_speed_limit_rpm) if position_mode else self._foc_speed_target_rpm
         )
@@ -4627,6 +4791,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_target_speed_label.setText("Speed Limit" if position_mode else "Target Speed")
         self.foc_target_position_label.setEnabled(position_mode)
         self.foc_target_position_spin.setEnabled(False)
+        self.foc_position_tracking_label.setEnabled(position_mode)
+        self.foc_position_tracking_combo.setEnabled(position_mode)
         self.foc_target_angle_label.setEnabled(position_mode)
         self.foc_target_angle_spin.setEnabled(position_mode)
         self.foc_target_angle_set_button.setEnabled(position_mode)
@@ -4636,7 +4802,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_jog_plus_10_button.setEnabled(position_mode)
         self.foc_jog_plus_90_button.setEnabled(position_mode)
         self.foc_angle_slider_label.setEnabled(position_mode)
-        self.foc_angle_slider.setEnabled(position_mode)
+        self.foc_angle_slider.setEnabled(
+            position_mode and (tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN)
+        )
         self.foc_angle_slider_value_label.setEnabled(position_mode)
         self.foc_target_counts_hint_label.setEnabled(position_mode)
         self.foc_position_kp_label.setEnabled(position_mode)
@@ -4648,12 +4816,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_vff_filter_label.setEnabled(position_mode)
         self.foc_position_vff_filter_spin.setEnabled(position_mode)
         if position_mode:
-            self.foc_mode_description_label.setText(
-                "Position Mode: enter the target in degrees, use relative jog buttons for quick moves, and release the angle slider to send a clean single-turn target. The outer position PI loop adds velocity feed-forward from the setpoint derivative, then generates a commanded speed for the speed loop. The speed field above is used as the motion speed limit, not as a direct speed command."
-            )
+            if tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN:
+                self.foc_angle_slider_value_label.setText("Disabled in multi-turn")
+                self.foc_mode_description_label.setText(
+                    "Position Mode / Multi Turn: enter an accumulated target angle in degrees and the firmware will compare it against the accumulated encoder position without shortest-path wrapping. Use this mode for long-distance moves across many turns. The angle slider is disabled because it only makes sense for one-turn moves."
+                )
+            else:
+                self.foc_angle_slider_value_label.setText(
+                    f"{self.foc_angle_slider.value() / 10.0:.1f} deg"
+                )
+                self.foc_mode_description_label.setText(
+                    "Position Mode / Single Turn: enter the target in degrees, use relative jog buttons for quick moves, and release the angle slider to send a clean one-turn target. The firmware uses shortest-path wrapping so the motor always takes the nearest route inside one mechanical revolution."
+                )
             if not self._connected:
                 self.foc_live_summary_label.setText(
-                    "Position Mode is ready. Enter target angle, use relative jog if needed, set the speed limit and PI/VFF gains, then press Start FOC."
+                    "Position Mode is ready. Choose Single Turn or Multi Turn, enter the target angle, use relative jog if needed, set the speed limit and PI/VFF gains, then press Start FOC."
                 )
         else:
             self.foc_mode_description_label.setText(
@@ -4704,13 +4881,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 else SPEED_CONTROL_MODE
             )
             if mode == POSITION_CONTROL_MODE:
-                target_deg = self._counts_to_degrees(snapshot.cmd_position)
-                act_deg = self._counts_to_degrees(snapshot.act_position)
+                tracking_mode = self._position_tracking_mode()
+                target_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position, tracking_mode)
+                act_deg = self._counts_to_position_mode_degrees(snapshot.act_position, tracking_mode)
+                error_deg = self._display_position_error_degrees(
+                    snapshot.cmd_position,
+                    snapshot.act_position,
+                    tracking_mode,
+                )
                 self.foc_status_value_label.setText("Fault / stopped")
                 self.foc_live_summary_label.setText(
                     f"Last position target {target_deg:.2f} deg / {snapshot.cmd_position:.1f} cnt | "
                     f"Act {act_deg:.2f} deg / {snapshot.act_position:.1f} cnt | "
-                    f"Error {snapshot.position_error:.1f} cnt"
+                    f"Error {error_deg:.3f} deg | "
+                    f"{self._position_tracking_mode_text(tracking_mode)}"
                 )
             else:
                 self.foc_status_value_label.setText("Fault / stopped")
@@ -4740,14 +4924,21 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         mode = POSITION_CONTROL_MODE if runtime_mode == POSITION_CONTROL_MODE else SPEED_CONTROL_MODE
         if mode == POSITION_CONTROL_MODE:
-            target_deg = self._counts_to_degrees(snapshot.cmd_position)
-            act_deg = self._counts_to_degrees(snapshot.act_position)
+            tracking_mode = self._position_tracking_mode()
+            target_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position, tracking_mode)
+            act_deg = self._counts_to_position_mode_degrees(snapshot.act_position, tracking_mode)
+            error_deg = self._display_position_error_degrees(
+                snapshot.cmd_position,
+                snapshot.act_position,
+                tracking_mode,
+            )
             self.foc_status_value_label.setText("FOC Position Running")
             self.foc_live_summary_label.setText(
                 f"Target {target_deg:.2f} deg / {snapshot.cmd_position:.1f} cnt | "
                 f"Act {act_deg:.2f} deg / {snapshot.act_position:.1f} cnt | "
-                f"Error {snapshot.position_error:.1f} cnt | "
-                f"Cmd Speed {snapshot.cmd_speed:.1f} rpm"
+                f"Error {error_deg:.3f} deg | "
+                f"Cmd Speed {snapshot.cmd_speed:.1f} rpm | "
+                f"{self._position_tracking_mode_text(tracking_mode)}"
             )
         else:
             self.foc_status_value_label.setText("FOC Speed Running")
@@ -4885,14 +5076,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if mode == POSITION_CONTROL_MODE:
             position_target = float(self.foc_target_position_spin.value())
-            position_target_degrees = self._counts_to_degrees(position_target)
+            tracking_mode = self._position_tracking_mode()
+            position_target_degrees = self._counts_to_position_mode_degrees(
+                position_target,
+                tracking_mode,
+            )
             current_position = (
                 float(getattr(last_monitor, "act_position", position_target))
                 if last_monitor is not None
                 else position_target
             )
+            current_position_degrees = self._counts_to_position_mode_degrees(
+                current_position,
+                tracking_mode,
+            )
             payload = struct.pack(
-                "<10fBB",
+                "<10fBBB",
                 position_target,
                 float(self._foc_position_speed_limit_rpm),
                 float(self.foc_position_kp_spin.value()),
@@ -4905,6 +5104,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_decel_spin.value()),
                 ID_SQUARE_ANGLE_TEST_NONE,
                 0,
+                tracking_mode,
             )
             description = (
                 f"Start FOC Position Mode "
@@ -4912,6 +5112,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
                 f"pi=({self.foc_position_kp_spin.value():.3f}, {self.foc_position_ki_spin.value():.3f}), "
                 f"vff=({self.foc_position_vff_gain_spin.value():.3f}, {self.foc_position_vff_filter_spin.value():.1f} Hz), "
+                f"tracking={self._position_tracking_mode_text(tracking_mode).lower()}, "
                 "frame=none)"
             )
             command = Command.CMD_START_POSITIONCONTROL
@@ -4922,8 +5123,9 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.foc_live_summary_label.setText(
                     f"Starting Position Mode: target {position_target_degrees:.2f} deg / {position_target:.1f} cnt | "
-                    f"current {current_position:.1f} cnt | "
-                    f"speed limit {self._foc_position_speed_limit_rpm:.1f} rpm"
+                    f"current {current_position_degrees:.2f} deg / {current_position:.1f} cnt | "
+                    f"speed limit {self._foc_position_speed_limit_rpm:.1f} rpm | "
+                    f"{self._position_tracking_mode_text(tracking_mode)}"
                 )
         else:
             speed_limit_rpm = self._speed_mode_limit_rpm()
@@ -6066,13 +6268,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_scope_view(view, capture, prefix)
 
     def _append_snapshot_to_trend_buffer(self, snapshot) -> None:
-        cmd_position_deg = self._counts_to_degrees(snapshot.cmd_position)
-        act_position_deg = self._counts_to_degrees(snapshot.act_position)
-        position_error_deg = self._counts_to_degrees(snapshot.act_position + snapshot.position_error) - act_position_deg
-        if position_error_deg > 180.0:
-            position_error_deg -= 360.0
-        elif position_error_deg < -180.0:
-            position_error_deg += 360.0
+        tracking_mode = self._position_tracking_mode()
+        cmd_position_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position, tracking_mode)
+        act_position_deg = self._counts_to_position_mode_degrees(snapshot.act_position, tracking_mode)
+        position_error_deg = self._display_position_error_degrees(
+            snapshot.cmd_position,
+            snapshot.act_position,
+            tracking_mode,
+        )
         self._trend_buffer.append_sample(
             time.monotonic(),
             {
@@ -6098,14 +6301,14 @@ class MainWindow(QtWidgets.QMainWindow):
         last_monitor = self._latest_monitor_snapshot
         cmd_position_counts = float(last_monitor.cmd_position) if last_monitor is not None else 0.0
         act_position_counts = float(snapshot.act_position)
-        position_error_counts = float(snapshot.position_error)
-        cmd_position_deg = self._counts_to_degrees(cmd_position_counts)
-        act_position_deg = self._counts_to_degrees(act_position_counts)
-        position_error_deg = self._counts_to_degrees(act_position_counts + position_error_counts) - act_position_deg
-        if position_error_deg > 180.0:
-            position_error_deg -= 360.0
-        elif position_error_deg < -180.0:
-            position_error_deg += 360.0
+        tracking_mode = self._position_tracking_mode()
+        cmd_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
+        act_position_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
+        position_error_deg = self._display_position_error_degrees(
+            cmd_position_counts,
+            act_position_counts,
+            tracking_mode,
+        )
         self._trend_buffer.append_sample(
             time.monotonic(),
             {
@@ -6195,7 +6398,8 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Act Speed: {snapshot.act_speed:.3f}",
             f"Speed Error: {snapshot.speed_error:.3f}",
             f"Act Position: {snapshot.act_position:.3f}",
-            f"Act Deg: {self._counts_to_degrees(snapshot.act_position):.3f} deg",
+            f"Act Deg: {self._counts_to_motion_display_degrees(snapshot.act_position):.3f} deg",
+            f"Pos Error: {self._display_position_error_degrees(snapshot.cmd_position, snapshot.act_position):.3f} deg",
             "",
             "[Currents]",
             f"Id Ref / Id: {snapshot.id_ref:.3f} A / {snapshot.id_current:.3f} A",
@@ -6492,6 +6696,10 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setStyleSheet("color: #d9534f; font-weight: 600;")
 
     def _update_monitor(self, snapshot) -> None:
+        position_error_deg = self._display_position_error_degrees(
+            snapshot.cmd_position,
+            snapshot.act_position,
+        )
         self._set_monitor_value("enable_run", "ON" if snapshot.enable_run else "OFF")
         self._set_monitor_value("run_mode", self._run_mode_text(snapshot.run_mode))
         self._set_monitor_value("control_timing_mode", self._timing_mode_text(snapshot.control_timing_mode))
@@ -6518,8 +6726,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
         self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
-        self._set_monitor_value("act_degree", f"{self._counts_to_degrees(snapshot.act_position):.3f} deg")
-        self._set_monitor_value("position_error", f"{snapshot.position_error:.3f}")
+        self._set_monitor_value("act_degree", f"{self._counts_to_motion_display_degrees(snapshot.act_position):.3f} deg")
+        self._set_monitor_value("position_error", f"{position_error_deg:.3f} deg")
         self._set_monitor_value("id_ref", f"{snapshot.id_ref:.3f} A")
         self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
         self._set_monitor_value("phase_u", f"{snapshot.phase_u:.3f} A")
@@ -6534,6 +6742,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_error_snapshot(self, snapshot) -> None:
         self._append_error_snapshot_to_trend_buffer(snapshot)
+        position_error_deg = self._display_position_error_degrees(
+            getattr(self._latest_monitor_snapshot, "cmd_position", 0.0),
+            snapshot.act_position,
+        )
         self._set_monitor_value("enable_run", "OFF")
         self._set_monitor_value("run_mode", "FAULT")
         self._set_monitor_value("control_timing_mode", self._timing_mode_text(self._active_timing_mode))
@@ -6551,8 +6763,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
         self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
-        self._set_monitor_value("act_degree", f"{self._counts_to_degrees(snapshot.act_position):.3f} deg")
-        self._set_monitor_value("position_error", f"{snapshot.position_error:.3f}")
+        self._set_monitor_value("act_degree", f"{self._counts_to_motion_display_degrees(snapshot.act_position):.3f} deg")
+        self._set_monitor_value("position_error", f"{position_error_deg:.3f} deg")
         self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
         self._set_fault_label(snapshot.fault_code)
         self._handle_fault_transition(

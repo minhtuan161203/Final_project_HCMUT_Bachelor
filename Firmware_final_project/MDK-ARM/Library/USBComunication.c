@@ -45,7 +45,7 @@ extern Parameterhandle_t Parameter;
 extern CurrentSensor_t Current_Sensor;
 extern StateMachine_t StateMachine;
 extern USB_Comunication_t USB_Comm;
-extern float DriverParameter[16];
+extern float DriverParameter[DRIVER_PARAMETER_COUNT];
 extern float MotorParameter[32];
 extern float gIdRefA;
 extern float gIqRefA;
@@ -713,10 +713,10 @@ static void USB_SendParameterChunk(UpdateDataCmd_e code, const float *source, US
 
 static void USB_HandleReadDriver(USB_Comunication_t *USB_Comunicate, const uint8_t *payload, uint8_t payload_length)
 {
-	uint8_t total_length = (payload_length > 0u) ? payload[0] : 16u;
-	if (total_length > 16u)
+	uint8_t total_length = (payload_length > 0u) ? payload[0] : DRIVER_PARAMETER_COUNT;
+	if (total_length > DRIVER_PARAMETER_COUNT)
 	{
-		total_length = 16u;
+		total_length = DRIVER_PARAMETER_COUNT;
 	}
 
 	USB_Comunicate->ReadDriverParameter = 1u;
@@ -1107,6 +1107,7 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	float motor_max_speed_rpm = MotorParameter[MOTOR_MAXIMUM_SPEED];
 	uint8_t foc_angle_test_mode = ID_SQUARE_ANGLE_TEST_NONE;
 	uint8_t foc_current_uv_swap_test = 0u;
+	uint8_t position_tracking_mode = (uint8_t)DriverParameter[POSITION_TRACKING_MODE];
 
 	StopFocDiagnosticModes();
 	gRunMode = RUN_MODE_FOC;
@@ -1179,6 +1180,14 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	{
 		foc_current_uv_swap_test = payload[29];
 	}
+	if (payload_length >= 43u)
+	{
+		position_tracking_mode = payload[42];
+	}
+	if (position_tracking_mode > POSITION_TRACKING_MODE_MULTI_TURN)
+	{
+		position_tracking_mode = POSITION_TRACKING_MODE_SINGLE_TURN;
+	}
 
 	if (speed_limit_rpm < 0.0f)
 	{
@@ -1195,6 +1204,7 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	{
 		DriverParameter[MAXIMUM_SPEED] = speed_limit_rpm;
 	}
+	DriverParameter[POSITION_TRACKING_MODE] = (float)position_tracking_mode;
 	UpdateDriverParameter(DriverParameter);
 	gFocElectricalAngleTestMode = foc_angle_test_mode;
 	gFocCurrentUvSwapTest = (foc_current_uv_swap_test != 0u) ? 1u : 0u;
@@ -1204,7 +1214,7 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = gTargetPositionCounts - Parameter.fPosition;
 	USB_QueueFocDebugText(
-		"[FOC] pos start tgt=%.1f lim=%.1f act=%.1f err=%.1f kp=%.3f ki=%.3f vff=%.3f vf=%.1f",
+		"[FOC] pos start tgt=%.1f lim=%.1f act=%.1f err=%.1f kp=%.3f ki=%.3f vff=%.3f vf=%.1f mode=%s",
 		gTargetPositionCounts,
 		DriverParameter[MAXIMUM_SPEED],
 		Parameter.fPosition,
@@ -1212,7 +1222,8 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 		DriverParameter[POSITION_P_GAIN],
 		DriverParameter[POSITION_I_GAIN],
 		DriverParameter[POSITION_FF_GAIN],
-		DriverParameter[POSITION_FF_FILTER]);
+		DriverParameter[POSITION_FF_FILTER],
+		(position_tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN) ? "multi" : "single");
 }
 
 static void USB_HandleFocControlStop(void)
@@ -1476,7 +1487,7 @@ static uint8_t USB_HandleAutoTuneApplyGains(void)
 	if (MotorAutoTune_ApplyEstimatedParameters(
 		&gMotorAutoTune,
 		DriverParameter,
-		16u,
+		DRIVER_PARAMETER_COUNT,
 		MotorParameter,
 		32u) == 0u)
 	{
@@ -1696,7 +1707,7 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 
 		case CMD_WRITE_DRIVER:
 			USB_SendAckPacket(ACK, command, payload, payload_length);
-			USB_HandleWriteParameterPairs(DriverParameter, payload, payload_length, 16u);
+			USB_HandleWriteParameterPairs(DriverParameter, payload, payload_length, DRIVER_PARAMETER_COUNT);
 			UpdateDriverParameter(DriverParameter);
 			break;
 

@@ -20,6 +20,403 @@ Tai lieu nay duoc tong hop chu yeu tu cac file:
 - `Library/filter_th.c`
 - cac header trong `Library/*.h`
 
+## Phan bo sung cho luan van: Firmware Overview va Brainstorming Flow
+
+Phan nay duoc viet theo goc nhin "kien truc su ky thuat + mentor", nghia la khong di theo kieu doc source tung dong ma tap trung vao:
+
+- he thong van hanh theo lop nhu the nao
+- moi lop trao doi du lieu ra sao
+- chung ta da debug theo tu duy nao de di tu "hien tuong" toi "giai phap chot"
+
+### 0. Mental model tong quat
+
+Neu can mo ta ngan gon toan bo firmware trong mot hinh:
+
+```text
+GUI / USB command
+-> while(1) parser va dispatcher
+-> cap nhat parameter / flag / mode
+
+FPGA heartbeat + feedback
+-> EXTI interrupt vao STM32
+-> current loop 16 kHz
+-> speed / position loop chia tan
+-> FOC output
+-> PWM / pha dien ap
+
+Encoder / current / Vdc / temp
+-> duoc FPGA dong bo va dua vao STM32 theo cung nhip
+```
+
+Hay xem he thong nay nhu mot servo drive co 2 the gioi song song:
+
+- the gioi "lenh va cau hinh" chay trong `while(1)`
+- the gioi "thuc thi dieu khien" chay trong ISR duoc kich boi nhip dong bo tu FPGA
+
+### 1. Synchronization Layer: Heartbeat giua FPGA va STM32
+
+Ban chat cua he thong khong phai la STM32 tu chay mot timer doc lap de dieu khien motor, ma la STM32 dang "song dong bo" voi FPGA.
+
+#### 1.1 Vi sao can FPGA heartbeat
+
+FPGA dung vai tro:
+
+- tong hop / chot feedback current
+- chot du lieu encoder
+- dua Vdc, nhiet do, fault signal vao mot mien thoi gian on dinh
+- kich STM32 bang xung dong bo de moi lan tinh FOC deu dung tren "mot mau du lieu da on dinh"
+
+Dieu nay giai quyet mot van de rat thuc te:
+
+- current, encoder, fault, va PWM update phai cung mot nhip
+- neu tung khoi tu chay le nhip, current loop se tinh tren feedback cu trong khi PWM lai dang la chu ky moi
+
+#### 1.2 Handshake qua TIM8 co y nghia gi
+
+TIM8, dac biet nhanh feedback pulse qua CH4, dong vai tro "toi da nhan xung va dang song dung nhip voi FPGA".
+
+Tu duy dung o day la:
+
+- FPGA khong chi "phat xung danh thuc" STM32
+- FPGA con can thay mot xung phan hoi de biet STM32 van dang theo kip nhip he thong
+
+Neu xung feedback nay mat:
+
+- FPGA co the coi he thong dong bo bi loi
+- kich hoat co che failsafe / watchdog noi bo
+- giam nhip hoac doi che do phat xung
+- dan den STM32 thay tan so ngat tu 16 kHz rot xuong muc rat thap
+
+Noi cach khac, TIM8 CH4 khong phai mot chi tiet "phu", ma la mot phan cua hop dong dong bo thoi gian thuc giua 2 bo xu ly.
+
+#### 1.3 Y nghia kien truc
+
+Do co lop handshake nay, firmware co duoc 3 thu:
+
+1. Current loop luon tinh tren bo mau feedback nhat quan.
+2. PWM update xay ra cung phase voi feedback encoder/current.
+3. Loi mat dong bo duoc bieu hien thanh "he thong cham di" thay vi cho phep FOC chay tren du lieu rac.
+
+### 2. Control Hierarchy: Cascaded Loop
+
+Cau truc dieu khien cua he thong la:
+
+```text
+Position Loop
+-> tao ra Speed Reference
+-> Speed Loop
+-> tao ra Iq Reference
+-> Current Loop
+-> tao ra Vd / Vq
+-> InvPark / InvClarke / PWM
+```
+
+#### 2.1 Current loop
+
+Current loop la tang trong cung va nhanh nhat.
+
+Nhiem vu:
+
+- nhan `Id_ref`, `Iq_ref`
+- so sanh voi `Id`, `Iq` do tu feedback
+- tao `Vd`, `Vq`
+- dua qua bien doi nghich de phat duty cho 3 pha
+
+Tang nay tra loi cau hoi:
+
+> Muon tao ra vector dong dien nao trong stator ngay luc nay?
+
+#### 2.2 Speed loop
+
+Speed loop dung tang current nhu mot "co bap".
+
+Nhiem vu:
+
+- nhan `Speed_ref`
+- so voi `ActSpeed`
+- tao `Iq_ref`
+
+Tang nay tra loi cau hoi:
+
+> Muon rotor quay nhanh hon hay cham hon thi can bao nhieu moment?
+
+#### 2.3 Position loop
+
+Position loop dung tang speed nhu mot "co che di chuyen".
+
+Nhiem vu:
+
+- nhan `TargetPosition`
+- so voi `ActPosition`
+- tao `Speed_ref`
+
+Tang nay tra loi cau hoi:
+
+> Muon di den vi tri mong muon thi can chay theo huong nao, nhanh den dau?
+
+#### 2.4 Luong du lieu qua cac tang
+
+Luong du lieu trong trang thai FOC on dinh co the nhin nhu sau:
+
+```text
+Target Position
+-> Position PI + VFF
+-> Cmd Speed
+-> Speed PI
+-> Iq Ref
+-> Current PI
+-> Vq
+-> PWM
+-> Rotor chuyen dong
+-> Encoder / speed feedback
+-> quay nguoc lai Position va Speed loop
+```
+
+`Id_ref` thuong duoc giu gan 0 trong surface PMSM de tap trung moment vao truc Q.
+
+### 3. Operational Stages: tu Idle den FOC on dinh
+
+#### 3.1 Idle
+
+Trang thai nay he thong:
+
+- da boot xong
+- da load parameter tu flash
+- PWM o trang thai an toan
+- co the nhan lenh tu GUI
+
+Day la luc firmware "san sang", nhung chua duoc phep dieu khien motor.
+
+#### 3.2 Servo ON / Arming
+
+Khi nhan `Servo ON`, firmware khong lap tuc dong vong FOC, ma di qua chuoi chuan bi:
+
+- current sensor offset calibration
+- kiem tra dieu kien fault
+- xac nhan encoder / alignment policy
+
+Muc tieu la dam bao moi phep do co y nghia truoc khi bat dau sinh moment.
+
+#### 3.3 Alignment
+
+Day la giai doan xac lap moc 0 giua:
+
+- goc co khi encoder
+- khung tham chieu dien cua FOC
+
+Neu bo qua buoc nay:
+
+- Park / Clarke van chay
+- current PI van tao ra `Iq`
+- nhung `Iq` do co the khong nam dung truc sinh moment
+
+Alignment chinh la luc firmware tra loi cau hoi:
+
+> Khi code goi day la `theta = 0`, rotor dang nam o dau tren truc D?
+
+#### 3.4 Speed / Position FOC Running
+
+Sau khi alignment xong:
+
+- runtime theta duoc dung
+- current loop bat dau sinh vector dien ap co y nghia
+- speed loop hoac position loop duoc dong vao theo mode da chon
+
+Luc nay he thong moi that su buoc vao che do servo.
+
+#### 3.5 Fault / Stop / Recovery
+
+Neu co fault:
+
+- firmware cat moment
+- dua he thong ve trang thai an toan
+- giu monitor va log de GUI doc lai
+
+Dieu quan trong la:
+
+- fault khong chi la "bao loi"
+- no la co che dam bao tat ca tang control dung lai theo thu tu an toan
+
+## Brainstorming va Debugging Journey
+
+Phan nay khong viet theo dang "bug list", ma theo dang nhat ky cac vu an ky thuat. Moi vu an deu co 4 buoc:
+
+1. Hien tuong
+2. Gia thuyet
+3. Thuc nghiem va loai tru
+4. Giai phap chot
+
+### Case 1: Mau thuan he toa do va quy uoc chieu
+
+#### Hien tuong
+
+- vua dong vong kin thi dong co giat manh
+- co luc vua vao closed-loop la voc toc, mat kiem soat
+- co luc `Iq` co ve dung dau nhung chieu quay lai nguoc voi mong doi
+
+#### Gia thuyet
+
+Gia thuyet trung tam la:
+
+> He thong chua thong nhat "chieu duong" giua encoder, speed estimate, va torque sinh boi truc Q.
+
+Loi kieu nay rat de xay ra khi:
+
+- encoder tang count theo chieu nay
+- nhung field dien cua FOC lai coi do la chieu nguoc
+- hoac `+Iq` dang sinh torque theo chieu am trong quy uoc co khi
+
+#### Thuc nghiem va loai tru
+
+Flow suy nghi da di qua cac buoc:
+
+1. Tach current loop khoi speed loop bang mode test.
+2. Tiem `Iq_ref` duong / am nho de xem rotor nhich ve huong nao.
+3. So sanh chieu nhich co khi voi dau cua `ActSpeed`.
+4. Thu cac to hop mapping current feedback de loai tru loi ADC/sign.
+5. Dung test chieu quay tu dong de thong ke:
+   - mo-men sinh ra theo huong nao
+   - encoder dem tang hay giam
+
+Qua cac buoc nay, van de duoc he thong hoa thanh mot quy trinh:
+
+- khong sua tay theo cam tinh
+- ma de firmware tu quan sat "chi can biet minh ra lenh torque duong, rotor va encoder phan ung theo dau nao"
+
+#### Giai phap chot
+
+Giai phap chot la mot phuong phap tu dong xac dinh chieu quay:
+
+- firmware tao mot kich thich co huong ro rang
+- quan sat phan ung encoder / speed
+- tu dong dat quy uoc chieu cho toan he thong
+
+Gia tri cua huong tiep can nay khong nam o viec sua mot bug cu the, ma o cho:
+
+> "Chieu duong" tro thanh mot khoi cau hinh co the duoc he thong tu hoc va tu khoa, thay vi phu thuoc vao viec doi day pha hay sua dau trong code mot cach cam tinh.
+
+### Case 2: Sai lech khung tham chieu dien
+
+#### Hien tuong
+
+- motor khong sinh mo-men toi uu
+- rotor bi khung, nong, hoac dung o nhung vi tri co dinh
+- `Iq` nhin co ve bam ref nhung motor khong quay nhu mong doi
+- 3 pha co luc nhin nhu dong DC dung yên
+
+#### Gia thuyet
+
+Gia thuyet o day la:
+
+> Goc co khi cua encoder da co, nhung goc dien dung cho Park/InvPark chua trung voi truc D that cua rotor.
+
+Noi cach khac:
+
+- firmware biet "rotor dang o dau" theo co khi
+- nhung chua biet "theta nao moi la theta dung de chieu dong vao truc D/Q"
+
+#### Thuc nghiem va loai tru
+
+Flow brainstorm cua vu an nay da di qua nhieu tang:
+
+1. Tach speed loop ra khoi bai toan.
+2. Dung `Id tuning` de tim goc ma:
+   - `Id` len dung dau
+   - `Iq` gan 0
+3. Thuc hien cac bai test quay theta mo:
+   - rotating theta current test
+   - rotating theta voltage test
+4. So sanh:
+   - neu voltage mode quay muot ma current mode khong muot -> nghi current feedback frame
+   - neu ca hai deu sai -> nghi phase order / electrical frame / offset
+5. Thu sweep goc de tim diem mo-men tot nhat va loai tru cac gia thuyet sai dau / sai frame.
+
+Day la vu an quan trong nhat ve mat FOC, vi no day chung ta tu "cam thay motor khong ngot" toi mot ket luan ro rang:
+
+- FOC khong chi can current PI dung
+- ma con can khung tham chieu dien dung
+
+#### Giai phap chot
+
+Giai phap chot la:
+
+- xac lap chinh xac offset giua goc encoder va goc dien
+- khoa offset nay vao runtime
+- dam bao truc D va truc Q vuong goc dung nghia vat ly
+
+Khi offset duoc khoa dung:
+
+- `Id` moi that su la truc tu thong
+- `Iq` moi that su la truc sinh moment
+- current PI va speed loop moi co y nghia co khi
+
+### Case 3: Su bat on dinh tan so ngat
+
+#### Hien tuong
+
+- he thong dang duoc thiet ke chay 16 kHz
+- nhung khi thieu mot thanh phan init, tan so ngat roi xuong khoang 3 kHz
+- cac loop phia tren nhin nhu van chay, nhung cam giac he thong "mat nhip"
+
+#### Gia thuyet
+
+Gia thuyet o day khong con la bug dieu khien don thuan, ma la bug dong bo he thong:
+
+> FPGA dang co co che watchdog / failsafe noi bo, va no can mot xung phan hoi de tin rang STM32 van theo kip nhip.
+
+Khi mat xung nay, FPGA khong con tin cay chu trinh dong bo hien tai nua, nen ha nhip hoac doi co che phat xung.
+
+#### Thuc nghiem va loai tru
+
+Flow suy nghi da di theo huong:
+
+1. So sanh truong hop co / khong co khoi init TIM8 CH4.
+2. Quan sat tan so EXTI thuc te thay doi theo su co mat cua feedback pulse.
+3. Loai tru cac gia thuyet phu:
+   - khong phai current PI
+   - khong phai parser USB
+   - khong phai chi rieng peripheral timer noi bo
+4. Noi lai van de bang ngon ngu kien truc:
+   - "day khong phai timer bug"
+   - "day la giao thuc dong bo giua FPGA va STM32 dang bi vo"
+
+#### Giai phap chot
+
+Giai phap chot la thiet lap co che feedback pulse day du:
+
+- FPGA cap heartbeat cho STM32
+- TIM8 CH4 tra lai xung xac nhan
+- ca 2 ben cung song tren mot hop dong thoi gian thuc ro rang
+
+Ket qua cua cach nhin nay la:
+
+> Tan so 16 kHz khong con la mot con so "mong muon", ma la mot trang thai dong bo can duoc bao toan bang handshake.
+
+## Tong ket phuong phap luan
+
+Neu tong hop lai toan bo hanh trinh phat trien firmware FOC, phuong phap luan xuyen suot la:
+
+1. Tach bai toan lon thanh tung tang:
+   - sync
+   - frame
+   - feedback
+   - current
+   - speed
+   - position
+2. Moi khi co hien tuong la, uu tien tach loop ngoai de kiem tra loop trong.
+3. Khong sua dau / offset / mapping theo cam giac; phai co test de quyet dinh.
+4. Moi bug quan trong deu duoc chuyen hoa thanh:
+   - mot quy trinh do
+   - mot diagnostic mode
+   - hoac mot co che tu dong adapt
+
+Do la ly do firmware cuoi cung khong chi "chay duoc", ma con co the giai thich duoc:
+
+- no dong bo voi ai
+- no dieu khien theo tang nao
+- no dua tren quy uoc chieu nao
+- va tai sao cac quyet dinh debug lai dan toi cau truc hien tai
+
 ## Luu y quan trong truoc khi doc
 
 Workspace hien tai co day du header cho cac module control:
@@ -1181,4 +1578,3 @@ Neu ban muon mo rong tai lieu nay, huong tiep theo hop ly nhat la:
 2. ve so do data-flow cho `Position -> Speed -> Current -> PWM`
 3. tach rieng mot file danh cho `USB protocol` va bang command
 4. tach rieng mot file danh cho `encoder/feedback decoding`
-

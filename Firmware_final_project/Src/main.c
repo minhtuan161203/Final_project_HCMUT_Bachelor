@@ -80,7 +80,7 @@ SRAM_HandleTypeDef hsram2;
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
 
-float DriverParameter[16];
+float DriverParameter[DRIVER_PARAMETER_COUNT];
 float MotorParameter[32];
 uint16_t FaultCode = NO_ERROR;
 float globalcontrolthetatune = -0.05f;
@@ -221,11 +221,14 @@ static float GetConfiguredPositionGain(void);
 static float GetConfiguredPositionIntegralGain(void);
 static float GetConfiguredPositionVffGain(void);
 static float GetConfiguredPositionVffFilterHz(void);
+static uint8_t GetConfiguredPositionTrackingMode(void);
 static float GetConfiguredSpeedLimitRpm(void);
 static float GetConfiguredSpeedIqLimitA(void);
 static float ApplySpeedRampLimit(float current_command, float target_command, float max_speed_rpm, float dt_sec);
 static float WrapPositionErrorCounts(float error_counts, float encoder_resolution);
+static float GetPositionControlErrorCounts(float target_position_counts, float actual_position_counts, float encoder_resolution);
 static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution);
+static float GetPositionLoopErrorReleaseDeadbandCounts(float encoder_resolution);
 static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec);
 static uint8_t IsAbsoluteEncoderId(uint32_t encoder_id);
 static void RefreshEncoderAlignmentPolicy(void);
@@ -276,6 +279,7 @@ uint8_t SaveParametersToFlash(void);
 #define FOC_ZERO_CMD_REF_DEADBAND_A 0.01f
 #define FOC_ZERO_CMD_MEAS_DEADBAND_A 0.08f
 #define POSITION_LOOP_ERROR_DEADBAND_DEG 0.50f
+#define POSITION_LOOP_ERROR_RELEASE_DEADBAND_DEG 0.80f
 #define POSITION_LOOP_FF_DEADBAND_RPM 0.05f
 #define POSITION_VFF_FILTER_DEFAULT_HZ 50.0f
 #define FORCE_DRIVER_CURRENT_POLARITY_INVERT 0u
@@ -312,7 +316,6 @@ uint8_t SaveParametersToFlash(void);
 #define FOC_DIAGNOSTIC_CURRENT_KI_SCALE 1.0f
 #define SPEED_ESTIMATE_LPF_ALPHA 0.1f
 #define DEBUG_AVG_SAMPLES 256u
-#define DRIVER_PARAMETER_COUNT 16u
 #define MOTOR_PARAMETER_COUNT 32u
 
 static float sDebugDeltaPosAccum = 0.0f;
@@ -337,6 +340,7 @@ static float sFocRotatingThetaVoltageStartPosition = 0.0f;
 static uint16_t sFocRotatingThetaVoltageLogCounter = 0u;
 static float sPositionSetpointPrevCounts = 0.0f;
 static float sPositionSetpointVelocityCountsPerSec = 0.0f;
+static uint8_t sPositionDeadbandHoldActive = 0u;
 static const uint8_t sFocCurrentFeedbackMapSwapCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 0u, 1u, 1u};
 static const uint8_t sFocCurrentFeedbackMapInvertCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 1u, 0u, 1u};
 static uint8_t sFocCurrentFeedbackMapCaseIndex = 0u;
@@ -977,6 +981,7 @@ static void ResetControlLoops(void)
 	gSpeedLoopDivider = 0u;
 	sPositionSetpointPrevCounts = gTargetPositionCounts;
 	sPositionSetpointVelocityCountsPerSec = 0.0f;
+	sPositionDeadbandHoldActive = 0u;
 	gDebugOpenLoopElectricalHzCmd = 0.0f;
 	gDebugOpenLoopSyncRpmCmd = 0.0f;
 	gDebugExpectedDeltaPosSync = 0.0f;
@@ -1039,6 +1044,16 @@ static float GetConfiguredPositionVffFilterHz(void)
 	return position_vff_filter_hz;
 }
 
+static uint8_t GetConfiguredPositionTrackingMode(void)
+{
+	uint8_t tracking_mode = (uint8_t)DriverParameter[POSITION_TRACKING_MODE];
+	if (tracking_mode > POSITION_TRACKING_MODE_MULTI_TURN)
+	{
+		tracking_mode = POSITION_TRACKING_MODE_SINGLE_TURN;
+	}
+	return tracking_mode;
+}
+
 static float GetConfiguredSpeedLimitRpm(void)
 {
 	float speed_limit_rpm = DriverParameter[MAXIMUM_SPEED];
@@ -1096,6 +1111,18 @@ static float WrapPositionErrorCounts(float error_counts, float encoder_resolutio
 	return error_counts;
 }
 
+static float GetPositionControlErrorCounts(float target_position_counts, float actual_position_counts, float encoder_resolution)
+{
+	if (GetConfiguredPositionTrackingMode() == POSITION_TRACKING_MODE_MULTI_TURN)
+	{
+		return target_position_counts - actual_position_counts;
+	}
+
+	return WrapPositionErrorCounts(
+		target_position_counts - actual_position_counts,
+		encoder_resolution);
+}
+
 static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution)
 {
 	if (encoder_resolution <= 0.0f)
@@ -1104,6 +1131,16 @@ static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution)
 	}
 
 	return (POSITION_LOOP_ERROR_DEADBAND_DEG / 360.0f) * encoder_resolution;
+}
+
+static float GetPositionLoopErrorReleaseDeadbandCounts(float encoder_resolution)
+{
+	if (encoder_resolution <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	return (POSITION_LOOP_ERROR_RELEASE_DEADBAND_DEG / 360.0f) * encoder_resolution;
 }
 
 static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec)
@@ -1121,9 +1158,16 @@ static float UpdatePositionSetpointVelocityRpm(float target_position_counts, flo
 		return 0.0f;
 	}
 
-	target_delta_counts = WrapPositionErrorCounts(
-		target_position_counts - sPositionSetpointPrevCounts,
-		encoder_resolution);
+	if (GetConfiguredPositionTrackingMode() == POSITION_TRACKING_MODE_MULTI_TURN)
+	{
+		target_delta_counts = target_position_counts - sPositionSetpointPrevCounts;
+	}
+	else
+	{
+		target_delta_counts = WrapPositionErrorCounts(
+			target_position_counts - sPositionSetpointPrevCounts,
+			encoder_resolution);
+	}
 	sPositionSetpointPrevCounts = target_position_counts;
 	target_velocity_counts_per_sec = target_delta_counts / dt_sec;
 	filter_hz = GetConfiguredPositionVffFilterHz();
@@ -2024,6 +2068,11 @@ void UpdateDriverParameter(float *driver_parameter)
 	{
 		driver_parameter[CONTROL_MODE] = (float)SPEED_CONTROL_MODE;
 	}
+	if ((!isfinite(driver_parameter[POSITION_TRACKING_MODE])) ||
+		(((uint8_t)driver_parameter[POSITION_TRACKING_MODE]) > POSITION_TRACKING_MODE_MULTI_TURN))
+	{
+		driver_parameter[POSITION_TRACKING_MODE] = (float)POSITION_TRACKING_MODE_SINGLE_TURN;
+	}
 	if (driver_parameter[POSITION_P_GAIN] < 0.0f)
 	{
 		driver_parameter[POSITION_P_GAIN] = 0.05f;
@@ -2178,6 +2227,7 @@ static void LoadDefaultParameters(void)
 	DriverParameter[DECELERATION_TIME] = 1000.0f;
 	DriverParameter[MAXIMUM_SPEED] = DEFAULT_MOTOR_RATED_SPEED_RPM;
 	DriverParameter[SPEED_UNIT] = 0.0f;
+	DriverParameter[POSITION_TRACKING_MODE] = (float)POSITION_TRACKING_MODE_SINGLE_TURN;
 
 	MotorParameter[MOTOR_RATED_CURRENT_RMS] = DEFAULT_MOTOR_RATED_CURRENT_RMS;
 	MotorParameter[MOTOR_PEAK_CURRENT_RMS] = DEFAULT_MOTOR_PEAK_CURRENT_RMS;
@@ -2825,10 +2875,13 @@ static void RunFocLoop(void)
 			gSpeedLoopDivider = 0u;
 			if (GetActiveFocControlMode() == POSITION_CONTROL_MODE)
 			{
-				float position_error_counts = WrapPositionErrorCounts(
-					gTargetPositionCounts - Parameter.fPosition,
+				float position_raw_error_counts = GetPositionControlErrorCounts(
+					gTargetPositionCounts,
+					Parameter.fPosition,
 					encoder_resolution);
+				float position_error_counts = position_raw_error_counts;
 				float position_deadband_counts = GetPositionLoopErrorDeadbandCounts(encoder_resolution);
+				float position_release_deadband_counts = GetPositionLoopErrorReleaseDeadbandCounts(encoder_resolution);
 				float speed_limit_rpm = GetConfiguredSpeedLimitRpm();
 				float setpoint_velocity_rpm = UpdatePositionSetpointVelocityRpm(
 					gTargetPositionCounts,
@@ -2839,17 +2892,27 @@ static void RunFocLoop(void)
 				float position_pi_output_rpm;
 				float position_speed_target_rpm;
 				uint8_t position_deadband_hold_active = 0u;
+				uint8_t setpoint_velocity_is_quiet =
+					(fabsf(setpoint_velocity_rpm) < POSITION_LOOP_FF_DEADBAND_RPM) ? 1u : 0u;
 
-				if (fabsf(position_error_counts) < position_deadband_counts)
+				if ((sPositionDeadbandHoldActive != 0u) &&
+					((setpoint_velocity_is_quiet == 0u) ||
+					 (fabsf(position_raw_error_counts) > position_release_deadband_counts)))
 				{
-					position_error_counts = 0.0f;
+					sPositionDeadbandHoldActive = 0u;
 				}
-				gTracePosError = position_error_counts;
-				if ((fabsf(position_error_counts) < position_deadband_counts) &&
-					(fabsf(setpoint_velocity_rpm) < POSITION_LOOP_FF_DEADBAND_RPM))
+				if ((sPositionDeadbandHoldActive == 0u) &&
+					(setpoint_velocity_is_quiet != 0u) &&
+					(fabsf(position_raw_error_counts) <= position_deadband_counts))
+				{
+					sPositionDeadbandHoldActive = 1u;
+				}
+				if (sPositionDeadbandHoldActive != 0u)
 				{
 					gPositionPi.m_rst(&gPositionPi);
 					gSpeedPi.m_rst(&gSpeedPi);
+					position_error_counts = 0.0f;
+					gTracePosError = 0.0f;
 					position_vff_rpm = 0.0f;
 					position_speed_target_rpm = 0.0f;
 					speed_reference_rpm = 0.0f;
@@ -2858,6 +2921,7 @@ static void RunFocLoop(void)
 				}
 				else
 				{
+					gTracePosError = position_error_counts;
 					position_vff_rpm = ClampFloat(
 						position_vff_rpm,
 						-speed_limit_rpm,
@@ -3125,7 +3189,7 @@ int main(void)
   /* MCU Configuration----------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+   HAL_Init();
 
   /* USER CODE BEGIN Init */
 	

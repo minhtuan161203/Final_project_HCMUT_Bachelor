@@ -18,6 +18,212 @@ Muc tieu la de ban nhin ro:
 - ACK va data response di nguoc lai ra sao
 - can tach `USB_ReceiveData()` va `USB_ProcessData()` the nao o buoc tiep theo
 
+## Phan bo sung cho luan van: Vai tro cua GUI trong hanh trinh debug FOC
+
+Tai lieu nay ban dau tap trung vao protocol va USB command flow. Tuy nhien, trong qua trinh phat trien FOC, GUI con dong vai tro lon hon nhieu:
+
+- la "bang dieu khien thuc nghiem"
+- la noi tach loop de debug
+- la cong cu de xac minh gia thuyet ve sign, direction, electrical frame va synchronization
+
+Noi cach khac:
+
+> GUI khong chi la noi bam nut gui lenh, ma la lop giao tiep de bien cac gia thuyet debug thanh bai test co the lap lai.
+
+### 0. Vai tro cua GUI trong methodology chung
+
+Trong hanh trinh phat trien firmware, GUI da duoc dung nhu mot lop "orchestration" cho cac muc tieu sau:
+
+1. Tach bai toan lon thanh bai test nho.
+2. Giu firmware khong bi sua tay lien tuc cho moi lan do.
+3. Quan sat ket qua theo thoi gian thuc qua Trend / Scope / Snapshot.
+4. Dong bo giua:
+   - command dang gui
+   - mode dang chay
+   - feedback dang do
+
+Vi vay, moi nut bam quan trong tren GUI nen duoc xem nhu mot "experiment trigger", khong chi la mot command giao tiep.
+
+### 1. GUI nhu mot lop protocol adapter
+
+GUI dam nhan viec:
+
+- chuyen thao tac nguoi dung thanh frame nhi phan
+- dong goi parameter thanh payload co cau truc
+- gui dung command ID cho firmware
+- nhan ACK / monitor / trace / error de xac minh firmware da o dung trang thai
+
+Neu firmware la "bo nao", thi GUI la:
+
+- bang dieu khien thao tac
+- va cung la bang quan sat ket qua
+
+Do do, trong luan van, GUI can duoc mo ta nhu mot thanh phan giup thao tac va xac minh, khong chi la phan phu de demo.
+
+### 2. GUI nhu cong cu tach loop de debug
+
+Trong cac vu an debug FOC, GUI da giup tao ra cac che do thuc nghiem ma neu chi dua vao firmware thuan se rat kho theo doi:
+
+#### 2.1 Tach current loop khoi speed loop
+
+Bang cac mode tuning va diagnostic, GUI cho phep:
+
+- ep `Id_ref` / `Iq_ref`
+- khoa `theta`
+- chay rotating-theta current test
+- chay rotating-theta voltage test
+
+Y nghia:
+
+- current loop co the duoc test doc lap
+- speed loop khong lam nhieu ket qua current loop
+- direction / electrical frame duoc phan tich ro hon
+
+#### 2.2 Tach speed loop khoi position loop
+
+Khi position loop chua on dinh, GUI cho phep:
+
+- chay speed mode doc lap
+- dat target speed, limit, ramp
+- xem trend `Cmd Speed`, `Act Speed`, `Speed Error`
+
+Y nghia:
+
+- xac nhan inner loop da on truoc khi dong outer loop
+- giam xac suat nham "bug position" voi "bug speed"
+
+#### 2.3 Tinh truu tuong cua deadband, gain va target
+
+Sau khi position loop duoc nang cap:
+
+- GUI da cho phep nhap target theo `deg`
+- co relative jog
+- co slider gui command theo kieu "commit on release"
+
+Dieu nay rat quan trong ve mat methodology:
+
+- nguoi test tu duy theo goc co khi, khong theo counts
+- target duoc gui mot cach co kiem soat
+- giam hien tuong spam command gay nhieu cho outer loop
+
+### 3. GUI nhu cong cu xac minh tung gia thuyet debug
+
+Day la cach GUI da dong hanh cung firmware trong tung nhom van de:
+
+#### 3.1 Van de sign / direction
+
+GUI dong vai tro:
+
+- phat command torque / speed co dau ro rang
+- hien `ActSpeed`
+- ghi log va trend de so dau giua lenh va phan ung
+
+Tu do, chung ta khong can doan:
+
+- `+Iq` co sinh torque duong hay khong
+- chieu quay encoder co cung quy uoc voi speed khong
+
+GUI tro thanh noi "chung minh" gia thuyet, khong chi hien so.
+
+#### 3.2 Van de electrical frame / dq alignment
+
+GUI dong vai tro:
+
+- chuyen nhanh giua tuning mode va normal FOC
+- ghi trend `Id`, `Iq`, `Vd`, `Vq`
+- cho phep capture va so sanh cac test mode
+
+Dieu nay bien bai toan "cam giac motor nong / khung" thanh mot bai toan co so lieu:
+
+- `Id` co dung dau khong
+- `Iq` co bam ref khong
+- voltage mode va current mode khac nhau cho nao
+
+#### 3.3 Van de synchronization / frequency
+
+GUI dong vai tro:
+
+- doc monitor `Loop Freq`
+- doc `Run Mode`, `Cal Status`, `Align Status`
+- cho phep xac minh sau power-cycle he thong co that su quay lai trang thai san sang hay khong
+
+No giup tach duoc 2 lop van de:
+
+- firmware parser / parameter van song
+- nhung nhip dieu khien thoi gian thuc co dang mat dong bo hay khong
+
+### 4. Vai tro cua Trend, Scope va Snapshot trong brainstorming flow
+
+#### 4.1 Trend Charts
+
+Trend charts phu hop de nhin:
+
+- xu huong cham hon
+- quan he giua `Cmd` va `Act`
+- behavior cua speed loop va position loop theo thoi gian
+
+Day la cong cu quan trong de thay:
+
+- overshoot
+- rung quanh diem dung
+- speed command co bi outer loop "quang roi" hay khong
+
+#### 4.2 Scope / Trace
+
+Scope phu hop de nhin:
+
+- hien tuong nhanh
+- current / voltage o tan so cao
+- response trong tung chu ky test
+
+No dac biet huu ich khi can soi:
+
+- `Id` / `Iq`
+- `Vd` / `Vq`
+- waveform trong tuning mode
+
+#### 4.3 Snapshot / Log
+
+Snapshot va log giup:
+
+- dong bang trang thai hien tai de phan tich
+- luu bang chung cho moi buoc debug
+- doi chieu parameter, mode, va feedback o mot thoi diem cu the
+
+Trong luan van, day la nhom cong cu giup "ke lai cuoc dieu tra" ro rang nhat.
+
+### 5. GUI va tinh lap lai cua thuc nghiem
+
+Mot diem rat quan trong trong qua trinh phat trien la:
+
+- neu mot bug khong lap lai duoc, thi rat kho loai tru
+
+GUI giai quyet bai toan nay bang cach:
+
+- dong nhat hoa nut bam thanh command co ten ro rang
+- cho phep luon lap lai cung mot chuoi thao tac
+- giu parameter va monitor trong cung mot man hinh
+
+Vi vay, GUI khong chi phuc vu demo, ma phuc vu:
+
+- repeatability
+- observability
+- isolation
+
+Day chinh la 3 thu quyet dinh chat luong cua mot qua trinh debug servo drive.
+
+### 6. Tong ket vai tro cua GUI trong luan van
+
+Neu firmware la noi "ra quyet dinh dieu khien", thi GUI la noi:
+
+- dat cau hoi dung
+- tao bai test dung
+- va doc ket qua dung
+
+Do do, trong bo tai lieu luan van, file GUI khong nen chi dung lai o muc "command nao gui command gi", ma can duoc doc cung voi firmware flow de thay ro:
+
+> Chung ta da xay dung mot he FOC co kha nang thao tac, quan sat, va debug co he thong, thay vi chi don thuan lam cho motor quay.
+
 ---
 
 ## 1. Tong quan luong
