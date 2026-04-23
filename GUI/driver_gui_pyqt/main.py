@@ -97,6 +97,12 @@ SPEED_TEST_PROFILE_STEP = "step_response"
 SPEED_TEST_PROFILE_REVERSE = "reversing"
 SPEED_TEST_PROFILE_LOW_SPEED = "low_speed"
 SPEED_TEST_PROFILE_TRAPEZOID = "trapezoidal"
+POSITION_TEST_TIMER_INTERVAL_MS = 20
+POSITION_TEST_PROFILE_SHORT = "short_distance"
+POSITION_TEST_PROFILE_LONG = "long_distance"
+POSITION_TEST_PROFILE_BACKLASH = "back_and_forth"
+POSITION_TEST_SETTLE_SPEED_TOLERANCE_RPM = 3.0
+POSITION_TARGET_COUNT_GUI_LIMIT = 1.0e15
 
 TREND_SERIES_META = {
     "phase_u": {"label": "Iu", "unit": "A", "color": "#1f77b4"},
@@ -111,9 +117,10 @@ TREND_SERIES_META = {
     "act_speed": {"label": "Act Speed", "unit": "rpm", "color": "#17becf"},
     "cmd_speed": {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
     "speed_error": {"label": "Speed Error", "unit": "rpm", "color": "#7f7f7f"},
-    "cmd_position_deg": {"label": "Target Position", "unit": "deg", "color": "#bcbd22"},
-    "act_position_deg": {"label": "Act Position", "unit": "deg", "color": "#17becf"},
-    "position_error_deg": {"label": "Position Error", "unit": "deg", "color": "#7f7f7f"},
+    "cmd_position_deg": {"label": "Setting Position", "unit": "deg", "color": "#bcbd22"},
+    "act_position_deg": {"label": "Mechanical Angle", "unit": "deg", "color": "#17becf"},
+    "position_error_deg": {"label": "Tracking Error", "unit": "deg", "color": "#7f7f7f"},
+    "validation_error_deg": {"label": "Validation Error", "unit": "deg", "color": "#ff9896"},
 }
 TREND_EMA_ALPHA = {
     "phase_u": None,
@@ -131,6 +138,7 @@ TREND_EMA_ALPHA = {
     "cmd_position_deg": None,
     "act_position_deg": None,
     "position_error_deg": None,
+    "validation_error_deg": None,
 }
 
 DEFAULT_DRIVER_PARAMETER_VALUES: dict[int, float] = {
@@ -265,6 +273,21 @@ class SpeedTestSession:
     last_target_send_at: float = 0.0
     last_target_rpm: float | None = None
     completion_text: str = "Completed"
+
+
+@dataclass(slots=True)
+class PositionTestSession:
+    profile_key: str
+    sequence: list[dict[str, object]]
+    preparing_write: bool = True
+    step_index: int = 0
+    step_started_at: float = 0.0
+    steady_since_at: float | None = None
+    completion_text: str = "Completed"
+    validation_error_deg: float = 0.0
+    endpoint_baselines: dict[str, float] = field(default_factory=dict)
+    long_start_counts: float | None = None
+    long_last_logged_turn: int = 0
 
 
 def _chart_scale_from_font_size(font_pt: int) -> float:
@@ -3014,6 +3037,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._foc_position_speed_limit_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM
         self._last_foc_mode_ui = SPEED_CONTROL_MODE
         self._speed_test_session: SpeedTestSession | None = None
+        self._position_test_session: PositionTestSession | None = None
 
         self._ack_timer = QtCore.QTimer(self)
         self._ack_timer.setSingleShot(True)
@@ -3032,6 +3056,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._speed_test_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self._speed_test_timer.setInterval(SPEED_TEST_TIMER_INTERVAL_MS)
         self._speed_test_timer.timeout.connect(self._on_speed_test_timer)
+
+        self._position_test_timer = QtCore.QTimer(self)
+        self._position_test_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
+        self._position_test_timer.setInterval(POSITION_TEST_TIMER_INTERVAL_MS)
+        self._position_test_timer.timeout.connect(self._on_position_test_timer)
 
         self._build_ui()
         self._connect_signals()
@@ -3059,6 +3088,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._debug_terminal_window = self._build_debug_terminal_window()
         self._log_window = self._build_log_window()
         self._load_foc_controls_from_driver_table()
+        self._refresh_runtime_toggle_buttons()
 
         self.statusBar().showMessage(f"Ready ({QT_API})")
 
@@ -3154,9 +3184,11 @@ class MainWindow(QtWidgets.QMainWindow):
             ("cmd_speed", "Cmd Speed"),
             ("act_speed", "Act Speed"),
             ("speed_error", "Speed Error"),
-            ("act_position", "Act Position"),
-            ("act_degree", "Act Deg"),
-            ("position_error", "Position Error"),
+            ("setting_position", "Setting Position"),
+            ("tracking_error", "Tracking Error"),
+            ("mech_angle_single", "Mech Angle (Single Turn)"),
+            ("mech_angle_multi", "Mech Angle (Multi Turn)"),
+            ("total_distance", "Total Distance"),
         ]
         current_fields = [
             ("id_ref", "Id Ref"),
@@ -3201,20 +3233,19 @@ class MainWindow(QtWidgets.QMainWindow):
             "Main monitor shows the commissioning essentials. Use Trend Charts and Snapshot for deeper traces and debug detail."
         )
         trend_note.setWordWrap(True)
-        open_trends_inline_button = QtWidgets.QPushButton("Open Trend Charts")
-        open_trends_inline_button.clicked.connect(
-            lambda: self._show_auxiliary_window(self._trend_window)
-        )
 
         layout.addWidget(dashboard_widget, 1)
         layout.addWidget(trend_note)
-        layout.addWidget(open_trends_inline_button, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self._build_alarm_tab(), 1)
         return box
 
     def _build_monitor_tabs(self) -> QtWidgets.QTabWidget:
         tabs = QtWidgets.QTabWidget()
-        tabs.addTab(self._build_monitor_group(), "Driver Monitor")
-        tabs.addTab(self._build_parameter_panel(), "Parameters")
+        self.driver_monitor_tab = self._build_monitor_group()
+        self.parameter_panel = self._build_parameter_panel()
+        tabs.addTab(self.driver_monitor_tab, "Driver Monitor")
+        tabs.addTab(self.parameter_panel, "Parameters")
+        self.monitor_tabs = tabs
         return tabs
 
     def _build_trend_window(self) -> QtWidgets.QDialog:
@@ -3253,7 +3284,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_panel = ScadaTrendPanel(
             "Position Trend",
             self._trend_buffer,
-            ["act_position_deg", "cmd_position_deg", "position_error_deg"],
+            ["act_position_deg", "cmd_position_deg", "position_error_deg", "validation_error_deg"],
             on_export_requested=self._open_report_editor_for_chart,
         )
 
@@ -3691,7 +3722,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ack_fault_button = QtWidgets.QPushButton("Reset Alarm")
         self.ack_fault_button.setEnabled(False)
         self.save_flash_button = QtWidgets.QPushButton("Save Params to Flash")
-        self.refresh_monitor_button = QtWidgets.QPushButton("Refresh Monitor")
 
         self.quick_command_tabs = QtWidgets.QTabWidget()
 
@@ -3702,7 +3732,6 @@ class MainWindow(QtWidgets.QMainWindow):
         button_grid.addWidget(self.servo_off_button, 0, 1)
         button_grid.addWidget(self.ack_fault_button, 0, 2)
         button_grid.addWidget(self.save_flash_button, 0, 3)
-        button_grid.addWidget(self.refresh_monitor_button, 1, 0, 1, 2)
         drive_layout.addLayout(button_grid)
         drive_hint = QtWidgets.QLabel(
             "Servo ON only performs the safe arm sequence with no motion command. Watch Driver Monitor for current calibration and encoder alignment status, then use the FOC Control tab to start closed-loop motion when the drive is ready."
@@ -3729,8 +3758,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.vf_voltage_spin.setDecimals(2)
         self.vf_voltage_spin.setSingleStep(1.0)
         self.vf_voltage_spin.setSuffix(" V")
-        self.start_vf_button = QtWidgets.QPushButton("Start V/F")
-        self.stop_vf_button = QtWidgets.QPushButton("Stop V/F")
+        self.vf_toggle_button = QtWidgets.QPushButton("Start V/F")
         vf_note = QtWidgets.QLabel(
             "Default motor profile: 4 pole pairs, 3000 rpm, 200 Hz electrical, 91 V, 1.6 A, 200 W. Open-loop electrical frequency now accepts both positive and negative commands for direction/sign checks, while voltage remains firmware-clamped for safe testing. Trend Charts are low-rate monitor views; use Trace Scope with the 'Phase Currents' preset when you need waveform-level Iu/Iv/Iw detail."
         )
@@ -3739,18 +3767,14 @@ class MainWindow(QtWidgets.QMainWindow):
         vf_layout.addWidget(self.vf_frequency_spin, 0, 1)
         vf_layout.addWidget(QtWidgets.QLabel("Voltage Reference"), 1, 0)
         vf_layout.addWidget(self.vf_voltage_spin, 1, 1)
-        vf_layout.addWidget(self.start_vf_button, 2, 0)
-        vf_layout.addWidget(self.stop_vf_button, 2, 1)
+        vf_layout.addWidget(self.vf_toggle_button, 2, 0, 1, 2)
         vf_layout.addWidget(vf_note, 3, 0, 1, 2)
         vf_layout.setRowStretch(4, 1)
-
-        self.alarm_tab = self._build_alarm_tab()
 
         self.quick_command_tabs.addTab(drive_tab, "Drive")
         self.quick_command_tabs.addTab(foc_tab, "FOC Control")
         self.quick_command_tabs.addTab(test_tab, "Test Mode")
         self.quick_command_tabs.addTab(vf_tab, "Open Loop V/F")
-        self.quick_command_tabs.addTab(self.alarm_tab, "Alarms")
         layout.addWidget(self.quick_command_tabs)
         return box
 
@@ -3774,7 +3798,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.foc_target_position_label = QtWidgets.QLabel("Target Counts")
         self.foc_target_position_spin = QtWidgets.QDoubleSpinBox()
-        self.foc_target_position_spin.setRange(-100000000.0, 100000000.0)
+        self.foc_target_position_spin.setRange(
+            -POSITION_TARGET_COUNT_GUI_LIMIT,
+            POSITION_TARGET_COUNT_GUI_LIMIT,
+        )
         self.foc_target_position_spin.setDecimals(1)
         self.foc_target_position_spin.setSingleStep(1000.0)
         self.foc_target_position_spin.setSuffix(" cnt")
@@ -3800,7 +3827,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_target_angle_spin.setDecimals(2)
         self.foc_target_angle_spin.setSingleStep(1.0)
         self.foc_target_angle_spin.setSuffix(" deg")
-        self.foc_target_angle_set_button = QtWidgets.QPushButton("Set")
 
         self.foc_jog_label = QtWidgets.QLabel("Relative Move")
         self.foc_jog_minus_90_button = QtWidgets.QPushButton("<<")
@@ -3894,8 +3920,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_foc_rotating_theta_test_button = QtWidgets.QPushButton("Run Rotating Theta Current Test")
         self.start_foc_rotating_theta_voltage_test_button = QtWidgets.QPushButton("Run Rotating Theta Voltage Test")
         self.start_foc_current_feedback_map_test_button = QtWidgets.QPushButton("Run Current Feedback Map Test")
-        self.start_foc_button = QtWidgets.QPushButton("Start FOC")
-        self.stop_foc_button = QtWidgets.QPushButton("Stop FOC")
+        self.foc_toggle_button = QtWidgets.QPushButton("Start FOC")
 
         jog_button_layout = QtWidgets.QHBoxLayout()
         jog_button_layout.setContentsMargins(0, 0, 0, 0)
@@ -3911,7 +3936,6 @@ class MainWindow(QtWidgets.QMainWindow):
         angle_entry_layout.setContentsMargins(0, 0, 0, 0)
         angle_entry_layout.setSpacing(6)
         angle_entry_layout.addWidget(self.foc_target_angle_spin, 1)
-        angle_entry_layout.addWidget(self.foc_target_angle_set_button)
         self.foc_target_angle_widget = QtWidgets.QWidget()
         self.foc_target_angle_widget.setLayout(angle_entry_layout)
 
@@ -3963,14 +3987,15 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 11, 0, 1, 2)
         summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 11, 2, 1, 2)
         summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 12, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_button, 13, 0, 1, 2)
-        summary_layout.addWidget(self.stop_foc_button, 13, 2, 1, 2)
+        summary_layout.addWidget(self.foc_toggle_button, 13, 0, 1, 4)
 
-        self.foc_target_angle_set_button.clicked.connect(self._apply_absolute_angle_target)
         self.foc_jog_minus_90_button.clicked.connect(lambda: self._apply_relative_angle_delta(-90.0))
         self.foc_jog_minus_10_button.clicked.connect(lambda: self._apply_relative_angle_delta(-10.0))
         self.foc_jog_plus_10_button.clicked.connect(lambda: self._apply_relative_angle_delta(10.0))
         self.foc_jog_plus_90_button.clicked.connect(lambda: self._apply_relative_angle_delta(90.0))
+        self.foc_target_angle_spin.editingFinished.connect(
+            self._sync_position_target_from_angle_input
+        )
         self.foc_angle_slider.valueChanged.connect(self._handle_position_angle_slider_changed)
         self.foc_angle_slider.sliderReleased.connect(self._handle_position_angle_slider_released)
         self.foc_position_tracking_combo.currentIndexChanged.connect(self._handle_position_tracking_mode_changed)
@@ -3996,8 +4021,9 @@ class MainWindow(QtWidgets.QMainWindow):
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
         layout.addWidget(self._build_speed_test_group())
+        layout.addWidget(self._build_position_test_group())
         note = QtWidgets.QLabel(
-            "Use this tab for automated command sequences only. Configure gains, ramps, and speed targets on the FOC Control tab first, then return here to run repeatable speed profiles. This keeps the core FOC page uncluttered and leaves room for future position-test automation."
+            "Use this tab for automated command sequences only. Configure gains, ramps, and core FOC limits on the FOC Control tab first, then return here to run repeatable speed or position validation profiles."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -4161,6 +4187,170 @@ class MainWindow(QtWidgets.QMainWindow):
 
         return box
 
+    def _build_position_test_group(self) -> QtWidgets.QGroupBox:
+        box = QtWidgets.QGroupBox("Position Validation Suite")
+        self.position_test_group = box
+        layout = QtWidgets.QGridLayout(box)
+
+        self.position_test_profile_combo = QtWidgets.QComboBox()
+        self.position_test_profile_combo.addItem("Short-distance (Jitter / Sensitivity)", POSITION_TEST_PROFILE_SHORT)
+        self.position_test_profile_combo.addItem("Long-distance (Thermal / Tracking)", POSITION_TEST_PROFILE_LONG)
+        self.position_test_profile_combo.addItem("Back-and-forth (Backlash / Repeatability)", POSITION_TEST_PROFILE_BACKLASH)
+
+        self.position_test_stack = QtWidgets.QStackedWidget()
+
+        short_page = QtWidgets.QWidget()
+        short_layout = QtWidgets.QGridLayout(short_page)
+        self.position_test_short_step_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_short_step_spin.setRange(0.1, 45.0)
+        self.position_test_short_step_spin.setDecimals(2)
+        self.position_test_short_step_spin.setSingleStep(0.5)
+        self.position_test_short_step_spin.setSuffix(" deg")
+        self.position_test_short_step_spin.setValue(5.0)
+        self.position_test_short_tol_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_short_tol_spin.setRange(0.01, 10.0)
+        self.position_test_short_tol_spin.setDecimals(3)
+        self.position_test_short_tol_spin.setSingleStep(0.05)
+        self.position_test_short_tol_spin.setSuffix(" deg")
+        self.position_test_short_tol_spin.setValue(0.25)
+        self.position_test_short_hold_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_short_hold_spin.setRange(50.0, 5000.0)
+        self.position_test_short_hold_spin.setDecimals(0)
+        self.position_test_short_hold_spin.setSingleStep(50.0)
+        self.position_test_short_hold_spin.setSuffix(" ms")
+        self.position_test_short_hold_spin.setValue(200.0)
+        self.position_test_short_timeout_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_short_timeout_spin.setRange(0.5, 60.0)
+        self.position_test_short_timeout_spin.setDecimals(2)
+        self.position_test_short_timeout_spin.setSingleStep(0.5)
+        self.position_test_short_timeout_spin.setSuffix(" s")
+        self.position_test_short_timeout_spin.setValue(5.0)
+        short_layout.addWidget(QtWidgets.QLabel("Step Size"), 0, 0)
+        short_layout.addWidget(self.position_test_short_step_spin, 0, 1)
+        short_layout.addWidget(QtWidgets.QLabel("Settle Tol"), 0, 2)
+        short_layout.addWidget(self.position_test_short_tol_spin, 0, 3)
+        short_layout.addWidget(QtWidgets.QLabel("Settle Hold"), 1, 0)
+        short_layout.addWidget(self.position_test_short_hold_spin, 1, 1)
+        short_layout.addWidget(QtWidgets.QLabel("Timeout"), 1, 2)
+        short_layout.addWidget(self.position_test_short_timeout_spin, 1, 3)
+        short_layout.setColumnStretch(4, 1)
+        self.position_test_stack.addWidget(short_page)
+
+        long_page = QtWidgets.QWidget()
+        long_layout = QtWidgets.QGridLayout(long_page)
+        self.position_test_long_travel_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_long_travel_spin.setRange(-36000.0, 36000.0)
+        self.position_test_long_travel_spin.setDecimals(1)
+        self.position_test_long_travel_spin.setSingleStep(360.0)
+        self.position_test_long_travel_spin.setSuffix(" deg")
+        self.position_test_long_travel_spin.setValue(3600.0)
+        self.position_test_long_tol_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_long_tol_spin.setRange(0.05, 10.0)
+        self.position_test_long_tol_spin.setDecimals(3)
+        self.position_test_long_tol_spin.setSingleStep(0.05)
+        self.position_test_long_tol_spin.setSuffix(" deg")
+        self.position_test_long_tol_spin.setValue(0.50)
+        self.position_test_long_hold_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_long_hold_spin.setRange(50.0, 5000.0)
+        self.position_test_long_hold_spin.setDecimals(0)
+        self.position_test_long_hold_spin.setSingleStep(50.0)
+        self.position_test_long_hold_spin.setSuffix(" ms")
+        self.position_test_long_hold_spin.setValue(300.0)
+        self.position_test_long_timeout_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_long_timeout_spin.setRange(1.0, 300.0)
+        self.position_test_long_timeout_spin.setDecimals(1)
+        self.position_test_long_timeout_spin.setSingleStep(1.0)
+        self.position_test_long_timeout_spin.setSuffix(" s")
+        self.position_test_long_timeout_spin.setValue(60.0)
+        long_layout.addWidget(QtWidgets.QLabel("Travel"), 0, 0)
+        long_layout.addWidget(self.position_test_long_travel_spin, 0, 1)
+        long_layout.addWidget(QtWidgets.QLabel("Settle Tol"), 0, 2)
+        long_layout.addWidget(self.position_test_long_tol_spin, 0, 3)
+        long_layout.addWidget(QtWidgets.QLabel("Settle Hold"), 1, 0)
+        long_layout.addWidget(self.position_test_long_hold_spin, 1, 1)
+        long_layout.addWidget(QtWidgets.QLabel("Timeout"), 1, 2)
+        long_layout.addWidget(self.position_test_long_timeout_spin, 1, 3)
+        long_layout.setColumnStretch(4, 1)
+        self.position_test_stack.addWidget(long_page)
+
+        backlash_page = QtWidgets.QWidget()
+        backlash_layout = QtWidgets.QGridLayout(backlash_page)
+        self.position_test_backlash_a_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_backlash_a_spin.setRange(0.0, 360.0)
+        self.position_test_backlash_a_spin.setDecimals(2)
+        self.position_test_backlash_a_spin.setSingleStep(5.0)
+        self.position_test_backlash_a_spin.setSuffix(" deg")
+        self.position_test_backlash_a_spin.setValue(0.0)
+        self.position_test_backlash_b_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_backlash_b_spin.setRange(0.0, 360.0)
+        self.position_test_backlash_b_spin.setDecimals(2)
+        self.position_test_backlash_b_spin.setSingleStep(5.0)
+        self.position_test_backlash_b_spin.setSuffix(" deg")
+        self.position_test_backlash_b_spin.setValue(180.0)
+        self.position_test_backlash_dwell_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_backlash_dwell_spin.setRange(50.0, 10000.0)
+        self.position_test_backlash_dwell_spin.setDecimals(0)
+        self.position_test_backlash_dwell_spin.setSingleStep(50.0)
+        self.position_test_backlash_dwell_spin.setSuffix(" ms")
+        self.position_test_backlash_dwell_spin.setValue(500.0)
+        self.position_test_backlash_cycles_spin = QtWidgets.QSpinBox()
+        self.position_test_backlash_cycles_spin.setRange(1, 200)
+        self.position_test_backlash_cycles_spin.setValue(5)
+        self.position_test_backlash_tol_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_backlash_tol_spin.setRange(0.05, 10.0)
+        self.position_test_backlash_tol_spin.setDecimals(3)
+        self.position_test_backlash_tol_spin.setSingleStep(0.05)
+        self.position_test_backlash_tol_spin.setSuffix(" deg")
+        self.position_test_backlash_tol_spin.setValue(0.30)
+        self.position_test_backlash_hold_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_backlash_hold_spin.setRange(50.0, 5000.0)
+        self.position_test_backlash_hold_spin.setDecimals(0)
+        self.position_test_backlash_hold_spin.setSingleStep(50.0)
+        self.position_test_backlash_hold_spin.setSuffix(" ms")
+        self.position_test_backlash_hold_spin.setValue(250.0)
+        self.position_test_backlash_timeout_spin = QtWidgets.QDoubleSpinBox()
+        self.position_test_backlash_timeout_spin.setRange(0.5, 60.0)
+        self.position_test_backlash_timeout_spin.setDecimals(2)
+        self.position_test_backlash_timeout_spin.setSingleStep(0.5)
+        self.position_test_backlash_timeout_spin.setSuffix(" s")
+        self.position_test_backlash_timeout_spin.setValue(5.0)
+        backlash_layout.addWidget(QtWidgets.QLabel("Position A"), 0, 0)
+        backlash_layout.addWidget(self.position_test_backlash_a_spin, 0, 1)
+        backlash_layout.addWidget(QtWidgets.QLabel("Position B"), 0, 2)
+        backlash_layout.addWidget(self.position_test_backlash_b_spin, 0, 3)
+        backlash_layout.addWidget(QtWidgets.QLabel("Dwell"), 1, 0)
+        backlash_layout.addWidget(self.position_test_backlash_dwell_spin, 1, 1)
+        backlash_layout.addWidget(QtWidgets.QLabel("Cycles"), 1, 2)
+        backlash_layout.addWidget(self.position_test_backlash_cycles_spin, 1, 3)
+        backlash_layout.addWidget(QtWidgets.QLabel("Settle Tol"), 2, 0)
+        backlash_layout.addWidget(self.position_test_backlash_tol_spin, 2, 1)
+        backlash_layout.addWidget(QtWidgets.QLabel("Settle Hold"), 2, 2)
+        backlash_layout.addWidget(self.position_test_backlash_hold_spin, 2, 3)
+        backlash_layout.addWidget(QtWidgets.QLabel("Timeout"), 3, 0)
+        backlash_layout.addWidget(self.position_test_backlash_timeout_spin, 3, 1)
+        backlash_layout.setColumnStretch(4, 1)
+        self.position_test_stack.addWidget(backlash_page)
+
+        self.position_test_status_label = QtWidgets.QLabel("Idle")
+        self.position_test_status_label.setWordWrap(True)
+        self.position_test_status_label.setStyleSheet("font-weight: 600;")
+        self.position_test_run_button = QtWidgets.QPushButton("Run Validation")
+        self.position_test_note_label = QtWidgets.QLabel(
+            "Edit the profile here, then confirm. The GUI will copy the current FOC position and speed gains, ramps, speed limit, and tracking mode from the FOC Control tab into Driver Parameters before it starts the automated validation sequence."
+        )
+        self.position_test_note_label.setWordWrap(True)
+
+        layout.addWidget(QtWidgets.QLabel("Profile"), 0, 0)
+        layout.addWidget(self.position_test_profile_combo, 0, 1)
+        layout.addWidget(self.position_test_run_button, 0, 2)
+        layout.addWidget(self.position_test_stack, 1, 0, 1, 3)
+        layout.addWidget(QtWidgets.QLabel("Status"), 2, 0)
+        layout.addWidget(self.position_test_status_label, 2, 1, 1, 2)
+        layout.addWidget(self.position_test_note_label, 3, 0, 1, 3)
+        layout.setColumnStretch(1, 1)
+
+        return box
+
     def _build_alarm_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
@@ -4275,13 +4465,11 @@ class MainWindow(QtWidgets.QMainWindow):
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
         toolbar = QtWidgets.QHBoxLayout()
-        self.read_driver_button = QtWidgets.QPushButton("Read Driver Params")
-        self.read_motor_button = QtWidgets.QPushButton("Read Motor Params")
+        self.read_all_params_button = QtWidgets.QPushButton("Read Driver + Motor Params")
         self.write_driver_button = QtWidgets.QPushButton("Write Driver Params")
         self.write_motor_button = QtWidgets.QPushButton("Write Motor Params")
         self.parameter_status_label = QtWidgets.QLabel("Parameter tools are ready.")
-        toolbar.addWidget(self.read_driver_button)
-        toolbar.addWidget(self.read_motor_button)
+        toolbar.addWidget(self.read_all_params_button)
         toolbar.addWidget(self.write_driver_button)
         toolbar.addWidget(self.write_motor_button)
         toolbar.addStretch(1)
@@ -4395,22 +4583,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_debug_terminal_button.clicked.connect(self._request_monitor_once)
         self.copy_debug_terminal_button.clicked.connect(self._copy_debug_terminal_text)
         self.monitor_rate_combo.currentIndexChanged.connect(self._update_monitor_poll_interval)
-        self.refresh_monitor_button.clicked.connect(self._request_monitor_once)
         self.foc_mode_combo.currentIndexChanged.connect(self._update_foc_mode_ui)
         self.foc_target_speed_spin.valueChanged.connect(self._on_foc_target_speed_value_changed)
         self.speed_test_profile_combo.currentIndexChanged.connect(self._update_speed_test_profile_ui)
         self.speed_test_run_button.clicked.connect(self._toggle_speed_test_run)
+        self.position_test_profile_combo.currentIndexChanged.connect(self._update_position_test_profile_ui)
+        self.position_test_run_button.clicked.connect(self._toggle_position_test_run)
         self.start_foc_rotating_theta_test_button.clicked.connect(self._start_foc_rotating_theta_test)
         self.start_foc_rotating_theta_voltage_test_button.clicked.connect(self._start_foc_rotating_theta_voltage_test)
         self.start_foc_current_feedback_map_test_button.clicked.connect(self._start_foc_current_feedback_map_test)
-        self.start_foc_button.clicked.connect(self._start_foc_control)
-        self.stop_foc_button.clicked.connect(self._stop_foc_control)
-        self.start_vf_button.clicked.connect(self._start_open_loop_vf)
-        self.stop_vf_button.clicked.connect(
-            lambda: self._enqueue_command(
-                Command.CMD_STOP_OPEN_LOOP_VF, b"", "Stop Open Loop V/F"
-            )
-        )
+        self.foc_toggle_button.clicked.connect(self._toggle_foc_control)
+        self.vf_toggle_button.clicked.connect(self._toggle_open_loop_vf)
         self.servo_on_button.clicked.connect(self._handle_servo_on)
         self.servo_off_button.clicked.connect(self._handle_servo_off)
         self.ack_fault_button.clicked.connect(self._reset_alarm)
@@ -4425,8 +4608,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_apply_button.clicked.connect(self._apply_motor_autotune_estimates)
         self.autotune_clear_button.clicked.connect(self._clear_autotune_capture)
         self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_scope_view.set_auto_scale)
-        self.read_driver_button.clicked.connect(self._read_driver_parameters)
-        self.read_motor_button.clicked.connect(self._read_motor_parameters)
+        self.read_all_params_button.clicked.connect(self._read_all_parameters)
         self.write_driver_button.clicked.connect(self._write_driver_parameters)
         self.write_motor_button.clicked.connect(self._write_motor_parameters)
         self.clear_log_button.clicked.connect(self.log_edit.clear)
@@ -4695,6 +4877,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return 0.0
         return (float(counts) * 360.0) / encoder_resolution
 
+    def _counts_to_turns(self, counts: float) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return 0.0
+        return float(counts) / encoder_resolution
+
     def _counts_to_position_mode_degrees(
         self,
         counts: float,
@@ -4725,6 +4913,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _position_angle_range_deg(self, tracking_mode: int | None = None) -> tuple[float, float]:
         mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
         if mode == POSITION_TRACKING_MODE_MULTI_TURN:
+            encoder_resolution = self._encoder_resolution_counts()
+            if encoder_resolution > 1.0:
+                max_degrees = self._counts_to_accumulated_degrees(
+                    POSITION_TARGET_COUNT_GUI_LIMIT
+                )
+                return (-max_degrees, max_degrees)
             return (-360000.0, 360000.0)
         return (0.0, 360.0)
 
@@ -4777,7 +4971,20 @@ class MainWindow(QtWidgets.QMainWindow):
             actual_counts,
             tracking_mode,
         )
-        return self._counts_to_position_mode_degrees(error_counts, tracking_mode)
+        return self._counts_to_accumulated_degrees(error_counts)
+
+    def _current_position_validation_error_degrees(
+        self,
+        target_counts: float,
+        actual_counts: float,
+        tracking_mode: int | None = None,
+    ) -> float:
+        session = self._position_test_session
+        if session is None:
+            return 0.0
+        if session.profile_key == POSITION_TEST_PROFILE_BACKLASH and not session.endpoint_baselines:
+            return 0.0
+        return float(session.validation_error_deg)
 
     def _set_foc_target_position_counts(self, counts: float) -> None:
         tracking_mode = self._position_tracking_mode()
@@ -4816,7 +5023,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_foc_target_position_counts(current_counts)
         self._update_foc_mode_ui()
 
-    def _apply_absolute_angle_target(self) -> None:
+    def _sync_position_target_from_angle_input(self) -> None:
         self._set_foc_target_position_counts(
             self._degrees_to_counts(self.foc_target_angle_spin.value())
         )
@@ -5061,6 +5268,67 @@ class MainWindow(QtWidgets.QMainWindow):
         if request_monitor:
             self._request_monitor_once()
 
+    def _apply_position_tracking_mode_to_ui(self, tracking_mode: int) -> None:
+        combo_index = self.foc_position_tracking_combo.findData(int(tracking_mode))
+        if combo_index >= 0 and combo_index != self.foc_position_tracking_combo.currentIndex():
+            self.foc_position_tracking_combo.setCurrentIndex(combo_index)
+
+    def _apply_position_target_to_ui(self, target_counts: float, tracking_mode: int) -> None:
+        self._apply_position_tracking_mode_to_ui(tracking_mode)
+        self._set_foc_target_position_counts(float(target_counts))
+
+    def _build_position_start_payload(
+        self,
+        target_counts: float,
+        tracking_mode: int,
+    ) -> bytes:
+        return struct.pack(
+            "<10fBBB",
+            float(target_counts),
+            float(abs(self.foc_target_speed_spin.value())),
+            float(self.foc_position_kp_spin.value()),
+            float(self.foc_position_ki_spin.value()),
+            float(self.foc_position_vff_gain_spin.value()),
+            float(self.foc_position_vff_filter_spin.value()),
+            float(self.foc_speed_kp_spin.value()),
+            float(self.foc_speed_ki_spin.value()),
+            float(self.foc_accel_spin.value()),
+            float(self.foc_decel_spin.value()),
+            ID_SQUARE_ANGLE_TEST_NONE,
+            0,
+            int(tracking_mode),
+        )
+
+    def _enqueue_position_start_command(
+        self,
+        target_counts: float,
+        tracking_mode: int,
+        description: str,
+        quiet: bool = False,
+        request_monitor: bool = False,
+    ) -> None:
+        self._apply_position_target_to_ui(target_counts, tracking_mode)
+        self._sync_foc_controls_to_driver_table()
+        payload = self._build_position_start_payload(target_counts, tracking_mode)
+        self._enqueue_command(
+            Command.CMD_START_POSITIONCONTROL,
+            payload,
+            description,
+            quiet=quiet,
+        )
+        if request_monitor:
+            self._request_monitor_once()
+
+    def _enqueue_position_stop_command(
+        self,
+        description: str = "Stop FOC",
+        quiet: bool = False,
+        request_monitor: bool = False,
+    ) -> None:
+        self._enqueue_command(Command.CMD_STOP_POSITIONCONTROL, b"", description, quiet=quiet)
+        if request_monitor:
+            self._request_monitor_once()
+
     def _speed_test_summary_lines(self, profile_key: str) -> list[str]:
         if profile_key == SPEED_TEST_PROFILE_REVERSE:
             return [
@@ -5091,6 +5359,548 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Pre-step wait: {self.speed_test_step_pre_delay_spin.value():.0f} ms",
             f"Run time: {self.speed_test_step_run_time_spin.value():.2f} s",
         ]
+
+    def _update_position_test_profile_ui(self) -> None:
+        if not hasattr(self, "position_test_profile_combo"):
+            return
+        self.position_test_stack.setCurrentIndex(self.position_test_profile_combo.currentIndex())
+
+    def _position_test_profile_key(self) -> str:
+        return str(self.position_test_profile_combo.currentData() or POSITION_TEST_PROFILE_SHORT)
+
+    def _position_test_summary_lines(self, profile_key: str) -> list[str]:
+        if profile_key == POSITION_TEST_PROFILE_LONG:
+            return [
+                "Profile: Long-distance (Thermal / Tracking)",
+                f"Travel: {self.position_test_long_travel_spin.value():.1f} deg",
+                f"Settle Tol: {self.position_test_long_tol_spin.value():.3f} deg",
+                f"Settle Hold: {self.position_test_long_hold_spin.value():.0f} ms",
+                f"Timeout: {self.position_test_long_timeout_spin.value():.1f} s",
+                "Tracking: Multi Turn",
+                "Logs: turn-by-turn accumulated error",
+            ]
+        if profile_key == POSITION_TEST_PROFILE_BACKLASH:
+            return [
+                "Profile: Back-and-forth (Backlash / Repeatability)",
+                f"Position A: {self.position_test_backlash_a_spin.value():.2f} deg",
+                f"Position B: {self.position_test_backlash_b_spin.value():.2f} deg",
+                f"Dwell: {self.position_test_backlash_dwell_spin.value():.0f} ms",
+                f"Cycles: {self.position_test_backlash_cycles_spin.value()}",
+                f"Settle Tol: {self.position_test_backlash_tol_spin.value():.3f} deg",
+                f"Settle Hold: {self.position_test_backlash_hold_spin.value():.0f} ms",
+                f"Timeout: {self.position_test_backlash_timeout_spin.value():.2f} s",
+                "Tracking: Single Turn",
+            ]
+        return [
+            "Profile: Short-distance (Jitter / Sensitivity)",
+            f"Step Size: {self.position_test_short_step_spin.value():.2f} deg",
+            f"Settle Tol: {self.position_test_short_tol_spin.value():.3f} deg",
+            f"Settle Hold: {self.position_test_short_hold_spin.value():.0f} ms",
+            f"Timeout: {self.position_test_short_timeout_spin.value():.2f} s",
+            "Tracking: Single Turn",
+        ]
+
+    def _build_position_test_sequence(self, profile_key: str, snapshot) -> list[dict[str, object]]:
+        current_counts = float(getattr(snapshot, "act_position", 0.0)) if snapshot is not None else 0.0
+        current_single_deg = self._counts_to_single_turn_degrees(current_counts)
+        if profile_key == POSITION_TEST_PROFILE_LONG:
+            travel_deg = float(self.position_test_long_travel_spin.value())
+            tolerance_deg = float(self.position_test_long_tol_spin.value())
+            hold_s = float(self.position_test_long_hold_spin.value()) / 1000.0
+            timeout_s = float(self.position_test_long_timeout_spin.value())
+            start_counts = float(current_counts)
+            target_counts = start_counts + self._degrees_to_counts(
+                travel_deg,
+                POSITION_TRACKING_MODE_MULTI_TURN,
+            )
+            start_deg = self._counts_to_accumulated_degrees(start_counts)
+            target_deg = self._counts_to_accumulated_degrees(target_counts)
+            return [
+                {
+                    "type": "prepare_position",
+                    "target_counts": start_counts,
+                    "tracking_mode": POSITION_TRACKING_MODE_MULTI_TURN,
+                    "status": f"Step 1/6: Priming at {start_deg:.2f} deg...",
+                },
+                {
+                    "type": "start_foc_position",
+                    "target_counts": start_counts,
+                    "tracking_mode": POSITION_TRACKING_MODE_MULTI_TURN,
+                    "status": "Step 2/6: Starting FOC in Position Mode...",
+                },
+                {"type": "wait", "duration_s": 0.10, "status": "Step 3/6: Waiting for the drive to arm..."},
+                {
+                    "type": "set_position",
+                    "target_counts": target_counts,
+                    "tracking_mode": POSITION_TRACKING_MODE_MULTI_TURN,
+                    "status": f"Step 4/6: Commanding long-distance move to {target_deg:.1f} deg...",
+                },
+                {
+                    "type": "wait_position_steady",
+                    "target_counts": target_counts,
+                    "tracking_mode": POSITION_TRACKING_MODE_MULTI_TURN,
+                    "tolerance_deg": tolerance_deg,
+                    "hold_s": hold_s,
+                    "timeout_s": timeout_s,
+                    "start_counts": start_counts,
+                    "status": "Step 5/6: Tracking the long-distance move...",
+                    "log_turns": True,
+                },
+                {"type": "stop_foc_position", "status": "Step 6/6: Stopping FOC..."},
+            ]
+
+        if profile_key == POSITION_TEST_PROFILE_BACKLASH:
+            position_a_deg = float(self.position_test_backlash_a_spin.value())
+            position_b_deg = float(self.position_test_backlash_b_spin.value())
+            dwell_s = float(self.position_test_backlash_dwell_spin.value()) / 1000.0
+            cycles = int(self.position_test_backlash_cycles_spin.value())
+            tolerance_deg = float(self.position_test_backlash_tol_spin.value())
+            hold_s = float(self.position_test_backlash_hold_spin.value()) / 1000.0
+            timeout_s = float(self.position_test_backlash_timeout_spin.value())
+            position_a_counts = self._degrees_to_counts(position_a_deg, POSITION_TRACKING_MODE_SINGLE_TURN)
+            position_b_counts = self._degrees_to_counts(position_b_deg, POSITION_TRACKING_MODE_SINGLE_TURN)
+            sequence: list[dict[str, object]] = [
+                {
+                    "type": "prepare_position",
+                    "target_counts": position_a_counts,
+                    "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                    "status": f"Step 1/? Priming endpoint A at {position_a_deg:.2f} deg...",
+                },
+                {
+                    "type": "start_foc_position",
+                    "target_counts": position_a_counts,
+                    "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                    "status": "Step 2/? Starting FOC in Position Mode...",
+                },
+                {"type": "wait", "duration_s": 0.10, "status": "Step 3/? Waiting for the drive to arm..."},
+                {
+                    "type": "wait_position_steady",
+                    "target_counts": position_a_counts,
+                    "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                    "tolerance_deg": tolerance_deg,
+                    "hold_s": hold_s,
+                    "timeout_s": timeout_s,
+                    "endpoint_key": "A",
+                    "status": "Step 4/? Settling at endpoint A...",
+                },
+                {"type": "wait", "duration_s": dwell_s, "status": f"Dwelling at endpoint A for {dwell_s:.2f} s..."},
+            ]
+            for cycle_index in range(cycles):
+                sequence.extend(
+                    [
+                        {
+                            "type": "set_position",
+                            "target_counts": position_b_counts,
+                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "status": f"Cycle {cycle_index + 1}/{cycles}: moving to endpoint B ({position_b_deg:.2f} deg)...",
+                        },
+                        {
+                            "type": "wait_position_steady",
+                            "target_counts": position_b_counts,
+                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "tolerance_deg": tolerance_deg,
+                            "hold_s": hold_s,
+                            "timeout_s": timeout_s,
+                            "endpoint_key": "B",
+                            "status": f"Cycle {cycle_index + 1}/{cycles}: settling at endpoint B...",
+                        },
+                        {"type": "wait", "duration_s": dwell_s, "status": f"Cycle {cycle_index + 1}/{cycles}: dwelling at endpoint B..."},
+                        {
+                            "type": "set_position",
+                            "target_counts": position_a_counts,
+                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "status": f"Cycle {cycle_index + 1}/{cycles}: returning to endpoint A ({position_a_deg:.2f} deg)...",
+                        },
+                        {
+                            "type": "wait_position_steady",
+                            "target_counts": position_a_counts,
+                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "tolerance_deg": tolerance_deg,
+                            "hold_s": hold_s,
+                            "timeout_s": timeout_s,
+                            "endpoint_key": "A",
+                            "status": f"Cycle {cycle_index + 1}/{cycles}: settling at endpoint A...",
+                        },
+                        {"type": "wait", "duration_s": dwell_s, "status": f"Cycle {cycle_index + 1}/{cycles}: dwelling at endpoint A..."},
+                    ]
+                )
+            sequence.append({"type": "stop_foc_position", "status": "Final Step: Stopping FOC..."})
+            return sequence
+
+        step_deg = float(self.position_test_short_step_spin.value())
+        tolerance_deg = float(self.position_test_short_tol_spin.value())
+        hold_s = float(self.position_test_short_hold_spin.value()) / 1000.0
+        timeout_s = float(self.position_test_short_timeout_spin.value())
+        base_counts = self._degrees_to_counts(
+            current_single_deg,
+            POSITION_TRACKING_MODE_SINGLE_TURN,
+        )
+        target_counts = self._degrees_to_counts(
+            current_single_deg + step_deg,
+            POSITION_TRACKING_MODE_SINGLE_TURN,
+        )
+        target_deg = self._counts_to_single_turn_degrees(target_counts)
+        return [
+            {
+                "type": "prepare_position",
+                "target_counts": base_counts,
+                "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                "status": f"Step 1/6: Priming at the current angle {current_single_deg:.2f} deg...",
+            },
+            {
+                "type": "start_foc_position",
+                "target_counts": base_counts,
+                "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                "status": "Step 2/6: Starting FOC in Position Mode...",
+            },
+            {"type": "wait", "duration_s": 0.10, "status": "Step 3/6: Waiting for the drive to arm..."},
+            {
+                "type": "set_position",
+                "target_counts": target_counts,
+                "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                "status": f"Step 4/6: Applying the micro-step to {target_deg:.2f} deg...",
+            },
+            {
+                "type": "wait_position_steady",
+                "target_counts": target_counts,
+                "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                "tolerance_deg": tolerance_deg,
+                "hold_s": hold_s,
+                "timeout_s": timeout_s,
+                "endpoint_key": "SHORT",
+                "status": "Step 5/6: Monitoring the micro-step settling...",
+            },
+            {"type": "stop_foc_position", "status": "Step 6/6: Stopping FOC..."},
+        ]
+
+    def _set_position_test_running_ui(self, active: bool) -> None:
+        self.position_test_profile_combo.setEnabled(not active)
+        self.position_test_stack.setEnabled(not active)
+        self.foc_mode_combo.setEnabled(not active)
+        self.foc_toggle_button.setEnabled(not active)
+        self.start_foc_rotating_theta_test_button.setEnabled(not active)
+        self.start_foc_rotating_theta_voltage_test_button.setEnabled(not active)
+        self.start_foc_current_feedback_map_test_button.setEnabled(not active)
+        if hasattr(self, "speed_test_group"):
+            self.speed_test_group.setEnabled(not active)
+        self.position_test_run_button.setText("Cancel" if active else "Run Validation")
+
+    def _toggle_position_test_run(self) -> None:
+        if self._position_test_session is not None:
+            self._cancel_position_test("Cancelled by user.", request_stop=True)
+            return
+        self._start_position_test()
+
+    def _start_position_test(self) -> None:
+        if self._speed_test_session is not None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Position Validation Suite",
+                "Cancel the active speed test first, then launch the position validation sequence.",
+            )
+            return
+        if not self._connected:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Position Validation Suite",
+                "Connect to the drive before starting a position validation sequence.",
+            )
+            return
+
+        snapshot = self._latest_monitor_snapshot
+        if snapshot is not None:
+            alignment_policy = int(getattr(snapshot, "debug_alignment_policy", ENCODER_ALIGNMENT_POLICY_POWER_ON))
+            alignment_status = int(getattr(snapshot, "debug_alignment_status", ENCODER_ALIGNMENT_STATUS_IDLE))
+            if (
+                alignment_policy == ENCODER_ALIGNMENT_POLICY_POWER_ON
+                and alignment_status != ENCODER_ALIGNMENT_STATUS_DONE
+            ):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Position Validation Suite",
+                    "Toggle Servo ON and wait until Driver Monitor shows Align Status = Done before running a position validation sequence.",
+                )
+                return
+        active_run_modes = {
+            RUN_MODE_FOC,
+            RUN_MODE_OPEN_LOOP_VF,
+            RUN_MODE_ALIGNMENT_ONLY,
+            RUN_MODE_AUTOTUNE,
+        }
+        if snapshot is not None and (
+            int(getattr(snapshot, "run_mode", -1)) in active_run_modes
+            and (
+                bool(getattr(snapshot, "enable_run", False))
+                or abs(float(getattr(snapshot, "act_speed", 0.0))) > 10.0
+            )
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Position Validation Suite",
+                "Stop the current run first, then launch the automated position validation from a clean idle state.",
+            )
+            return
+
+        if self._current_foc_mode() != POSITION_CONTROL_MODE:
+            combo_index = self.foc_mode_combo.findData(POSITION_CONTROL_MODE)
+            if combo_index >= 0:
+                self.foc_mode_combo.setCurrentIndex(combo_index)
+
+        profile_key = self._position_test_profile_key()
+        preferred_tracking_mode = (
+            POSITION_TRACKING_MODE_MULTI_TURN
+            if profile_key == POSITION_TEST_PROFILE_LONG
+            else POSITION_TRACKING_MODE_SINGLE_TURN
+        )
+        self._apply_position_tracking_mode_to_ui(preferred_tracking_mode)
+
+        try:
+            self._sync_foc_controls_to_driver_table()
+            values = self._table_values(self.driver_table)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Invalid Driver Parameters", str(exc))
+            return
+
+        profile_lines = self._position_test_summary_lines(profile_key)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm Position Validation",
+            "\n".join(
+                [
+                    *profile_lines,
+                    "",
+                    "Current FOC position and speed gains, ramps, speed limit, and tracking mode from the FOC Control tab will be written to Driver Parameters before the test starts.",
+                    "Continue?",
+                ]
+            ),
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.Yes,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.position_test_status_label.setText("Idle")
+            return
+
+        self.auto_poll_checkbox.setChecked(True)
+        sequence = self._build_position_test_sequence(profile_key, snapshot)
+        self._queue_driver_parameter_write_chunks(values, "Position Validation: Write Driver Parameters")
+        self._position_test_session = PositionTestSession(profile_key=profile_key, sequence=sequence)
+        self._set_position_test_running_ui(True)
+        self.position_test_status_label.setText("Preparing: writing driver parameters to the drive...")
+        self._request_monitor_once()
+        self._position_test_timer.start()
+
+    def _finish_position_test(self, text: str) -> None:
+        self._position_test_timer.stop()
+        self._position_test_session = None
+        self._set_position_test_running_ui(False)
+        self.position_test_status_label.setText(text)
+        self._request_monitor_once()
+
+    def _cancel_position_test(self, text: str, request_stop: bool = True) -> None:
+        self._position_test_timer.stop()
+        self._position_test_session = None
+        self._pending_frames.clear()
+        self._set_position_test_running_ui(False)
+        self.position_test_status_label.setText(text)
+        if request_stop and self._connected:
+            self._enqueue_position_stop_command(
+                description="Position Validation: Emergency Stop",
+                request_monitor=True,
+            )
+
+    def _advance_position_test_step(self) -> None:
+        session = self._position_test_session
+        if session is None:
+            return
+        session.step_index += 1
+        session.step_started_at = 0.0
+        session.steady_since_at = None
+        if session.step_index >= len(session.sequence):
+            self._finish_position_test(session.completion_text)
+            return
+        session.sequence[session.step_index].pop("_queued", None)
+
+    def _record_position_test_endpoint(
+        self,
+        session: PositionTestSession,
+        step: dict[str, object],
+        actual_counts: float,
+        error_deg: float,
+        tracking_mode: int,
+    ) -> None:
+        target_counts = float(step.get("target_counts", actual_counts))
+        target_deg = self._counts_to_position_mode_degrees(target_counts, tracking_mode)
+        actual_deg = self._counts_to_position_mode_degrees(actual_counts, tracking_mode)
+        endpoint_key = str(step.get("endpoint_key", "") or "")
+        if endpoint_key:
+            baseline_counts = session.endpoint_baselines.get(endpoint_key)
+            if baseline_counts is None:
+                session.endpoint_baselines[endpoint_key] = actual_counts
+                repeatability_deg = 0.0
+            else:
+                repeatability_deg = self._counts_to_accumulated_degrees(actual_counts - baseline_counts)
+            session.validation_error_deg = repeatability_deg
+            self._append_log(
+                f"[PosTest] Endpoint {endpoint_key}: target={target_deg:.3f} deg, actual={actual_deg:.3f} deg, "
+                f"settling error={error_deg:.4f} deg, repeatability={repeatability_deg:.4f} deg"
+            )
+            return
+        session.validation_error_deg = error_deg
+        self._append_log(
+            f"[PosTest] Settled: target={target_deg:.3f} deg, actual={actual_deg:.3f} deg, error={error_deg:.4f} deg"
+        )
+
+    def _log_long_distance_progress(
+        self,
+        session: PositionTestSession,
+        step: dict[str, object],
+        actual_counts: float,
+    ) -> None:
+        start_counts = float(step.get("start_counts", actual_counts))
+        target_counts = float(step.get("target_counts", actual_counts))
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return
+        total_travel_counts = target_counts - start_counts
+        total_turns = int(abs(total_travel_counts) // encoder_resolution)
+        if total_turns <= 0:
+            return
+        direction = 1.0 if total_travel_counts >= 0.0 else -1.0
+        turns_completed = int(abs((actual_counts - start_counts) / encoder_resolution))
+        while session.long_last_logged_turn < min(turns_completed, total_turns):
+            turn_index = session.long_last_logged_turn + 1
+            boundary_counts = start_counts + direction * turn_index * encoder_resolution
+            boundary_error_deg = self._counts_to_accumulated_degrees(actual_counts - boundary_counts)
+            self._append_log(
+                f"[PosTest] Long-distance turn {turn_index}/{total_turns}: boundary error {boundary_error_deg:.4f} deg"
+            )
+            session.long_last_logged_turn = turn_index
+
+    def _on_position_test_timer(self) -> None:
+        session = self._position_test_session
+        if session is None:
+            return
+
+        now = time.monotonic()
+        if session.preparing_write:
+            if self._communication_idle():
+                session.preparing_write = False
+                session.step_index = 0
+                session.step_started_at = 0.0
+                session.steady_since_at = None
+            return
+
+        if session.step_index >= len(session.sequence):
+            self._finish_position_test(session.completion_text)
+            return
+
+        step = session.sequence[session.step_index]
+        if session.step_started_at <= 0.0:
+            session.step_started_at = now
+            session.steady_since_at = None
+            if step.get("status"):
+                self.position_test_status_label.setText(str(step["status"]))
+
+        step_type = str(step.get("type", ""))
+        if step_type == "prepare_position":
+            self._apply_position_target_to_ui(
+                float(step.get("target_counts", 0.0)),
+                int(step.get("tracking_mode", POSITION_TRACKING_MODE_SINGLE_TURN)),
+            )
+            self._advance_position_test_step()
+            return
+
+        if step_type == "start_foc_position":
+            if not step.get("_queued") and self._communication_idle():
+                self._enqueue_position_start_command(
+                    float(step.get("target_counts", 0.0)),
+                    int(step.get("tracking_mode", POSITION_TRACKING_MODE_SINGLE_TURN)),
+                    "Position Validation: Start FOC Position Mode",
+                    request_monitor=True,
+                )
+                step["_queued"] = True
+                return
+            if step.get("_queued") and self._communication_idle() and (now - session.step_started_at) >= 0.10:
+                self._advance_position_test_step()
+            return
+
+        if step_type == "set_position":
+            if not step.get("_queued") and self._communication_idle():
+                target_counts = float(step.get("target_counts", 0.0))
+                tracking_mode = int(step.get("tracking_mode", POSITION_TRACKING_MODE_SINGLE_TURN))
+                target_deg = self._counts_to_position_mode_degrees(target_counts, tracking_mode)
+                self._enqueue_position_start_command(
+                    target_counts,
+                    tracking_mode,
+                    f"Position Validation: Set position to {target_deg:.2f} deg",
+                    request_monitor=True,
+                )
+                step["_queued"] = True
+                return
+            if step.get("_queued") and self._communication_idle() and (now - session.step_started_at) >= 0.10:
+                self._advance_position_test_step()
+            return
+
+        if step_type == "wait":
+            if (now - session.step_started_at) >= float(step.get("duration_s", 0.0)):
+                self._advance_position_test_step()
+            return
+
+        if step_type == "wait_position_steady":
+            snapshot = self._latest_monitor_snapshot
+            timeout_s = float(step.get("timeout_s", 0.0))
+            if snapshot is not None:
+                target_counts = float(step.get("target_counts", 0.0))
+                tracking_mode = int(step.get("tracking_mode", POSITION_TRACKING_MODE_SINGLE_TURN))
+                actual_counts = float(getattr(snapshot, "act_position", 0.0))
+                error_deg = self._display_position_error_degrees(
+                    target_counts,
+                    actual_counts,
+                    tracking_mode,
+                )
+                if session.profile_key != POSITION_TEST_PROFILE_BACKLASH:
+                    session.validation_error_deg = error_deg
+                if bool(step.get("log_turns", False)):
+                    self._log_long_distance_progress(session, step, actual_counts)
+
+                act_speed = abs(float(getattr(snapshot, "act_speed", 0.0)))
+                if (
+                    abs(error_deg) <= float(step.get("tolerance_deg", 0.0))
+                    and act_speed <= POSITION_TEST_SETTLE_SPEED_TOLERANCE_RPM
+                ):
+                    if session.steady_since_at is None:
+                        session.steady_since_at = now
+                    elif (now - session.steady_since_at) >= float(step.get("hold_s", 0.0)):
+                        self._record_position_test_endpoint(
+                            session,
+                            step,
+                            actual_counts,
+                            error_deg,
+                            tracking_mode,
+                        )
+                        self._advance_position_test_step()
+                        return
+                else:
+                    session.steady_since_at = None
+
+            if (now - session.step_started_at) >= timeout_s:
+                self._cancel_position_test(
+                    "Timed out while waiting for the commanded position to settle.",
+                    request_stop=True,
+                )
+            return
+
+        if step_type == "stop_foc_position":
+            if not step.get("_queued") and self._communication_idle():
+                self._enqueue_position_stop_command(
+                    description="Position Validation: Stop FOC",
+                    request_monitor=True,
+                )
+                step["_queued"] = True
+                return
+            if step.get("_queued") and self._communication_idle() and (now - session.step_started_at) >= 0.10:
+                self._advance_position_test_step()
+            return
 
     def _build_speed_test_sequence(self, profile_key: str) -> list[dict[str, object]]:
         if profile_key == SPEED_TEST_PROFILE_REVERSE:
@@ -5180,10 +5990,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.speed_test_profile_combo.setEnabled(not active)
         self.speed_test_stack.setEnabled(not active)
         self.foc_mode_combo.setEnabled(not active)
-        self.start_foc_button.setEnabled(not active)
+        self.foc_toggle_button.setEnabled(not active)
         self.start_foc_rotating_theta_test_button.setEnabled(not active)
         self.start_foc_rotating_theta_voltage_test_button.setEnabled(not active)
         self.start_foc_current_feedback_map_test_button.setEnabled(not active)
+        if hasattr(self, "position_test_group"):
+            self.position_test_group.setEnabled(not active)
         self.speed_test_run_button.setText("Cancel" if active else "Run Test")
 
     def _toggle_speed_test_run(self) -> None:
@@ -5193,6 +6005,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_speed_test()
 
     def _start_speed_test(self) -> None:
+        if self._position_test_session is not None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Speed Test Mode",
+                "Cancel the active position validation first, then launch the automated speed test.",
+            )
+            return
         if not self._connected:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -5429,7 +6248,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_tracking_combo.setEnabled(position_mode)
         self.foc_target_angle_label.setEnabled(position_mode)
         self.foc_target_angle_spin.setEnabled(position_mode)
-        self.foc_target_angle_set_button.setEnabled(position_mode)
         self.foc_jog_label.setEnabled(position_mode)
         self.foc_jog_minus_90_button.setEnabled(position_mode)
         self.foc_jog_minus_10_button.setEnabled(position_mode)
@@ -5482,6 +6300,7 @@ class MainWindow(QtWidgets.QMainWindow):
             elif self._speed_test_session is None and self.speed_test_status_label.text().startswith("Switch FOC Control to Speed Mode"):
                 self.speed_test_status_label.setText("Idle")
         self._update_speed_test_profile_ui()
+        self._update_position_test_profile_ui()
         self._refresh_foc_control_panel(self._latest_monitor_snapshot)
 
     def _on_foc_target_speed_value_changed(self, value: float) -> None:
@@ -5493,6 +6312,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_foc_control_panel(self, snapshot) -> None:
         if not hasattr(self, "foc_status_value_label"):
             return
+        self._refresh_runtime_toggle_buttons(snapshot)
         preview_mode = self._current_foc_mode()
         mode_text = "Position Mode" if preview_mode == POSITION_CONTROL_MODE else "Speed Mode"
         debug_suffix = " Electrical frame: none (raw theta)."
@@ -5603,6 +6423,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.auto_poll_checkbox.setChecked(True)
         if self._speed_test_session is not None:
             self._cancel_speed_test("Cancelled by Servo OFF.", request_stop=False)
+        if self._position_test_session is not None:
+            self._cancel_position_test("Cancelled by Servo OFF.", request_stop=False)
         self._enqueue_command(Command.CMD_SERVO_OFF, b"", "Servo OFF")
         self._request_monitor_once()
 
@@ -5693,6 +6515,47 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._request_monitor_once()
 
+    def _foc_is_running(self, snapshot=None) -> bool:
+        active_snapshot = self._latest_monitor_snapshot if snapshot is None else snapshot
+        return bool(
+            active_snapshot is not None
+            and int(getattr(active_snapshot, "run_mode", -1)) == RUN_MODE_FOC
+        )
+
+    def _open_loop_vf_is_running(self, snapshot=None) -> bool:
+        active_snapshot = self._latest_monitor_snapshot if snapshot is None else snapshot
+        return bool(
+            active_snapshot is not None
+            and int(getattr(active_snapshot, "run_mode", -1)) == RUN_MODE_OPEN_LOOP_VF
+        )
+
+    def _refresh_runtime_toggle_buttons(self, snapshot=None) -> None:
+        active_snapshot = self._latest_monitor_snapshot if snapshot is None else snapshot
+        if hasattr(self, "foc_toggle_button"):
+            self.foc_toggle_button.setText(
+                "Stop FOC" if self._foc_is_running(active_snapshot) else "Start FOC"
+            )
+            if self._speed_test_session is None and self._position_test_session is None:
+                self.foc_toggle_button.setEnabled(True)
+        if hasattr(self, "vf_toggle_button"):
+            self.vf_toggle_button.setText(
+                "Stop V/F"
+                if self._open_loop_vf_is_running(active_snapshot)
+                else "Start V/F"
+            )
+
+    def _toggle_foc_control(self) -> None:
+        if self._foc_is_running():
+            self._stop_foc_control()
+            return
+        self._start_foc_control()
+
+    def _toggle_open_loop_vf(self) -> None:
+        if self._open_loop_vf_is_running():
+            self._stop_open_loop_vf()
+            return
+        self._start_open_loop_vf()
+
 
     def _start_foc_control(self) -> None:
         mode = self._current_foc_mode()
@@ -5719,8 +6582,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_foc_controls_to_driver_table()
 
         if mode == POSITION_CONTROL_MODE:
-            position_target = float(self.foc_target_position_spin.value())
             tracking_mode = self._position_tracking_mode()
+            position_target = self._degrees_to_counts(
+                float(self.foc_target_angle_spin.value()),
+                tracking_mode,
+            )
+            self._set_foc_target_position_counts(position_target)
             position_target_degrees = self._counts_to_position_mode_degrees(
                 position_target,
                 tracking_mode,
@@ -5752,7 +6619,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             description = (
                 f"Start FOC Position Mode "
-                f"(target={position_target_degrees:.2f} deg / {self.foc_target_position_spin.value():.1f} cnt, "
+                f"(target={position_target_degrees:.2f} deg / {position_target:.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
                 f"pi=({self.foc_position_kp_spin.value():.3f}, {self.foc_position_ki_spin.value():.3f}), "
                 f"vff=({self.foc_position_vff_gain_spin.value():.3f}, {self.foc_position_vff_filter_spin.value():.1f} Hz), "
@@ -5799,10 +6666,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_status_value_label.setText("Starting...")
         self._enqueue_command(command, payload, description)
         self._request_monitor_once()
+        if hasattr(self, "foc_toggle_button"):
+            self.foc_toggle_button.setText("Stop FOC")
 
     def _stop_foc_control(self) -> None:
         if self._speed_test_session is not None:
             self._cancel_speed_test("Cancelled by manual Stop FOC.", request_stop=False)
+        if self._position_test_session is not None:
+            self._cancel_position_test("Cancelled by manual Stop FOC.", request_stop=False)
         mode = self._current_foc_mode()
         command = (
             Command.CMD_STOP_POSITIONCONTROL
@@ -5812,6 +6683,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._enqueue_command(command, b"", "Stop FOC")
         self.foc_status_value_label.setText("Stopping...")
         self._request_monitor_once()
+        if hasattr(self, "foc_toggle_button"):
+            self.foc_toggle_button.setText("Start FOC")
 
     def _update_current_tuning_capture_window_label(self) -> None:
         window_ms = TRACE_TOTAL_SAMPLES * self._current_tuning_sample_period_s() * 1000.0
@@ -6406,6 +7279,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Disconnected")
             if self._speed_test_session is not None:
                 self._cancel_speed_test("Cancelled because the connection was closed.", request_stop=False)
+            if self._position_test_session is not None:
+                self._cancel_position_test("Cancelled because the connection was closed.", request_stop=False)
             self._pending_frames.clear()
             self._awaiting_ack = False
             self._last_sent = None
@@ -6541,6 +7416,19 @@ class MainWindow(QtWidgets.QMainWindow):
             "Read Motor Parameters",
         )
 
+    def _read_all_parameters(self) -> None:
+        self._set_parameter_status("Reading driver and motor parameters...", "info")
+        self._enqueue_command(
+            Command.CMD_READ_DRIVER,
+            bytes([len(DRIVER_PARAMETER_NAMES)]),
+            "Read Driver Parameters",
+        )
+        self._enqueue_command(
+            Command.CMD_READ_MOTOR,
+            bytes([len(MOTOR_PARAMETER_NAMES)]),
+            "Read Motor Parameters",
+        )
+
     def _write_driver_parameters(self) -> None:
         try:
             values = self._table_values(self.driver_table)
@@ -6634,6 +7522,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"{self.vf_voltage_spin.value():.2f} V)"
             ),
         )
+        if hasattr(self, "vf_toggle_button"):
+            self.vf_toggle_button.setText("Stop V/F")
+
+    def _stop_open_loop_vf(self) -> None:
+        self._enqueue_command(Command.CMD_STOP_OPEN_LOOP_VF, b"", "Stop Open Loop V/F")
+        if hasattr(self, "vf_toggle_button"):
+            self.vf_toggle_button.setText("Start V/F")
 
     def _handle_frame(self, frame: ParsedFrame) -> None:
         if frame.code == ACK_NOERROR:
@@ -6924,6 +7819,11 @@ class MainWindow(QtWidgets.QMainWindow):
             snapshot.act_position,
             tracking_mode,
         )
+        validation_error_deg = self._current_position_validation_error_degrees(
+            snapshot.cmd_position,
+            snapshot.act_position,
+            tracking_mode,
+        )
         self._trend_buffer.append_sample(
             time.monotonic(),
             {
@@ -6942,6 +7842,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "cmd_position_deg": cmd_position_deg,
                 "act_position_deg": act_position_deg,
                 "position_error_deg": position_error_deg,
+                "validation_error_deg": validation_error_deg,
             },
         )
 
@@ -6953,6 +7854,11 @@ class MainWindow(QtWidgets.QMainWindow):
         cmd_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
         act_position_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
         position_error_deg = self._display_position_error_degrees(
+            cmd_position_counts,
+            act_position_counts,
+            tracking_mode,
+        )
+        validation_error_deg = self._current_position_validation_error_degrees(
             cmd_position_counts,
             act_position_counts,
             tracking_mode,
@@ -6983,6 +7889,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "cmd_position_deg": cmd_position_deg,
                 "act_position_deg": act_position_deg,
                 "position_error_deg": position_error_deg,
+                "validation_error_deg": validation_error_deg,
             },
         )
 
@@ -7045,9 +7952,11 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Cmd Speed: {snapshot.cmd_speed:.3f}",
             f"Act Speed: {snapshot.act_speed:.3f}",
             f"Speed Error: {snapshot.speed_error:.3f}",
-            f"Act Position: {snapshot.act_position:.3f}",
-            f"Act Deg: {self._counts_to_motion_display_degrees(snapshot.act_position):.3f} deg",
-            f"Pos Error: {self._display_position_error_degrees(snapshot.cmd_position, snapshot.act_position):.3f} deg",
+            f"Setting Position: {self._counts_to_position_mode_degrees(snapshot.cmd_position):.3f} deg",
+            f"Tracking Error: {self._display_position_error_degrees(snapshot.cmd_position, snapshot.act_position):.3f} deg",
+            f"Mechanical Angle (Single-turn): {self._counts_to_single_turn_degrees(snapshot.act_position):.3f} deg",
+            f"Mechanical Angle (Multi-turn): {self._counts_to_accumulated_degrees(snapshot.act_position):.3f} deg",
+            f"Total Distance: {self._counts_to_turns(snapshot.act_position):.3f} turns",
             "",
             "[Currents]",
             f"Id Ref / Id: {snapshot.id_ref:.3f} A / {snapshot.id_current:.3f} A",
@@ -7305,8 +8214,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     incoming_detail_text,
                     severity,
                 )
-                if hasattr(self, "quick_command_tabs") and hasattr(self, "alarm_tab"):
-                    self.quick_command_tabs.setCurrentWidget(self.alarm_tab)
+                if hasattr(self, "monitor_tabs") and hasattr(self, "driver_monitor_tab"):
+                    self.monitor_tabs.setCurrentWidget(self.driver_monitor_tab)
                 self.statusBar().showMessage(f"ALARM: {incoming_detail_text}", 5000)
             self._active_fault_code = fault_code
 
@@ -7348,6 +8257,10 @@ class MainWindow(QtWidgets.QMainWindow):
             snapshot.cmd_position,
             snapshot.act_position,
         )
+        setting_position_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position)
+        mechanical_angle_single_deg = self._counts_to_single_turn_degrees(snapshot.act_position)
+        mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(snapshot.act_position)
+        total_distance_turns = self._counts_to_turns(snapshot.act_position)
         self._set_monitor_value("enable_run", "ON" if snapshot.enable_run else "OFF")
         self._set_monitor_value("run_mode", self._run_mode_text(snapshot.run_mode))
         self._set_monitor_value("control_timing_mode", self._timing_mode_text(snapshot.control_timing_mode))
@@ -7373,9 +8286,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("cmd_speed", f"{snapshot.cmd_speed:.3f}")
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
-        self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
-        self._set_monitor_value("act_degree", f"{self._counts_to_motion_display_degrees(snapshot.act_position):.3f} deg")
-        self._set_monitor_value("position_error", f"{position_error_deg:.3f} deg")
+        self._set_monitor_value("setting_position", f"{setting_position_deg:.3f} deg")
+        self._set_monitor_value("tracking_error", f"{position_error_deg:.3f} deg")
+        self._set_monitor_value("mech_angle_single", f"{mechanical_angle_single_deg:.3f} deg")
+        self._set_monitor_value("mech_angle_multi", f"{mechanical_angle_multi_deg:.3f} deg")
+        self._set_monitor_value("total_distance", f"{total_distance_turns:.3f} turns")
         self._set_monitor_value("id_ref", f"{snapshot.id_ref:.3f} A")
         self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
         self._set_monitor_value("phase_u", f"{snapshot.phase_u:.3f} A")
@@ -7394,6 +8309,11 @@ class MainWindow(QtWidgets.QMainWindow):
             getattr(self._latest_monitor_snapshot, "cmd_position", 0.0),
             snapshot.act_position,
         )
+        cmd_position_counts = getattr(self._latest_monitor_snapshot, "cmd_position", 0.0)
+        setting_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts)
+        mechanical_angle_single_deg = self._counts_to_single_turn_degrees(snapshot.act_position)
+        mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(snapshot.act_position)
+        total_distance_turns = self._counts_to_turns(snapshot.act_position)
         self._set_monitor_value("enable_run", "OFF")
         self._set_monitor_value("run_mode", "FAULT")
         self._set_monitor_value("control_timing_mode", self._timing_mode_text(self._active_timing_mode))
@@ -7410,9 +8330,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_monitor_value("cmd_speed", f"{snapshot.cmd_speed:.3f}")
         self._set_monitor_value("act_speed", f"{snapshot.act_speed:.3f}")
         self._set_monitor_value("speed_error", f"{snapshot.speed_error:.3f}")
-        self._set_monitor_value("act_position", f"{snapshot.act_position:.3f}")
-        self._set_monitor_value("act_degree", f"{self._counts_to_motion_display_degrees(snapshot.act_position):.3f} deg")
-        self._set_monitor_value("position_error", f"{position_error_deg:.3f} deg")
+        self._set_monitor_value("setting_position", f"{setting_position_deg:.3f} deg")
+        self._set_monitor_value("tracking_error", f"{position_error_deg:.3f} deg")
+        self._set_monitor_value("mech_angle_single", f"{mechanical_angle_single_deg:.3f} deg")
+        self._set_monitor_value("mech_angle_multi", f"{mechanical_angle_multi_deg:.3f} deg")
+        self._set_monitor_value("total_distance", f"{total_distance_turns:.3f} turns")
         self._set_monitor_value("iq_ref", f"{snapshot.iq_ref:.3f} A")
         self._set_fault_label(snapshot.fault_code)
         self._handle_fault_transition(
