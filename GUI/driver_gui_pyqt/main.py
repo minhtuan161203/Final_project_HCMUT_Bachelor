@@ -3186,8 +3186,8 @@ class MainWindow(QtWidgets.QMainWindow):
             ("speed_error", "Speed Error"),
             ("setting_position", "Setting Position"),
             ("tracking_error", "Tracking Error"),
-            ("mech_angle_single", "Mech Angle (Single Turn)"),
-            ("mech_angle_multi", "Mech Angle (Multi Turn)"),
+            ("mech_angle_single", "Mech Angle (ST)"),
+            ("mech_angle_multi", "Mech Angle (MT)"),
             ("total_distance", "Total Distance"),
         ]
         current_fields = [
@@ -3236,7 +3236,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         layout.addWidget(dashboard_widget, 1)
         layout.addWidget(trend_note)
-        layout.addWidget(self._build_alarm_tab(), 1)
         return box
 
     def _build_monitor_tabs(self) -> QtWidgets.QTabWidget:
@@ -3738,7 +3737,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         drive_hint.setWordWrap(True)
         drive_layout.addWidget(drive_hint)
-        drive_layout.addStretch(1)
+        self.alarm_tab = self._build_alarm_tab()
+        drive_layout.addWidget(self.alarm_tab, 1)
 
         test_tab = self._build_test_mode_tab()
         foc_tab = self._build_foc_control_tab()
@@ -3920,7 +3920,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_foc_rotating_theta_test_button = QtWidgets.QPushButton("Run Rotating Theta Current Test")
         self.start_foc_rotating_theta_voltage_test_button = QtWidgets.QPushButton("Run Rotating Theta Voltage Test")
         self.start_foc_current_feedback_map_test_button = QtWidgets.QPushButton("Run Current Feedback Map Test")
-        self.foc_toggle_button = QtWidgets.QPushButton("Start FOC")
+        self.start_foc_button = QtWidgets.QPushButton("Start FOC")
+        self.stop_foc_button = QtWidgets.QPushButton("Stop FOC")
 
         jog_button_layout = QtWidgets.QHBoxLayout()
         jog_button_layout.setContentsMargins(0, 0, 0, 0)
@@ -3987,7 +3988,8 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 11, 0, 1, 2)
         summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 11, 2, 1, 2)
         summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 12, 0, 1, 4)
-        summary_layout.addWidget(self.foc_toggle_button, 13, 0, 1, 4)
+        summary_layout.addWidget(self.start_foc_button, 13, 0, 1, 2)
+        summary_layout.addWidget(self.stop_foc_button, 13, 2, 1, 2)
 
         self.foc_jog_minus_90_button.clicked.connect(lambda: self._apply_relative_angle_delta(-90.0))
         self.foc_jog_minus_10_button.clicked.connect(lambda: self._apply_relative_angle_delta(-10.0))
@@ -4011,8 +4013,23 @@ class MainWindow(QtWidgets.QMainWindow):
         note_layout.addWidget(self.foc_mode_description_label)
         note_layout.addWidget(self.foc_servo_note_label)
 
-        layout.addWidget(summary_group)
-        layout.addWidget(note_group)
+        control_tabs = QtWidgets.QTabWidget()
+        control_page = QtWidgets.QWidget()
+        control_page_layout = QtWidgets.QVBoxLayout(control_page)
+        control_page_layout.setContentsMargins(0, 0, 0, 0)
+        control_page_layout.addWidget(summary_group)
+        control_page_layout.addStretch(1)
+
+        help_page = QtWidgets.QWidget()
+        help_page_layout = QtWidgets.QVBoxLayout(help_page)
+        help_page_layout.setContentsMargins(0, 0, 0, 0)
+        help_page_layout.addWidget(note_group)
+        help_page_layout.addStretch(1)
+
+        control_tabs.addTab(control_page, "Control")
+        control_tabs.addTab(help_page, "Help")
+
+        layout.addWidget(control_tabs)
         layout.addStretch(1)
         self._update_foc_mode_ui()
         return widget
@@ -4592,7 +4609,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_foc_rotating_theta_test_button.clicked.connect(self._start_foc_rotating_theta_test)
         self.start_foc_rotating_theta_voltage_test_button.clicked.connect(self._start_foc_rotating_theta_voltage_test)
         self.start_foc_current_feedback_map_test_button.clicked.connect(self._start_foc_current_feedback_map_test)
-        self.foc_toggle_button.clicked.connect(self._toggle_foc_control)
+        self.start_foc_button.clicked.connect(self._start_foc_control)
+        self.stop_foc_button.clicked.connect(self._stop_foc_control)
         self.vf_toggle_button.clicked.connect(self._toggle_open_loop_vf)
         self.servo_on_button.clicked.connect(self._handle_servo_on)
         self.servo_off_button.clicked.connect(self._handle_servo_off)
@@ -5577,7 +5595,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_test_profile_combo.setEnabled(not active)
         self.position_test_stack.setEnabled(not active)
         self.foc_mode_combo.setEnabled(not active)
-        self.foc_toggle_button.setEnabled(not active)
+        self.start_foc_button.setEnabled(not active)
+        self.stop_foc_button.setEnabled(not active)
         self.start_foc_rotating_theta_test_button.setEnabled(not active)
         self.start_foc_rotating_theta_voltage_test_button.setEnabled(not active)
         self.start_foc_current_feedback_map_test_button.setEnabled(not active)
@@ -5990,7 +6009,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.speed_test_profile_combo.setEnabled(not active)
         self.speed_test_stack.setEnabled(not active)
         self.foc_mode_combo.setEnabled(not active)
-        self.foc_toggle_button.setEnabled(not active)
+        self.start_foc_button.setEnabled(not active)
+        self.stop_foc_button.setEnabled(not active)
         self.start_foc_rotating_theta_test_button.setEnabled(not active)
         self.start_foc_rotating_theta_voltage_test_button.setEnabled(not active)
         self.start_foc_current_feedback_map_test_button.setEnabled(not active)
@@ -6293,11 +6313,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     "Speed Mode is ready. Enter target speed and gains, then press Start FOC."
                 )
         if hasattr(self, "speed_test_group"):
-            speed_test_enabled = (not position_mode) or (self._speed_test_session is not None)
-            self.speed_test_group.setEnabled(speed_test_enabled)
-            if position_mode and self._speed_test_session is None:
-                self.speed_test_status_label.setText("Switch FOC Control to Speed Mode before running automated speed tests.")
-            elif self._speed_test_session is None and self.speed_test_status_label.text().startswith("Switch FOC Control to Speed Mode"):
+            self.speed_test_group.setEnabled(self._position_test_session is None)
+            if (
+                self._speed_test_session is None
+                and self.speed_test_status_label.text().startswith(
+                    "Switch FOC Control to Speed Mode"
+                )
+            ):
                 self.speed_test_status_label.setText("Idle")
         self._update_speed_test_profile_ui()
         self._update_position_test_profile_ui()
@@ -6531,24 +6553,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refresh_runtime_toggle_buttons(self, snapshot=None) -> None:
         active_snapshot = self._latest_monitor_snapshot if snapshot is None else snapshot
-        if hasattr(self, "foc_toggle_button"):
-            self.foc_toggle_button.setText(
-                "Stop FOC" if self._foc_is_running(active_snapshot) else "Start FOC"
+        if hasattr(self, "start_foc_button") and hasattr(self, "stop_foc_button"):
+            manual_allowed = (
+                self._speed_test_session is None and self._position_test_session is None
             )
-            if self._speed_test_session is None and self._position_test_session is None:
-                self.foc_toggle_button.setEnabled(True)
+            self.start_foc_button.setEnabled(manual_allowed)
+            self.stop_foc_button.setEnabled(manual_allowed)
         if hasattr(self, "vf_toggle_button"):
             self.vf_toggle_button.setText(
                 "Stop V/F"
                 if self._open_loop_vf_is_running(active_snapshot)
                 else "Start V/F"
             )
-
-    def _toggle_foc_control(self) -> None:
-        if self._foc_is_running():
-            self._stop_foc_control()
-            return
-        self._start_foc_control()
 
     def _toggle_open_loop_vf(self) -> None:
         if self._open_loop_vf_is_running():
@@ -6666,8 +6682,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_status_value_label.setText("Starting...")
         self._enqueue_command(command, payload, description)
         self._request_monitor_once()
-        if hasattr(self, "foc_toggle_button"):
-            self.foc_toggle_button.setText("Stop FOC")
 
     def _stop_foc_control(self) -> None:
         if self._speed_test_session is not None:
@@ -6683,8 +6697,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._enqueue_command(command, b"", "Stop FOC")
         self.foc_status_value_label.setText("Stopping...")
         self._request_monitor_once()
-        if hasattr(self, "foc_toggle_button"):
-            self.foc_toggle_button.setText("Start FOC")
 
     def _update_current_tuning_capture_window_label(self) -> None:
         window_ms = TRACE_TOTAL_SAMPLES * self._current_tuning_sample_period_s() * 1000.0
