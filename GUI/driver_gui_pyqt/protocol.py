@@ -326,6 +326,7 @@ class MonitorSnapshot:
     autotune_speed_kp: float = 0.0
     autotune_speed_ki: float = 0.0
     autotune_position_kp: float = 0.0
+    autotune_position_ki: float = 0.0
     foc_direction_test_status: int = FOC_DIRECTION_TEST_IDLE
     foc_direction_test_open_loop_delta_pos: int = 0
     foc_direction_test_foc_delta_pos: int = 0
@@ -577,6 +578,11 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
             snapshot.adc_offset_ib,
             snapshot.calibration_status,
         ) = struct.unpack_from("<2HB", payload, offset)
+        offset += struct.calcsize("<2HB")
+
+    if len(payload) >= offset + struct.calcsize("<f"):
+        (snapshot.autotune_position_ki,) = struct.unpack_from("<f", payload, offset)
+        offset += struct.calcsize("<f")
 
     return snapshot
 

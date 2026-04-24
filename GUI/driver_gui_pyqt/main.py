@@ -166,6 +166,12 @@ DEFAULT_MOTOR_PARAMETER_VALUES: dict[int, float] = {
     19: 1.0,
 }
 
+PARAMETER_NAME_LABELS = {
+    "MOTOR_RESISTANCE": "MOTOR_RESISTANCE [mOhm]",
+    "MOTOR_INDUCTANCE": "MOTOR_INDUCTANCE [uH]",
+    "MOTOR_BACK_EMF_CONSTANT": "MOTOR_BACK_EMF_CONSTANT [mV/(rad/s)]",
+}
+
 TRACE_CHANNEL_META = {
     0: {"label": "Unused", "unit": "", "color": "#aaaaaa"},
     1: {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
@@ -3025,6 +3031,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trend_panels: list[ScadaTrendPanel] = []
         self._current_tuning_capture = _empty_scope_state("Current Tuning Response")
         self._autotune_capture = _empty_scope_state("Motor Auto-Tune Charts")
+        self._autotune_continue_signature: tuple[int, int] | None = None
         self._trace_capture = _empty_scope_state("Firmware Trace Scope")
         self._active_trace_target: str | None = None
         self._alarm_history: list[AlarmHistoryEntry] = []
@@ -3518,6 +3525,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_ls_voltage_spin.setValue(2.0)
         self.autotune_ls_voltage_spin.setSuffix(" V")
 
+        self.autotune_ls_frequency_spin = QtWidgets.QDoubleSpinBox()
+        self.autotune_ls_frequency_spin.setRange(10.0, 1000.0)
+        self.autotune_ls_frequency_spin.setDecimals(3)
+        self.autotune_ls_frequency_spin.setValue(200.0)
+        self.autotune_ls_frequency_spin.setSuffix(" Hz")
+
         self.autotune_flux_frequency_spin = QtWidgets.QDoubleSpinBox()
         self.autotune_flux_frequency_spin.setRange(1.0, DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ)
         self.autotune_flux_frequency_spin.setDecimals(3)
@@ -3563,12 +3576,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_ke_value_label = QtWidgets.QLabel("-")
         self.autotune_flux_value_label = QtWidgets.QLabel("-")
         self.autotune_pp_value_label = QtWidgets.QLabel("-")
+        self.autotune_kt_value_label = QtWidgets.QLabel("-")
         self.autotune_current_gain_value_label = QtWidgets.QLabel("-")
         self.autotune_speed_gain_value_label = QtWidgets.QLabel("-")
         self.autotune_position_gain_value_label = QtWidgets.QLabel("-")
 
         autotune_hint = QtWidgets.QLabel(
-            "Workflow: keep the rotor mechanically locked for Rs/Ls, then let the motor run unloaded during the open-loop flux stage. The module now uses the fixed 16 kHz runtime profile reported by firmware."
+            "Workflow: keep the rotor mechanically locked for Rs and the Ls sine-injection stage, then let the motor run unloaded during the open-loop flux stage. Before starting the flux stage, try the same Flux Voltage and Flux Frequency in open-loop V/F mode first. The motor should spin smoothly without obvious jerks or abnormal vibration; otherwise adjust those values before auto-tune so the estimated flux/Ke stays trustworthy. The module now uses the fixed 16 kHz runtime profile reported by firmware."
         )
         autotune_hint.setWordWrap(True)
 
@@ -3576,24 +3590,26 @@ class MainWindow(QtWidgets.QMainWindow):
         config_layout.addWidget(self.autotune_rs_low_spin, 0, 1)
         config_layout.addWidget(QtWidgets.QLabel("Rs High Current"), 0, 2)
         config_layout.addWidget(self.autotune_rs_high_spin, 0, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Ls Step Voltage"), 1, 0)
+        config_layout.addWidget(QtWidgets.QLabel("Ls Sine Voltage"), 1, 0)
         config_layout.addWidget(self.autotune_ls_voltage_spin, 1, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Flux Frequency"), 1, 2)
-        config_layout.addWidget(self.autotune_flux_frequency_spin, 1, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Flux Voltage"), 2, 0)
-        config_layout.addWidget(self.autotune_flux_voltage_spin, 2, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Current Bandwidth"), 2, 2)
-        config_layout.addWidget(self.autotune_current_bw_spin, 2, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Speed Bandwidth"), 3, 0)
-        config_layout.addWidget(self.autotune_speed_bw_spin, 3, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Position Bandwidth"), 3, 2)
-        config_layout.addWidget(self.autotune_position_bw_spin, 3, 3)
-        config_layout.addWidget(self.autotune_start_button, 4, 0)
-        config_layout.addWidget(self.autotune_stop_button, 4, 1)
-        config_layout.addWidget(self.autotune_apply_button, 4, 2, 1, 2)
-        config_layout.addWidget(QtWidgets.QLabel("Progress"), 5, 0)
-        config_layout.addWidget(self.autotune_progress_bar, 5, 1, 1, 3)
-        config_layout.addWidget(autotune_hint, 6, 0, 1, 4)
+        config_layout.addWidget(QtWidgets.QLabel("Ls Frequency"), 1, 2)
+        config_layout.addWidget(self.autotune_ls_frequency_spin, 1, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Flux Frequency"), 2, 0)
+        config_layout.addWidget(self.autotune_flux_frequency_spin, 2, 1)
+        config_layout.addWidget(QtWidgets.QLabel("Flux Voltage"), 2, 2)
+        config_layout.addWidget(self.autotune_flux_voltage_spin, 2, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Current Bandwidth"), 3, 0)
+        config_layout.addWidget(self.autotune_current_bw_spin, 3, 1)
+        config_layout.addWidget(QtWidgets.QLabel("Speed Bandwidth"), 3, 2)
+        config_layout.addWidget(self.autotune_speed_bw_spin, 3, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Position Bandwidth"), 4, 0)
+        config_layout.addWidget(self.autotune_position_bw_spin, 4, 1)
+        config_layout.addWidget(self.autotune_start_button, 5, 0)
+        config_layout.addWidget(self.autotune_stop_button, 5, 1)
+        config_layout.addWidget(self.autotune_apply_button, 5, 2, 1, 2)
+        config_layout.addWidget(QtWidgets.QLabel("Progress"), 6, 0)
+        config_layout.addWidget(self.autotune_progress_bar, 6, 1, 1, 3)
+        config_layout.addWidget(autotune_hint, 7, 0, 1, 4)
 
         results_group = QtWidgets.QGroupBox("Measured Results")
         results_layout = QtWidgets.QGridLayout(results_group)
@@ -3617,8 +3633,10 @@ class MainWindow(QtWidgets.QMainWindow):
         results_layout.addWidget(self.autotune_current_gain_value_label, 4, 3)
         results_layout.addWidget(QtWidgets.QLabel("Speed PI"), 5, 0)
         results_layout.addWidget(self.autotune_speed_gain_value_label, 5, 1)
-        results_layout.addWidget(QtWidgets.QLabel("Position P"), 5, 2)
+        results_layout.addWidget(QtWidgets.QLabel("Position PI"), 5, 2)
         results_layout.addWidget(self.autotune_position_gain_value_label, 5, 3)
+        results_layout.addWidget(QtWidgets.QLabel("Kt"), 6, 0)
+        results_layout.addWidget(self.autotune_kt_value_label, 6, 1)
 
         scope_toolbar = QtWidgets.QHBoxLayout()
         self.autotune_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
@@ -4505,7 +4523,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for index, name in enumerate(names):
             index_item = QtWidgets.QTableWidgetItem(str(index))
             index_item.setFlags(index_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
-            name_item = QtWidgets.QTableWidgetItem(name)
+            name_item = QtWidgets.QTableWidgetItem(PARAMETER_NAME_LABELS.get(name, name))
             name_item.setFlags(name_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
             value_item = QtWidgets.QTableWidgetItem("0.0")
             table.setItem(index, 0, index_item)
@@ -6968,10 +6986,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_autotune_payload(self) -> bytes:
         return struct.pack(
-            "<8f",
+            "<9f",
             float(self.autotune_rs_low_spin.value()),
             float(self.autotune_rs_high_spin.value()),
             float(self.autotune_ls_voltage_spin.value()),
+            float(self.autotune_ls_frequency_spin.value()),
             float(self.autotune_flux_frequency_spin.value()),
             float(self.autotune_flux_voltage_spin.value()),
             float(self.autotune_current_bw_spin.value()),
@@ -7011,7 +7030,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if int(stage) == MOTOR_AUTOTUNE_CHART_RS:
             return "Rs Calibration Chart"
         if int(stage) == MOTOR_AUTOTUNE_CHART_LS:
-            return "Ls Step Response"
+            return "Ls Sine Injection Response"
         return "Motor Auto-Tune Charts"
 
     def _autotune_chart_series_defs(self, stage: int) -> list[dict[str, str]]:
@@ -7024,8 +7043,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if int(stage) == MOTOR_AUTOTUNE_CHART_LS:
             return [
                 {"label": "Id", "unit": "A", "color": "#1f77b4"},
-                {"label": "Vd Step", "unit": "V", "color": "#d62728"},
-                {"label": "Marker", "unit": "", "color": "#7f7f7f"},
+                {"label": "Vd Sine", "unit": "V", "color": "#d62728"},
+                {"label": "Measure Window", "unit": "", "color": "#7f7f7f"},
             ]
         return []
 
@@ -7042,6 +7061,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.autotune_ke_value_label.setText("-")
             self.autotune_flux_value_label.setText("-")
             self.autotune_pp_value_label.setText("-")
+            self.autotune_kt_value_label.setText("-")
             self.autotune_current_gain_value_label.setText("-")
             self.autotune_speed_gain_value_label.setText("-")
             self.autotune_position_gain_value_label.setText("-")
@@ -7067,6 +7087,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.autotune_flux_value_label.setText(f"{snapshot.autotune_measured_flux:.6f} Wb")
         self.autotune_pp_value_label.setText(f"{snapshot.autotune_measured_pole_pairs:.2f}")
+        autotune_kt = (
+            1.5
+            * float(snapshot.autotune_measured_pole_pairs)
+            * float(snapshot.autotune_measured_flux)
+        )
+        self.autotune_kt_value_label.setText(f"{autotune_kt:.6f} Nm/A")
         self.autotune_current_gain_value_label.setText(
             f"Kp={snapshot.autotune_current_kp:.4f}, Ki={snapshot.autotune_current_ki:.4f}"
         )
@@ -7074,18 +7100,63 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Kp={snapshot.autotune_speed_kp:.4f}, Ki={snapshot.autotune_speed_ki:.4f}"
         )
         self.autotune_position_gain_value_label.setText(
-            f"Kp={snapshot.autotune_position_kp:.4f}"
+            f"Kp={snapshot.autotune_position_kp:.4f}, Ki={snapshot.autotune_position_ki:.4f}"
         )
         self.autotune_apply_button.setEnabled(
             int(snapshot.autotune_state) == MOTOR_AUTOTUNE_STATE_DONE
         )
+        self._maybe_continue_autotune_stage(snapshot)
 
     def _clear_autotune_capture(self) -> None:
         self._autotune_capture = _empty_scope_state("Motor Auto-Tune Charts")
+        self._autotune_continue_signature = None
         self.autotune_scope_view.clear()
         self.autotune_chart_state_label.setText("Waiting for capture")
         if self._active_trace_target == "autotune":
             self._active_trace_target = None
+
+    def _autotune_capture_stage(self) -> int:
+        if self._autotune_capture.title == self._autotune_chart_title(MOTOR_AUTOTUNE_CHART_RS):
+            return MOTOR_AUTOTUNE_CHART_RS
+        if self._autotune_capture.title == self._autotune_chart_title(MOTOR_AUTOTUNE_CHART_LS):
+            return MOTOR_AUTOTUNE_CHART_LS
+        return MOTOR_AUTOTUNE_CHART_NONE
+
+    def _autotune_expected_chart_stage(self, autotune_state: int) -> int:
+        if int(autotune_state) == MOTOR_AUTOTUNE_STATE_RS:
+            return MOTOR_AUTOTUNE_CHART_RS
+        if int(autotune_state) == MOTOR_AUTOTUNE_STATE_LS:
+            return MOTOR_AUTOTUNE_CHART_LS
+        return MOTOR_AUTOTUNE_CHART_NONE
+
+    def _maybe_continue_autotune_stage(self, snapshot=None) -> None:
+        active_snapshot = self._latest_monitor_snapshot if snapshot is None else snapshot
+        if active_snapshot is None:
+            return
+        if self._autotune_capture.total_samples <= 0:
+            return
+        if self._autotune_capture.received_samples < self._autotune_capture.total_samples:
+            return
+        if int(active_snapshot.autotune_data_ready) == 0:
+            return
+
+        capture_stage = self._autotune_capture_stage()
+        expected_stage = self._autotune_expected_chart_stage(active_snapshot.autotune_state)
+        if capture_stage == MOTOR_AUTOTUNE_CHART_NONE or capture_stage != expected_stage:
+            return
+
+        signature = (capture_stage, int(self._autotune_capture.total_samples))
+        if self._autotune_continue_signature == signature:
+            return
+
+        self._autotune_continue_signature = signature
+        self.autotune_chart_state_label.setText("Chart complete, continuing auto-tune...")
+        self._enqueue_command(
+            Command.CMD_CONTINUE_AUTO_TUNING_STATE,
+            b"",
+            "Continue Auto-Tune Stage",
+            quiet=True,
+        )
 
     def _start_motor_autotune(self) -> None:
         last_monitor = self._latest_monitor_snapshot
@@ -7097,6 +7168,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
 
+        self.auto_poll_checkbox.setChecked(True)
         self._clear_autotune_capture()
         self.autotune_chart_state_label.setText("Starting auto-tune...")
         self._enqueue_command(
@@ -7104,8 +7176,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._build_autotune_payload(),
             "Start Motor Auto-Tune",
         )
+        self._request_monitor_once()
 
     def _stop_motor_autotune(self) -> None:
+        self._autotune_continue_signature = None
         self._enqueue_command(
             Command.CMD_STOP_AUTOTUNING_T,
             b"",
@@ -7157,19 +7231,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._autotune_capture,
             "Auto-tune chart",
         )
-
-        if (
-            self._autotune_capture.received_samples >= self._autotune_capture.total_samples
-            and self._latest_monitor_snapshot is not None
-            and int(self._latest_monitor_snapshot.autotune_data_ready) != 0
-        ):
-            self.autotune_chart_state_label.setText("Chart complete, continuing auto-tune...")
-            self._enqueue_command(
-                Command.CMD_CONTINUE_AUTO_TUNING_STATE,
-                b"",
-                "Continue Auto-Tune Stage",
-                quiet=True,
-            )
+        self._maybe_continue_autotune_stage()
 
     def _start_trace_capture(self) -> None:
         channel_codes = [int(combo.currentData()) for combo in self.trace_channel_combos]
@@ -7372,6 +7434,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"ACK timeout for {self._last_sent.description} "
                 f"(0x{self._last_sent.command:02X})"
             )
+            if self._last_sent.command == Command.CMD_CONTINUE_AUTO_TUNING_STATE:
+                self._autotune_continue_signature = None
             if self._last_sent.command == Command.CMD_READ_DRIVER:
                 self._set_parameter_status("Driver parameter read timed out.", "error")
             elif self._last_sent.command == Command.CMD_READ_MOTOR:
@@ -7564,6 +7628,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if frame.code == ACK_ERROR:
             sent_command = self._last_sent.command if self._last_sent is not None else None
             self._append_log("Driver returned ACK_ERROR")
+            if sent_command == Command.CMD_CONTINUE_AUTO_TUNING_STATE:
+                self._autotune_continue_signature = None
             if sent_command == Command.CMD_READ_DRIVER:
                 self._set_parameter_status("Driver parameter read failed.", "error")
                 QtWidgets.QMessageBox.warning(self, "Read Driver Parameters", "Driver parameter read failed.")
@@ -7956,9 +8022,10 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Rs / Ls: {snapshot.autotune_measured_rs:.6f} ohm / {snapshot.autotune_measured_ls * 1e6:.2f} uH",
             f"Ke / Flux: {snapshot.autotune_measured_ke:.6f} V/(rad/s) / {snapshot.autotune_measured_flux:.6f} Wb",
             f"Pole Pairs: {snapshot.autotune_measured_pole_pairs:.2f}",
+            f"Kt: {1.5 * float(snapshot.autotune_measured_pole_pairs) * float(snapshot.autotune_measured_flux):.6f} Nm/A",
             f"Current PI: Kp={snapshot.autotune_current_kp:.4f}, Ki={snapshot.autotune_current_ki:.4f}",
             f"Speed PI: Kp={snapshot.autotune_speed_kp:.4f}, Ki={snapshot.autotune_speed_ki:.4f}",
-            f"Position P: Kp={snapshot.autotune_position_kp:.4f}",
+            f"Position PI: Kp={snapshot.autotune_position_kp:.4f}, Ki={snapshot.autotune_position_ki:.4f}",
             "",
             "[Motion]",
             f"Cmd Speed: {snapshot.cmd_speed:.3f}",

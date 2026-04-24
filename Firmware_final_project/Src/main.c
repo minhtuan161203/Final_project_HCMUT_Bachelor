@@ -240,6 +240,9 @@ static int32_t CalcAveragedAlignedEncoderOffset(float encoder_resolution);
 static void RestoreIdSquareTuningOffsetGuard(void);
 static float GetAngleTestModeOffsetRad(uint8_t electrical_angle_test_mode);
 static float GetAngleTestModeOffsetDeg(uint8_t electrical_angle_test_mode);
+static float GetRuntimeFocControlTheta(void);
+static float GetIdSquareLockedControlTheta(void);
+static float GetAutoTuneControlTheta(void);
 static int32_t ElectricalAngleDegToEncoderCounts(float electrical_deg, float encoder_resolution, uint8_t pole_pairs);
 static void ApplyEncoderOffsetElectricalDelta(float electrical_deg, float encoder_resolution);
 static void FinalizeEncoderAlignment(uint8_t alignment_successful);
@@ -462,6 +465,30 @@ static float GetAngleTestModeOffsetDeg(uint8_t electrical_angle_test_mode)
 		default:
 			return 0.0f;
 	}
+}
+
+static float GetRuntimeFocControlTheta(void)
+{
+	return WrapAngle(
+		Parameter.fTheta + ((DEFAULT_RUNTIME_FOC_FRAME_DEG * PI) / 180.0f));
+}
+
+static float GetIdSquareLockedControlTheta(void)
+{
+	return WrapAngle(-90.0f + globalcontrolthetatune);
+}
+
+static float GetAutoTuneControlTheta(void)
+{
+	if ((gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_RS) ||
+		(gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_LS))
+	{
+		/* Keep Rs/Ls injection on the same locked d-axis frame that already
+		   works for Id tuning so Vd does not leak into torque-producing Vq. */
+		return GetIdSquareLockedControlTheta();
+	}
+
+	return GetRuntimeFocControlTheta();
 }
 
 static int32_t ElectricalAngleDegToEncoderCounts(float electrical_deg, float encoder_resolution, uint8_t pole_pairs)
@@ -2776,7 +2803,7 @@ static void RunFocLoop(void)
 		// live encoder angle at the instant the user presses Start. The
 		// commissioning UI documents this as ""Forced = 0 rad"", so keep the test
 		// locked to that electrical frame.
-		control_theta = -90.0f + globalcontrolthetatune;
+		control_theta = GetIdSquareLockedControlTheta();
 	}
 	else if (IdSquareTuning.Enable != 0u)
 	{
@@ -2798,8 +2825,7 @@ static void RunFocLoop(void)
 	}
 	else
 	{
-		control_theta = WrapAngle(
-			control_theta + ((DEFAULT_RUNTIME_FOC_FRAME_DEG * PI) / 180.0f));
+		control_theta = GetRuntimeFocControlTheta();
 		switch (gFocElectricalAngleTestMode)
 		{
 			case ID_SQUARE_ANGLE_TEST_PLUS_90:
@@ -3084,7 +3110,7 @@ static void RunMotorAutoTuneLoop(void)
 {
 	MotorAutoTuneInputs_t inputs;
 	MotorAutoTuneOutputs_t outputs;
-	float electrical_theta = Parameter.fTheta;
+	float electrical_theta = GetAutoTuneControlTheta();
 	float voltage_limit;
 	float pole_pairs;
 

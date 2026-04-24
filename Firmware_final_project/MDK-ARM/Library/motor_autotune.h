@@ -48,6 +48,7 @@ typedef struct
 	float rs_current_low_a;
 	float rs_current_high_a;
 	float ls_step_voltage_v;
+	float ls_frequency_hz;
 	float flux_frequency_hz;
 	float flux_voltage_v;
 	float current_bandwidth_hz;
@@ -124,6 +125,7 @@ typedef struct
 	float tuned_speed_kp;
 	float tuned_speed_ki;
 	float tuned_position_kp;
+	float tuned_position_ki;
 
 	float rs_low_v_sum;
 	float rs_low_i_sum;
@@ -136,8 +138,13 @@ typedef struct
 	float ls_final_current_a;
 	float ls_current_slope_a_per_s;
 	float ls_step_voltage_applied_v;
+	float ls_excitation_frequency_hz;
+	float ls_current_sq_sum;
+	float ls_current_peak_a;
+	uint32_t ls_measure_samples;
 
 	float flux_voltage_sq_sum;
+	float flux_current_sq_sum;
 	float flux_speed_rpm_sum;
 	uint32_t flux_samples;
 

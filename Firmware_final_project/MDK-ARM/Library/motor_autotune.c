@@ -9,6 +9,7 @@
 #define MOTOR_AUTOTUNE_MIN_OC_THRESHOLD_A       0.1f
 #define MOTOR_AUTOTUNE_MIN_RS_CURRENT_A         0.05f
 #define MOTOR_AUTOTUNE_MIN_STEP_VOLTAGE_V       0.25f
+#define MOTOR_AUTOTUNE_MIN_LS_FREQUENCY_HZ      10.0f
 #define MOTOR_AUTOTUNE_MIN_FLUX_FREQUENCY_HZ    1.0f
 #define MOTOR_AUTOTUNE_MIN_FLUX_VOLTAGE_V       1.0f
 
@@ -17,8 +18,9 @@
 #define MOTOR_AUTOTUNE_RS_PROGRESS              30u
 
 #define MOTOR_AUTOTUNE_LS_PREPARE_S             0.10f
-#define MOTOR_AUTOTUNE_LS_CAPTURE_S             0.020f
-#define MOTOR_AUTOTUNE_LS_MIN_DELTA_CURRENT_A   0.03f
+#define MOTOR_AUTOTUNE_LS_SETTLE_CYCLES         5.0f
+#define MOTOR_AUTOTUNE_LS_MEASURE_CYCLES        6.0f
+#define MOTOR_AUTOTUNE_LS_MIN_CURRENT_PEAK_A    0.03f
 #define MOTOR_AUTOTUNE_LS_PROGRESS              60u
 
 #define MOTOR_AUTOTUNE_PP_TEST_TIMEOUT_S        5.0f
@@ -35,6 +37,7 @@
 #define MOTOR_AUTOTUNE_DEFAULT_RS_LOW_A         0.20f
 #define MOTOR_AUTOTUNE_DEFAULT_RS_HIGH_A        0.45f
 #define MOTOR_AUTOTUNE_DEFAULT_LS_STEP_V        2.0f
+#define MOTOR_AUTOTUNE_DEFAULT_LS_FREQ_HZ       200.0f
 #define MOTOR_AUTOTUNE_DEFAULT_FLUX_FREQ_HZ     15.0f
 #define MOTOR_AUTOTUNE_DEFAULT_FLUX_VOLT_V      6.0f
 #define MOTOR_AUTOTUNE_DEFAULT_CURRENT_BW_HZ    200.0f
@@ -246,6 +249,8 @@ static void MotorAutoTune_Finish(MotorAutoTune_t *handle, const MotorAutoTuneInp
 	float rotor_inertia;
 	float pole_pairs;
 	float torque_constant;
+	float encoder_resolution_counts;
+	float position_output_scale;
 
 	if (handle == 0)
 	{
@@ -279,7 +284,18 @@ static void MotorAutoTune_Finish(MotorAutoTune_t *handle, const MotorAutoTuneInp
 	torque_constant = 1.5f * pole_pairs * MotorAutoTune_Clamp(handle->measured_Flux, 1.0e-5f, 10.0f);
 	handle->tuned_speed_kp = (rotor_inertia * speed_bw_rad_s) / torque_constant;
 	handle->tuned_speed_ki = handle->tuned_speed_kp * (speed_bw_rad_s * 0.25f);
-	handle->tuned_position_kp = position_bw_rad_s;
+
+	encoder_resolution_counts = (inputs != 0) ? inputs->encoder_resolution_counts : 0.0f;
+	encoder_resolution_counts = MotorAutoTune_Clamp(
+		encoder_resolution_counts,
+		1.0f,
+		16777216.0f);
+	/* Position PI works on encoder counts and outputs RPM. Scale the requested
+	   bandwidth into count-based gains so Apply Estimated Gains matches the
+	   runtime position PI controller instead of the legacy P-only path. */
+	position_output_scale = 60.0f / encoder_resolution_counts;
+	handle->tuned_position_kp = position_output_scale * (2.0f * position_bw_rad_s);
+	handle->tuned_position_ki = position_output_scale * (position_bw_rad_s * position_bw_rad_s);
 
 	handle->progress_percent = 100u;
 	handle->state = MOTOR_AUTOTUNE_STATE_DONE;
@@ -420,26 +436,35 @@ static void MotorAutoTune_ProcessLs(
 	MotorAutoTuneOutputs_t *outputs)
 {
 	uint32_t prepare_ticks;
-	uint32_t capture_ticks;
-	uint32_t first_window;
-	uint32_t last_window;
-	float delta_i;
-	float delta_t;
-	float average_current;
-	float effective_voltage;
+	uint32_t settle_ticks;
+	uint32_t measure_ticks;
+	uint32_t total_ticks;
+	float frequency_hz;
+	float omega;
+	float voltage_peak_v;
+	float elapsed_s;
+	float commanded_vd;
+	float sample_marker;
+	float current_sample_a;
+	float current_rms_a;
+	float current_peak_a;
+	float impedance_mag_ohm;
+	float reactive_term_sq;
 
 	prepare_ticks = MotorAutoTune_SecondsToTicks(handle, MOTOR_AUTOTUNE_LS_PREPARE_S);
-	capture_ticks = MotorAutoTune_SecondsToTicks(handle, MOTOR_AUTOTUNE_LS_CAPTURE_S);
-	first_window = (capture_ticks / 5u);
-	if (first_window < 3u)
-	{
-		first_window = 3u;
-	}
-	last_window = capture_ticks / 4u;
-	if (last_window < 4u)
-	{
-		last_window = 4u;
-	}
+	frequency_hz = MotorAutoTune_Clamp(
+		handle->config.ls_frequency_hz,
+		MOTOR_AUTOTUNE_MIN_LS_FREQUENCY_HZ,
+		1000.0f);
+	voltage_peak_v = MotorAutoTune_Abs(handle->config.ls_step_voltage_v);
+	settle_ticks = MotorAutoTune_SecondsToTicks(
+		handle,
+		MOTOR_AUTOTUNE_LS_SETTLE_CYCLES / frequency_hz);
+	measure_ticks = MotorAutoTune_SecondsToTicks(
+		handle,
+		MOTOR_AUTOTUNE_LS_MEASURE_CYCLES / frequency_hz);
+	total_ticks = settle_ticks + measure_ticks;
+	omega = 2.0f * PI * frequency_hz;
 
 	switch (handle->substep)
 	{
@@ -449,7 +474,7 @@ static void MotorAutoTune_ProcessLs(
 				MotorAutoTune_PrepareChart(
 					handle,
 					MOTOR_AUTOTUNE_CHART_LS,
-					prepare_ticks + capture_ticks);
+					prepare_ticks + total_ticks);
 			}
 			outputs->mode = MOTOR_AUTOTUNE_OUTPUT_CURRENT_LOOP;
 			outputs->id_ref_a = 0.0f;
@@ -460,74 +485,72 @@ static void MotorAutoTune_ProcessLs(
 			if (++handle->counter >= prepare_ticks)
 			{
 				handle->counter = 0u;
+				handle->ls_step_voltage_applied_v = voltage_peak_v;
+				handle->ls_excitation_frequency_hz = frequency_hz;
+				handle->ls_current_sq_sum = 0.0f;
+				handle->ls_current_peak_a = 0.0f;
+				handle->ls_measure_samples = 0u;
+				handle->ls_initial_current_a = 0.0f;
+				handle->ls_final_current_a = 0.0f;
+				handle->ls_current_slope_a_per_s = 0.0f;
 				handle->substep = 1u;
 			}
 			break;
 
 		case 1u:
 			outputs->mode = MOTOR_AUTOTUNE_OUTPUT_DIRECT_D_VOLTAGE;
-			outputs->vd_voltage_v = handle->config.ls_step_voltage_v;
+			elapsed_s = ((float)handle->counter) * handle->dt_s;
+			commanded_vd = voltage_peak_v * sinf(omega * elapsed_s);
+			outputs->vd_voltage_v = commanded_vd;
 			outputs->vq_voltage_v = 0.0f;
 			outputs->isolate_q_axis = 1u;
-			handle->ls_step_voltage_applied_v = handle->config.ls_step_voltage_v;
-			MotorAutoTune_PushChart(handle, inputs->id_current_a, handle->config.ls_step_voltage_v, 0.0f);
-			if (++handle->counter >= capture_ticks)
+			sample_marker = (handle->counter >= settle_ticks) ? 1.0f : 0.0f;
+			MotorAutoTune_PushChart(handle, inputs->id_current_a, commanded_vd, sample_marker);
+
+			if (handle->counter >= settle_ticks)
 			{
-				uint16_t index;
-				float initial_sum = 0.0f;
-				float final_sum = 0.0f;
-				float initial_count = 0.0f;
-				float final_count = 0.0f;
-				uint16_t final_start = 0u;
+				current_sample_a = inputs->id_current_a;
+				handle->ls_current_sq_sum += current_sample_a * current_sample_a;
+				current_sample_a = MotorAutoTune_Abs(current_sample_a);
+				if (current_sample_a > handle->ls_current_peak_a)
+				{
+					handle->ls_current_peak_a = current_sample_a;
+				}
+				handle->ls_measure_samples++;
+			}
 
-				if (handle->chart_length < 6u)
+			if (++handle->counter >= total_ticks)
+			{
+				if (handle->ls_measure_samples < 4u)
 				{
 					MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 					return;
 				}
 
-				if (handle->chart_length > last_window)
-				{
-					final_start = (uint16_t)(handle->chart_length - last_window);
-				}
+				current_rms_a = sqrtf(handle->ls_current_sq_sum / (float)handle->ls_measure_samples);
+				current_peak_a = current_rms_a * sqrtf(2.0f);
+				handle->ls_initial_current_a = current_rms_a;
+				handle->ls_final_current_a = current_peak_a;
+				handle->ls_current_slope_a_per_s = handle->ls_current_peak_a;
 
-				for (index = 0u; index < handle->chart_length; index++)
-				{
-					if (index < first_window)
-					{
-						initial_sum += handle->chart_primary[index];
-						initial_count += 1.0f;
-					}
-					if (index >= final_start)
-					{
-						final_sum += handle->chart_primary[index];
-						final_count += 1.0f;
-					}
-				}
-
-				handle->ls_initial_current_a = initial_sum / MotorAutoTune_Clamp(initial_count, 1.0f, 1000.0f);
-				handle->ls_final_current_a = final_sum / MotorAutoTune_Clamp(final_count, 1.0f, 1000.0f);
-				delta_i = handle->ls_final_current_a - handle->ls_initial_current_a;
-				delta_t = ((float)capture_ticks) * handle->dt_s;
-
-				if ((delta_t <= 0.0f) || (MotorAutoTune_Abs(delta_i) < MOTOR_AUTOTUNE_LS_MIN_DELTA_CURRENT_A))
+				if (current_peak_a < MOTOR_AUTOTUNE_LS_MIN_CURRENT_PEAK_A)
 				{
 					MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 					return;
 				}
 
-				handle->ls_current_slope_a_per_s = delta_i / delta_t;
-				average_current = 0.5f * (handle->ls_initial_current_a + handle->ls_final_current_a);
-				effective_voltage = handle->ls_step_voltage_applied_v - (handle->measured_Rs * average_current);
-				if (MotorAutoTune_Abs(handle->ls_current_slope_a_per_s) > 1.0e-6f)
+				impedance_mag_ohm = voltage_peak_v / current_peak_a;
+				reactive_term_sq =
+					(impedance_mag_ohm * impedance_mag_ohm) -
+					(handle->measured_Rs * handle->measured_Rs);
+
+				if ((omega <= 0.0f) || (reactive_term_sq <= 0.0f))
 				{
-					handle->measured_Ls = MotorAutoTune_Abs(effective_voltage / handle->ls_current_slope_a_per_s);
-				}
-				else
-				{
-					handle->measured_Ls = 0.0f;
+					MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
+					return;
 				}
 
+				handle->measured_Ls = sqrtf(reactive_term_sq) / omega;
 				if ((handle->measured_Ls <= 0.0f) || (handle->measured_Ls > 10.0f))
 				{
 					MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
@@ -634,6 +657,7 @@ static void MotorAutoTune_ProcessFlux(
 				handle->counter = 0u;
 				handle->substep = 2u;
 				handle->flux_voltage_sq_sum = 0.0f;
+				handle->flux_current_sq_sum = 0.0f;
 				handle->flux_speed_rpm_sum = 0.0f;
 				handle->flux_samples = 0u;
 			}
@@ -653,9 +677,13 @@ static void MotorAutoTune_ProcessFlux(
 		case 3u:
 		{
 			float phase_rms_sq;
+			float phase_current_rms_sq;
 			float average_rpm;
 			float electrical_omega_rad_s;
 			float phase_rms;
+			float phase_current_rms;
+			float resistive_drop_rms;
+			float compensated_phase_rms_sq;
 
 			outputs->mode = MOTOR_AUTOTUNE_OUTPUT_OPEN_LOOP_VF;
 			outputs->vf_frequency_hz = handle->config.flux_frequency_hz;
@@ -665,7 +693,12 @@ static void MotorAutoTune_ProcessFlux(
 				(inputs->phase_voltage_u_v * inputs->phase_voltage_u_v) +
 				(inputs->phase_voltage_v_v * inputs->phase_voltage_v_v) +
 				(inputs->phase_voltage_w_v * inputs->phase_voltage_w_v)) / 3.0f;
+			phase_current_rms_sq = (
+				(inputs->phase_u_a * inputs->phase_u_a) +
+				(inputs->phase_v_a * inputs->phase_v_a) +
+				(inputs->phase_w_a * inputs->phase_w_a)) / 3.0f;
 			handle->flux_voltage_sq_sum += phase_rms_sq;
+			handle->flux_current_sq_sum += phase_current_rms_sq;
 			handle->flux_speed_rpm_sum += MotorAutoTune_Abs(inputs->mechanical_speed_rpm);
 			handle->flux_samples++;
 
@@ -688,6 +721,17 @@ static void MotorAutoTune_ProcessFlux(
 			}
 
 			phase_rms = sqrtf(handle->flux_voltage_sq_sum / (float)handle->flux_samples);
+			phase_current_rms = sqrtf(handle->flux_current_sq_sum / (float)handle->flux_samples);
+			resistive_drop_rms = phase_current_rms * MotorAutoTune_Clamp(handle->measured_Rs, 0.0f, 1000.0f);
+			compensated_phase_rms_sq = (phase_rms * phase_rms) - (resistive_drop_rms * resistive_drop_rms);
+			/* Best-effort Rs compensation for back-EMF estimation. If the computed
+			   correction becomes non-physical because voltage is model-derived
+			   from PWM or the operating point is too slow/noisy, fall back to the
+			   original terminal-voltage estimate instead of aborting the flow. */
+			if (compensated_phase_rms_sq > (phase_rms * phase_rms * 0.05f))
+			{
+				phase_rms = sqrtf(compensated_phase_rms_sq);
+			}
 			electrical_omega_rad_s = 2.0f * PI * average_rpm * handle->measured_PolePairs / 60.0f;
 			if (electrical_omega_rad_s <= 1.0e-6f)
 			{
@@ -717,6 +761,7 @@ void MotorAutoTune_SetDefaultConfig(MotorAutoTuneConfig_t *config)
 	config->rs_current_low_a = MOTOR_AUTOTUNE_DEFAULT_RS_LOW_A;
 	config->rs_current_high_a = MOTOR_AUTOTUNE_DEFAULT_RS_HIGH_A;
 	config->ls_step_voltage_v = MOTOR_AUTOTUNE_DEFAULT_LS_STEP_V;
+	config->ls_frequency_hz = MOTOR_AUTOTUNE_DEFAULT_LS_FREQ_HZ;
 	config->flux_frequency_hz = MOTOR_AUTOTUNE_DEFAULT_FLUX_FREQ_HZ;
 	config->flux_voltage_v = MOTOR_AUTOTUNE_DEFAULT_FLUX_VOLT_V;
 	config->current_bandwidth_hz = MOTOR_AUTOTUNE_DEFAULT_CURRENT_BW_HZ;
@@ -745,6 +790,7 @@ uint8_t MotorAutoTune_Start(
 	float overcurrent_threshold_a)
 {
 	MotorAutoTuneConfig_t local_config;
+	float ls_frequency_max_hz = 1000.0f;
 
 	if (handle == 0)
 	{
@@ -760,6 +806,22 @@ uint8_t MotorAutoTune_Start(
 	local_config.rs_current_low_a = MotorAutoTune_Clamp(local_config.rs_current_low_a, MOTOR_AUTOTUNE_MIN_RS_CURRENT_A, 10.0f);
 	local_config.rs_current_high_a = MotorAutoTune_Clamp(local_config.rs_current_high_a, local_config.rs_current_low_a + 0.05f, 20.0f);
 	local_config.ls_step_voltage_v = MotorAutoTune_Clamp(local_config.ls_step_voltage_v, MOTOR_AUTOTUNE_MIN_STEP_VOLTAGE_V, 40.0f);
+	if (loop_frequency_hz > MOTOR_AUTOTUNE_MIN_LOOP_HZ)
+	{
+		float dynamic_max_hz = loop_frequency_hz * 0.10f;
+		if (dynamic_max_hz < ls_frequency_max_hz)
+		{
+			ls_frequency_max_hz = dynamic_max_hz;
+		}
+	}
+	if (ls_frequency_max_hz < MOTOR_AUTOTUNE_MIN_LS_FREQUENCY_HZ)
+	{
+		ls_frequency_max_hz = MOTOR_AUTOTUNE_MIN_LS_FREQUENCY_HZ;
+	}
+	local_config.ls_frequency_hz = MotorAutoTune_Clamp(
+		local_config.ls_frequency_hz,
+		MOTOR_AUTOTUNE_MIN_LS_FREQUENCY_HZ,
+		ls_frequency_max_hz);
 	local_config.flux_frequency_hz = MotorAutoTune_Clamp(local_config.flux_frequency_hz, MOTOR_AUTOTUNE_MIN_FLUX_FREQUENCY_HZ, 200.0f);
 	local_config.flux_voltage_v = MotorAutoTune_Clamp(local_config.flux_voltage_v, MOTOR_AUTOTUNE_MIN_FLUX_VOLTAGE_V, 40.0f);
 	local_config.current_bandwidth_hz = MotorAutoTune_Clamp(local_config.current_bandwidth_hz, 1.0f, 2000.0f);
@@ -916,7 +978,7 @@ uint8_t MotorAutoTune_ApplyEstimatedParameters(
 	{
 		return 0u;
 	}
-	if ((driver_parameter_count <= POSITION_P_GAIN) || (motor_parameter_count <= MOTOR_CURRENT_I_GAIN))
+	if ((driver_parameter_count <= POSITION_I_GAIN) || (motor_parameter_count <= MOTOR_CURRENT_I_GAIN))
 	{
 		return 0u;
 	}
@@ -931,6 +993,7 @@ uint8_t MotorAutoTune_ApplyEstimatedParameters(
 	driver_parameters[SPEED_P_GAIN] = handle->tuned_speed_kp;
 	driver_parameters[SPEED_I_GAIN] = handle->tuned_speed_ki;
 	driver_parameters[POSITION_P_GAIN] = handle->tuned_position_kp;
+	driver_parameters[POSITION_I_GAIN] = handle->tuned_position_ki;
 
 	return 1u;
 }

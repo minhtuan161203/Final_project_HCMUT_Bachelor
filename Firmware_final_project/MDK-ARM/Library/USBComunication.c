@@ -494,6 +494,8 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	offset = (uint8_t)(offset + sizeof(uint16_t));
 	memcpy(&USB_Comunicate->TransmitData[offset], &calibration_status, sizeof(uint8_t));
 	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_position_ki, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
 
 	SendData(CMD_MONITOR_DATA, offset, USB_Comunicate->TransmitData);
 	USB_Comunicate->ReadMotionMonitorData = 0u;
@@ -976,7 +978,8 @@ static void USB_StartServoSequence(uint8_t allow_auto_encoder_alignment)
 	if ((allow_auto_encoder_alignment != 0u) &&
 		(IdSquareTuning.Enable == 0u) &&
 		(gEncoderAlignmentRequested == 0u) &&
-		(gEncoderAlignmentPolicy == ENCODER_ALIGNMENT_POLICY_POWER_ON))
+		(gEncoderAlignmentPolicy == ENCODER_ALIGNMENT_POLICY_POWER_ON) &&
+		(gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE))
 	{
 		PrepareEncoderAlignment(1u, gRunMode);
 	}
@@ -1417,9 +1420,29 @@ static uint8_t USB_HandleAutoTuneStart(USB_Comunication_t *USB_Comunicate, const
 	{
 		return USB_COMM_FAIL;
 	}
+	if ((gEncoderAlignmentPolicy != ENCODER_ALIGNMENT_POLICY_POWER_ON) &&
+		(gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE))
+	{
+		return USB_COMM_FAIL;
+	}
+
+	StopFocDiagnosticModes();
+	gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
 
 	MotorAutoTune_SetDefaultConfig(&config);
-	if (payload_length >= 32u)
+	if (payload_length >= 36u)
+	{
+		memcpy(&config.rs_current_low_a, &payload[0], sizeof(float));
+		memcpy(&config.rs_current_high_a, &payload[4], sizeof(float));
+		memcpy(&config.ls_step_voltage_v, &payload[8], sizeof(float));
+		memcpy(&config.ls_frequency_hz, &payload[12], sizeof(float));
+		memcpy(&config.flux_frequency_hz, &payload[16], sizeof(float));
+		memcpy(&config.flux_voltage_v, &payload[20], sizeof(float));
+		memcpy(&config.current_bandwidth_hz, &payload[24], sizeof(float));
+		memcpy(&config.speed_bandwidth_hz, &payload[28], sizeof(float));
+		memcpy(&config.position_bandwidth_hz, &payload[32], sizeof(float));
+	}
+	else if (payload_length >= 32u)
 	{
 		memcpy(&config.rs_current_low_a, &payload[0], sizeof(float));
 		memcpy(&config.rs_current_high_a, &payload[4], sizeof(float));
