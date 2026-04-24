@@ -417,6 +417,358 @@ Do la ly do firmware cuoi cung khong chi "chay duoc", ma con co the giai thich d
 - no dua tren quy uoc chieu nao
 - va tai sao cac quyet dinh debug lai dan toi cau truc hien tai
 
+## Phan cap nhat moi cho luan van: Auto-Tune sau khi FOC da duoc xac minh
+
+Phan nay tong hop nhung cap nhat moi nhat lien quan den `Motor Auto-Tune`, theo huong de co the dung doc va tra loi cau hoi hoi dong.
+
+### 1. Nguyen tac trung tam: Auto-Tune phai ke thua khung D/Q da duoc xac minh
+
+Sau qua trinh debug FOC, mot ket luan rat ro la:
+
+- offset goc dien khong duoc cong tru tuy y
+- dau cua theta va quy uoc chieu quay phai duoc khoa ro rang
+- truc D dung trong `Id tuning` phai la truc D dung trong runtime FOC
+
+Tu ket luan do, cap nhat quan trong cua firmware la:
+
+- `Auto-Tune` khong con dung mot theta "song rieng"
+- ma dung cung he quy chieu da duoc validate boi FOC va `Id Square`
+
+Y nghia vat ly:
+
+- khi firmware ra lenh `Vd`, dien ap phai nam tren truc tu thong that su
+- neu dung sai frame, `Vd` se ro sang `Vq`
+- rotor se nhich nhe, giat, hoac tao cam giac "lech truc"
+
+Noi cach khac:
+
+> Bieu hien "bom Vd ma motor quay nhe" khong nhat thiet la loi co khi hay lech truc co khi; no thuong la dau hieu cua sai khung tham chieu dien.
+
+### 2. Cap nhat firmware de Rs/Ls Auto-Tune dung cung truc D cua `Id tuning`
+
+Trong firmware, mot nhom helper theta da duoc bo sung de thong nhat:
+
+- runtime FOC
+- `Id Square` tuning
+- `Motor Auto-Tune`
+
+Muc tieu cua thay doi nay la:
+
+- khong de `Auto-Tune` lay truc tiep mot goc thuan "raw theta" chua qua quy uoc frame
+- ma buoc phai di qua cung logic da duoc chung minh la dung trong current-loop tuning
+
+Y nghia ve mat commissioning:
+
+- neu `Id tuning` da chay dep, `Auto-Tune` Rs/Ls phai co hanh vi cung quy uoc
+- nguoi dung khong phai hoc lai mot he truc moi cho rieng autotune
+
+Day la diem rat quan trong de tra loi hoi dong:
+
+> Chung toi khong viet mot bo autotune doc lap voi FOC, ma chu dong bat no tai su dung chinh he tham chieu da duoc xac minh trong qua trinh current-loop commissioning.
+
+### 3. Lam sach flow start cua Auto-Tune de tranh do tren trang thai "ban"
+
+Gan day flow start cua auto-tune da duoc lam sach them o 3 diem:
+
+1. Neu encoder alignment da `DONE`, khong ep chay lai alignment mot cach vo nghia.
+2. Truoc khi start autotune, tat cac FOC diagnostic mode cu.
+3. Neu policy yeu cau alignment ma chua alignment xong, khong cho autotune chay.
+
+Y nghia he thong:
+
+- current-loop test cu khong con "day bo" vao autotune
+- state commissioning tro nen co gate logic ro rang
+- ket qua do khong bi lam ban boi cac mode debug con sot lai
+
+Ve mat bao ve luan van, co the tom tat:
+
+> Do tin cay cua autotune khong chi phu thuoc cong thuc do, ma con phu thuoc viec he thong co duoc dua ve mot trang thai khoi dong sach va hop le hay khong.
+
+### 4. Flow auto-tune hien tai thuc su dang do nhung gi
+
+State machine auto-tune hien tai co 4 stage chinh:
+
+```text
+RS -> LS -> FLUX -> DONE
+```
+
+Trong do, stage `FLUX` dang dong thoi lam 2 viec:
+
+- xac dinh `Pole Pairs`
+- xac dinh `Flux` va `Ke`
+
+Chi tiet tung stage:
+
+#### 4.1 Do `Rs`
+
+Firmware dat 2 muc `Id` khac nhau khi rotor bi khoa co khi, sau do lay:
+
+```text
+Rs ~= DeltaVd / DeltaId
+```
+
+Y nghia:
+
+- rotor dung yen nen thanh phan suc dien dong nguoc va dong hoc co khi khong chi phoi
+- bai toan tro thanh do dien tro truc D gan nhu thuan tro trong cua so trung binh
+
+#### 4.2 Do `Ls`
+
+Firmware kich truc D bang dien ap sin / kich thich dieu hoa o rotor khoa, sau do dung bien do dong thu duoc de suy ra:
+
+```text
+|Z| = V_peak / I_peak
+Ls = sqrt(|Z|^2 - Rs^2) / omega
+```
+
+Y nghia:
+
+- giu rotor khoa de loai bo anh huong co khi
+- tach phan phan ung cam khang cua truc D
+
+#### 4.3 Do `Pole Pairs`
+
+Day la diem rat "thuc chien" va de bao ve:
+
+- firmware cho chay open-loop V/F o tan so thap
+- dem tong so vong dien da ra lenh
+- so voi tong so vong co khi do encoder ghi nhan
+
+Cong thuc:
+
+```text
+PolePairs ~= commanded_electrical_turns / mechanical_turns
+```
+
+Sau do firmware lam tron:
+
+```text
+PolePairs = floor(ratio + 0.5)
+```
+
+Gia tri cua cach lam nay:
+
+- khong can tra datasheet
+- nhan dang duoc truc tiep tren he dang lap dat that
+- co kha nang chiu sai so nho do encoder va truot
+
+#### 4.4 Do `Flux` va `Ke`
+
+Sau khi da co `Pole Pairs`, firmware cho motor quay open-loop V/F va lay RMS cua dien ap pha cung toc do trung binh:
+
+```text
+Flux ~= V_peak / omega_e
+Ke = Flux
+```
+
+Gan day thuat toan da duoc bo sung bu Rs compensation theo huong "best effort":
+
+```text
+E_rms ~= sqrt(V_rms^2 - (I_rms * Rs)^2)
+```
+
+neu gia tri bu nay tro nen khong vat ly hoac qua nhieu thi firmware fallback ve cach cu.
+
+Y nghia cua quyet dinh nay:
+
+- co cai thien do dung cho dong co co `Rs` khong nho
+- nhung khong pha flow `Rs/Ls` da dang hoat dong on
+
+Day la diem rat hop de tra loi hoi dong:
+
+> Chung toi uu tien mot bo uoc luong co fallback an toan. Nghia la co cai tien mo hinh, nhung khong de mot phep bu nhay cam lam vo mot flow commissioning da duoc xac minh.
+
+### 5. Ghi chu quan trong ve dead-time va nguon dien ap dung trong flux estimation
+
+Can noi ro mot diem de tranh hoi dong bat loi:
+
+- neu `phase_voltage_u_v` la dien ap do thuc bang phan cung thi ket qua flux rat tot
+- nhung neu no la dien ap suy tu duty PWM / model trong firmware thi se con anh huong dead-time
+
+He qua:
+
+- o toc do thap, sai so dead-time co the chiem ty le lon
+- flux/Ke co the bi lech neu motor chua quay du muot
+
+Vi vay GUI da duoc bo sung note:
+
+- thu truoc `Flux Voltage` va `Flux Frequency` bang `open-loop V/F`
+- chi tune khi motor quay em va khong giut
+
+Day la ly do practical rat de bao ve:
+
+> Chung toi khong coi thuat toan estimation la mot hop den. Chung toi buoc nguoi van hanh xac minh che do kich thich open-loop co hop le truoc khi tin vao ket qua flux/Ke.
+
+### 6. Cap nhat synthesis gain: Current PI, Speed PI, Position PI
+
+Sau khi do xong thong so dien, firmware sinh gain theo cac tang.
+
+#### 6.1 Current PI
+
+Cong thuc dang dung:
+
+```text
+Kp_current = Ls * w_bw
+Ki_current = Rs * w_bw
+```
+
+Y nghia:
+
+- day la cach dat bang thong dung cho mo hinh `L di/dt + R i = v`
+- bandwidth do nguoi dung dat tren GUI
+
+#### 6.2 Speed PI
+
+Firmware dang dung:
+
+```text
+Kt = 1.5 * PolePairs * Flux
+Kp_speed = J * w_bw / Kt
+Ki_speed = Kp_speed * (w_bw * 0.25)
+```
+
+Nhung can noi rat ro:
+
+- `J` hien tai KHONG duoc auto-estimate trong bo autotune
+- firmware doc `J` tu `MotorParameter[MOTOR_ROTOR_INERTIA]`
+- neu khong co gia tri hop le thi fallback ve mot gia tri bao thu
+
+Nghia la speed PI hien tai la:
+
+- "bandwidth-based synthesis"
+- dua tren `Kt` do duoc
+- nhung van phu thuoc `J` co san
+
+No KHONG phai la mot bo nhan dang day du `J, B` theo mo hinh co hoc.
+
+#### 6.3 Position PI
+
+Position controller da duoc doi tu P sang PI, va auto-tune cung da duoc cap nhat de match runtime do.
+
+Firmware dang scale gain position theo encoder counts va dau ra RPM:
+
+```text
+scale = 60 / encoder_resolution_counts
+Kp_pos = scale * (2 * w_bw)
+Ki_pos = scale * (w_bw^2)
+```
+
+Y nghia:
+
+- khong con tinh gain theo kieu P-only cu
+- gain duoc doi sang dung he don vi cua runtime position loop
+
+Day la ly do tai sao can hien ca `Position Ki` tren GUI.
+
+### 7. `Kt` da co, nhung `J` va `B` thi chua
+
+Mot cau tra loi trung thuc va dung chuyen mon la:
+
+- firmware hien da suy ra duoc `Kt`
+- nhung chua co stage co hoc rieng de estimate `J`
+- va chua co tham so hay storage rieng cho he so ma sat nhot `B`
+
+Noi cach khac:
+
+- `Kt` la "electro-mechanical bridge" da co
+- `J` va `B` la "mechanical identification" thi chua duoc trien khai day du
+
+Neu hoi dong hoi "vay co dung la autotune co hoc chua?", co the tra loi:
+
+> Chua hoan chinh. Ban hien tai da auto-tune thong so dien va sinh gain outer-loop dua tren bandwidth. Rieng phan nhan dang co hoc `J/B` van la huong mo rong tiep theo, khong nen tuyen bo qua kha nang hien co.
+
+### 8. Huong mo rong de uoc luong `J` va `B` dung nhu mo hinh luan van
+
+Neu noi theo huong future work, co the trinh bay ro:
+
+1. Them mot stage `MECH` sau `FLUX`.
+2. Phat profile toc do doi xung, vi du sin hoac profile tang-giam sao cho:
+   - `omega(t1) = omega(t2) = 0`
+   - giam anh huong cua `T_L` va mot phan anh huong cua `B`
+3. Tinh:
+
+```text
+J = integral(Te * domega/dt dt) / integral((domega/dt)^2 dt)
+```
+
+trong truong hop profile doi xung da duoc thiet ke dung.
+
+4. Sau khi co `J`, estimate `B` bang cach fit:
+
+```text
+Te = J * alpha + B * omega + T_L
+```
+
+bang least-squares tren du lieu da loc, thay vi dua nhieu vao dao ham bac cao rat nhay nhieu.
+
+Day la cach tra loi rat "ky su":
+
+> Cong thuc trong luan van la huong dung. Tuy nhien, de dua vao firmware that, can bo sung excitation profile, filtering, va batch estimation on dinh. Hien tai chung toi chu dong chua bat `J/B` vi uu tien do tin cay cua flow commissioning dien truoc.
+
+### 9. Van de scale tham so dong co va y nghia don vi noi bo
+
+Mot diem de gay nham khi debug la firmware khong luu moi tham so theo don vi SI truc tiep.
+
+Hien tai:
+
+- `MOTOR_RESISTANCE` luu theo `mOhm`
+- `MOTOR_INDUCTANCE` luu theo `uH`
+- `MOTOR_BACK_EMF_CONSTANT` luu theo `mili unit`
+
+Nen khi `Apply Estimated Parameters`:
+
+```text
+Rs_store = Rs_ohm * 1000
+Ls_store = Ls_henry * 1e6
+Ke_store = Ke_SI * 1000
+```
+
+Neu khong ghi ro don vi tren GUI, nguoi dung rat de doc nham.
+
+Bai hoc o day la:
+
+> Mot thuat toan dung van co the bi danh gia la sai neu giao dien hien don vi khong ro rang.
+
+### 10. Nhung cau hoi hoi dong co the hoi, va cach tra loi ngan gon
+
+#### Cau hoi 1: Tai sao bom `Vd` ma motor lai quay nhe?
+
+Tra loi ngan:
+
+- do `Vd` da bi ro sang `Vq` vi sai electrical frame
+- khong nhat thiet la lech truc co khi
+- sau cap nhat, autotune da dung cung truc D da duoc xac minh boi `Id tuning`
+
+#### Cau hoi 2: Tai sao phai bo sung `Position Ki`?
+
+Tra loi ngan:
+
+- vi position runtime da la PI
+- autotune ma chi apply/hien `Kp` thi khong con match bo dieu khien that
+
+#### Cau hoi 3: Hien tai co phai da estimate `J/B` chua?
+
+Tra loi ngan:
+
+- chua
+- hien tai chi sinh speed PI dua tren `J` co san va `Kt` do duoc
+- `B` chua duoc nhan dang rieng
+
+#### Cau hoi 4: Tai sao khong lam `J/B` ngay?
+
+Tra loi ngan:
+
+- vi estimation co hoc nhay voi nhieu va phu thuoc manh vao profile kich thich
+- uu tien truoc la on dinh current-loop frame va thong so dien
+- sau do moi den nhan dang co hoc
+
+#### Cau hoi 5: Tai sao phai thu open-loop V/F truoc khi tune flux?
+
+Tra loi ngan:
+
+- vi neu che do kich thich open-loop da khong em, ket qua flux/Ke se khong dang tin
+- day la buoc xac minh practical truoc khi tin vao cong thuc estimation
+
 ## Luu y quan trong truoc khi doc
 
 Workspace hien tai co day du header cho cac module control:

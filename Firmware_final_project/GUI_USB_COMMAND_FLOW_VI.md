@@ -224,6 +224,171 @@ Do do, trong bo tai lieu luan van, file GUI khong nen chi dung lai o muc "comman
 
 > Chung ta da xay dung mot he FOC co kha nang thao tac, quan sat, va debug co he thong, thay vi chi don thuan lam cho motor quay.
 
+## Phan cap nhat moi cho luan van: GUI va USB flow sau khi bo Auto-Tune duoc lam chat hon
+
+Phan nay tong hop nhung gi da duoc cap nhat gan day o GUI va protocol de phuc vu commissioning, giai thich theo goc nhin de bao ve luan van.
+
+### 7. Vi sao Auto-Tune khong duoc "song rieng" voi FOC
+
+Mot bai hoc rat quan trong trong qua trinh debug la:
+
+- neu `Id tuning` da xac minh duoc truc D dung
+- thi `Auto-Tune` phai dung cung he quy chieu dien do
+
+Neu khong:
+
+- khi firmware nghi rang dang bom `Vd`
+- thuc te mot phan dien ap se ro sang `Vq`
+- rotor se nhich nhe hoac giat
+- nguoi test se cam giac nhu "lech truc", trong khi van de that la khac he quy chieu
+
+Do do, ve mat methodology, GUI va firmware khong the coi `FOC runtime`, `Id Square`, va `Auto-Tune` la 3 the gioi tach roi.
+Chung phai dung chung mot quy uoc:
+
+- electrical angle nao da duoc xac minh
+- offset nao da duoc khoa
+- chieu nao la chieu duong cua torque
+
+Noi cach khac:
+
+> Auto-Tune chi dang tin cay khi no ke thua dung nhung gi current-loop FOC da xac minh truoc do.
+
+### 8. Luong commissioning moi giua GUI, Alignment va Auto-Tune
+
+Sau cap nhat, commissioning flow can duoc mo ta nhu sau:
+
+1. Servo ON va hoan tat current sensor calib.
+2. Neu encoder can alignment, thuc hien alignment ro rang nhu mot buoc commissioning.
+3. Xac nhan FOC / `Id tuning` da dung truc D.
+4. Chi sau do moi chay `Motor Auto-Tune`.
+
+Y nghia cua thay doi nay:
+
+- GUI khong con coi `Auto-Tune` la mot nut "bam la chay"
+- ma coi no la mot buoc commissioning co dieu kien tien quyet
+
+Ve phia firmware, flow da duoc lam sach hon:
+
+- neu encoder alignment da `DONE`, khong can ep align lai vo ly khi servo on
+- truoc khi start auto-tune, can tat cac diagnostic mode FOC cu
+- neu policy yeu cau alignment thu cong ma alignment chua xong, khong cho auto-tune chay
+
+Ve mat bao ve luan van, co the dien dat ngan gon:
+
+> He thong da duoc nang cap tu mot flow "gui lenh don le" thanh mot flow commissioning co gate dieu kien, nham tranh do nham tren mot moc goc dien chua hop le.
+
+### 9. Cap nhat protocol: bo sung `Position Ki` ma van giu backward compatibility
+
+Mot van de thuc te cua commissioning la:
+
+- sau khi position controller duoc doi tu P sang PI
+- GUI van chi hien `Kp`
+- dan den nguoi dung nghi rang firmware chua cap nhat `Ki`
+
+De sua dung bai toan nay, protocol monitor da duoc cap nhat theo cach an toan:
+
+- khong pha bo cuc cac field cu
+- khong doi offset cua nhung field GUI cu dang dung
+- bo sung `autotune_position_ki` o cuoi payload monitor
+
+Y nghia kien truc cua cach lam nay:
+
+- GUI moi doc duoc them `Ki`
+- GUI cu neu chua cap nhat van it co nguy co parse sai cac field cu
+
+Day la mot bai hoc protocol rat hay de dua vao luan van:
+
+> Khi mo rong packet monitor, can uu tien giu on dinh giao dien nhi phan da ton tai; field moi nen duoc them o cuoi neu co the.
+
+### 10. Cap nhat panel GUI de ket qua auto-tune "doc duoc" va "giai thich duoc"
+
+Sau cap nhat, tab `Motor Auto-Tune` cua GUI khong chi hien cac thong so dien co ban, ma con hien duoc y nghia dieu khien cua chung.
+
+Nhung diem moi quan trong:
+
+- `Position PI` hien ca `Kp` va `Ki`
+- `Kt` duoc tinh va hien truc tiep tren GUI
+- bang `Motor Parameters` hien ro don vi de tranh doc nham
+
+Cong thuc hien tren GUI:
+
+```text
+Kt = 1.5 * PolePairs * Flux
+```
+
+Y nghia:
+
+- `Flux` la thong so dien tu
+- `PolePairs` noi lien he co va he quy chieu dien
+- `Kt` bien thanh cau noi tu "dong Iq" sang "moment"
+
+Ve don vi, GUI hien ro:
+
+- `MOTOR_RESISTANCE [mOhm]`
+- `MOTOR_INDUCTANCE [uH]`
+- `MOTOR_BACK_EMF_CONSTANT [mV/(rad/s)]`
+
+Y nghia cua thay doi don vi nay rat lon:
+
+- no tranh tinh huong nguoi dung nhin `12830` roi tuong la `12.83 kOhm`
+- trong khi firmware thuc chat dang luu `12.83 ohm` duoi dang `12830 mOhm`
+
+Noi cach khac:
+
+> GUI khong chi hien so, ma phai hien dung ngu nghia vat ly cua so do.
+
+### 11. Note moi tren GUI: phai thu flux setting bang open-loop V/F truoc
+
+Mot update nho nhung gia tri cao cho commissioning la phan note moi trong tab `Motor Auto-Tune`.
+
+No nhac nguoi dung:
+
+- truoc khi bam auto-tune flux
+- hay lay chinh `Flux Voltage` va `Flux Frequency`
+- chay thu o `open-loop V/F`
+- chi nen tiep tuc neu dong co quay em, khong giut, khong rung bat thuong
+
+Y nghia methodology:
+
+- day la mot buoc "sanity check"
+- giup dam bao bai do flux/Ke duoc thuc hien trong mot che do kich thich hop le
+- giam kha nang nguoi dung dua vao auto-tune mot cap `V/f` qua thap, qua cao, hoac khong phu hop voi dong co
+
+Co the tra loi truoc hoi dong theo cach sau:
+
+> Chung toi khong de nguoi dung do flux trong tinh trang kich thich tuy y. GUI bat buoc nguoi van hanh tu kiem chung cap `V/f` bang open-loop truoc, nham tang do tin cay cua thong so nhan dang.
+
+### 12. Nhung diem hoi dong co the hoi ve GUI/USB, va cach tra loi ngan gon
+
+#### Cau hoi 1: Tai sao phai dua `Position Ki` len monitor, trong khi firmware da apply roi?
+
+Tra loi ngan:
+
+- vi commissioning can "quan sat duoc" nhung gi da duoc "ghi xuong"
+- neu khong hien `Ki`, nguoi dung khong biet firmware dang o PI that hay van la P-only
+
+#### Cau hoi 2: Tai sao them field moi o cuoi packet?
+
+Tra loi ngan:
+
+- de tranh pha parser cu
+- giu backward compatibility voi layout da ton tai
+
+#### Cau hoi 3: Tai sao phai hien `Kt` tren GUI?
+
+Tra loi ngan:
+
+- `Kt` la thong so ma nguoi lam servo rat de lien he voi truc giac co khi
+- no cho biet `Iq` se doi ra moment ra sao
+- no giup cau noi giua ket qua auto-tune dien va y nghia co hoc
+
+#### Cau hoi 4: Tai sao GUI phai nhac thu open-loop V/F truoc khi tune flux?
+
+Tra loi ngan:
+
+- vi flux estimation rat phu thuoc vao che do kich thich open-loop
+- neu motor quay khong em ngay tu dau, thong so nhan dang se khong dang tin
+
 ---
 
 ## 1. Tong quan luong
