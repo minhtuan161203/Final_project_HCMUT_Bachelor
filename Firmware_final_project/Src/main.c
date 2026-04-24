@@ -250,6 +250,7 @@ static void RunFocRotatingThetaTestLoop(void);
 static void RunFocRotatingThetaVoltageTestLoop(void);
 static void RunFocCurrentFeedbackMapTestLoop(void);
 static void LoadDiagnosticCurrentPiGains(void);
+static void LoadAutoTuneCurrentPiGains(uint8_t reset_state);
 static uint8_t LoadParametersFromFlashIfAvailable(void);
 static const char *GetCurrentFeedbackMapCaseName(uint8_t index);
 static void ServiceFpgaStartup(void);
@@ -317,6 +318,8 @@ uint8_t SaveParametersToFlash(void);
 #define CURRENT_FEEDBACK_MAP_TEST_CASE_TIME_S 1.0f
 #define FOC_DIAGNOSTIC_CURRENT_KP_SCALE 1.0f
 #define FOC_DIAGNOSTIC_CURRENT_KI_SCALE 1.0f
+#define AUTOTUNE_CURRENT_KP_DEFAULT 3.0f
+#define AUTOTUNE_CURRENT_KI_DEFAULT 5.0f
 #define SPEED_ESTIMATE_LPF_ALPHA 0.1f
 #define DEBUG_AVG_SAMPLES 256u
 #define MOTOR_PARAMETER_COUNT 32u
@@ -576,6 +579,26 @@ static void LoadDiagnosticCurrentPiGains(void)
 	gIqPi.fKp = diag_kp;
 	gIdPi.fKi = diag_ki;
 	gIqPi.fKi = diag_ki;
+}
+
+static void LoadAutoTuneCurrentPiGains(uint8_t reset_state)
+{
+	gIdPi.fKp = AUTOTUNE_CURRENT_KP_DEFAULT;
+	gIqPi.fKp = AUTOTUNE_CURRENT_KP_DEFAULT;
+	gIdPi.fKi = AUTOTUNE_CURRENT_KI_DEFAULT;
+	gIqPi.fKi = AUTOTUNE_CURRENT_KI_DEFAULT;
+
+	if (reset_state != 0u)
+	{
+		gIdPi.m_rst(&gIdPi);
+		gIqPi.m_rst(&gIqPi);
+		gIdPi.fIn = 0.0f;
+		gIqPi.fIn = 0.0f;
+		gIdPi.fOut = 0.0f;
+		gIqPi.fOut = 0.0f;
+		gIdPi.fPout = 0.0f;
+		gIqPi.fPout = 0.0f;
+	}
 }
 
 static uint8_t ShouldHoldCurrentLoopAtZero(float current_ref, float measured_current)
@@ -3111,6 +3134,7 @@ static void RunMotorAutoTuneLoop(void)
 	MotorAutoTuneInputs_t inputs;
 	MotorAutoTuneOutputs_t outputs;
 	float electrical_theta = GetAutoTuneControlTheta();
+	uint8_t autotune_fresh_start = 0u;
 	float voltage_limit;
 	float pole_pairs;
 
@@ -3121,6 +3145,10 @@ static void RunMotorAutoTuneLoop(void)
 	}
 
 	UpdateMeasuredCurrentsForTheta(electrical_theta, Parameter.fIabc[0], Parameter.fIabc[1]);
+	autotune_fresh_start = ((gMotorAutoTune.progress_percent <= 1u) &&
+		(gMotorAutoTune.counter == 0u) &&
+		(gMotorAutoTune.substep == 0u)) ? 1u : 0u;
+	LoadAutoTuneCurrentPiGains(autotune_fresh_start);
 
 	memset(&inputs, 0, sizeof(inputs));
 	inputs.id_current_a = Parameter.fIdq[0];

@@ -103,6 +103,8 @@ POSITION_TEST_PROFILE_LONG = "long_distance"
 POSITION_TEST_PROFILE_BACKLASH = "back_and_forth"
 POSITION_TEST_SETTLE_SPEED_TOLERANCE_RPM = 3.0
 POSITION_TARGET_COUNT_GUI_LIMIT = 1.0e15
+DEFAULT_CTUNING_CURRENT_KP = 5.0
+DEFAULT_CTUNING_CURRENT_KI = 10.0
 
 TREND_SERIES_META = {
     "phase_u": {"label": "Iu", "unit": "A", "color": "#1f77b4"},
@@ -3403,13 +3405,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_kp_spin.setRange(0.0, 10000.0)
         self.ctuning_kp_spin.setDecimals(5)
         self.ctuning_kp_spin.setSingleStep(0.001)
-        self.ctuning_kp_spin.setValue(5.0)
+        self.ctuning_kp_spin.setValue(DEFAULT_CTUNING_CURRENT_KP)
 
         self.ctuning_ki_spin = QtWidgets.QDoubleSpinBox()
         self.ctuning_ki_spin.setRange(0.0, 10000.0)
         self.ctuning_ki_spin.setDecimals(5)
         self.ctuning_ki_spin.setSingleStep(0.001)
-        self.ctuning_ki_spin.setValue(10.0)
+        self.ctuning_ki_spin.setValue(DEFAULT_CTUNING_CURRENT_KI)
 
         self.ctuning_theta_mode_value_label = QtWidgets.QLabel("Forced = 0 rad")
         self.ctuning_theta_mode_value_label.setToolTip(
@@ -7188,10 +7190,100 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_chart_state_label.setText("Stopped")
 
     def _apply_motor_autotune_estimates(self) -> None:
+        synced_from_snapshot = self._sync_parameter_tables_from_autotune_snapshot()
+        if synced_from_snapshot:
+            self._set_parameter_status(
+                "Prepared auto-tune gains in GUI. Applying them to firmware...",
+                "info",
+            )
         self._enqueue_command(
             Command.CMD_UPDATE_TUNING_GAIN,
             b"",
             "Apply Auto-Tune Estimates",
+        )
+
+    def _sync_parameter_tables_from_autotune_snapshot(self) -> bool:
+        snapshot = self._latest_monitor_snapshot
+        if snapshot is None:
+            return False
+
+        if hasattr(self, "motor_table"):
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAMETER_NAMES.index("MOTOR_RESISTANCE"),
+                float(snapshot.autotune_measured_rs) * 1000.0,
+            )
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAMETER_NAMES.index("MOTOR_INDUCTANCE"),
+                float(snapshot.autotune_measured_ls) * 1.0e6,
+            )
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAMETER_NAMES.index("MOTOR_BACK_EMF_CONSTANT"),
+                float(snapshot.autotune_measured_ke) * 1000.0,
+            )
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAMETER_NAMES.index("MOTOR_NUMBER_POLE_PAIRS"),
+                float(snapshot.autotune_measured_pole_pairs),
+            )
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAM_CURRENT_P_GAIN,
+                float(snapshot.autotune_current_kp),
+            )
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAM_CURRENT_I_GAIN,
+                float(snapshot.autotune_current_ki),
+            )
+
+        if hasattr(self, "driver_table"):
+            self._set_table_float_value(
+                self.driver_table,
+                DRIVER_PARAM_SPEED_P_GAIN,
+                float(snapshot.autotune_speed_kp),
+            )
+            self._set_table_float_value(
+                self.driver_table,
+                DRIVER_PARAM_SPEED_I_GAIN,
+                float(snapshot.autotune_speed_ki),
+            )
+            self._set_table_float_value(
+                self.driver_table,
+                DRIVER_PARAM_POSITION_P_GAIN,
+                float(snapshot.autotune_position_kp),
+            )
+            self._set_table_float_value(
+                self.driver_table,
+                DRIVER_PARAM_POSITION_I_GAIN,
+                float(snapshot.autotune_position_ki),
+            )
+            self._load_foc_controls_from_driver_table()
+
+        return True
+
+    def _queue_autotune_parameter_resync(self) -> None:
+        self._set_parameter_status(
+            "Auto-tune estimates applied. Syncing driver and motor parameters...",
+            "info",
+        )
+        self._enqueue_command(
+            Command.CMD_READ_DRIVER,
+            bytes([len(DRIVER_PARAMETER_NAMES)]),
+            "Read Driver Parameters After Auto-Tune Apply",
+        )
+        self._enqueue_command(
+            Command.CMD_READ_MOTOR,
+            bytes([len(MOTOR_PARAMETER_NAMES)]),
+            "Read Motor Parameters After Auto-Tune Apply",
+        )
+        self._enqueue_command(
+            Command.CMD_UPDATE_MONITOR,
+            b"",
+            "Monitor Poll After Auto-Tune Apply",
+            quiet=True,
         )
 
     def _handle_autotune_chunk(self, chunk: AutoTuneChunk) -> None:
@@ -7610,6 +7702,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if frame.code == ACK_NOERROR:
             sent_command = self._last_sent.command if self._last_sent is not None else None
             echoed_command = frame.payload[0] if frame.payload else None
+            should_resync_after_autotune_apply = (
+                sent_command == Command.CMD_UPDATE_TUNING_GAIN
+            )
             if not (self._last_sent and self._last_sent.quiet):
                 if echoed_command is None:
                     self._append_log("ACK received")
@@ -7619,9 +7714,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._set_parameter_status("Driver parameter write acknowledged.", "ok")
             elif sent_command == Command.CMD_WRITE_MOTOR:
                 self._set_parameter_status("Motor parameter write chunk acknowledged.", "ok")
+            elif should_resync_after_autotune_apply:
+                self._set_parameter_status(
+                    "Auto-tune estimates acknowledged. Refreshing GUI and parameter tables...",
+                    "info",
+                )
             self._ack_timer.stop()
             self._awaiting_ack = False
             self._last_sent = None
+            if should_resync_after_autotune_apply:
+                synced_from_snapshot = self._sync_parameter_tables_from_autotune_snapshot()
+                if synced_from_snapshot:
+                    self.statusBar().showMessage(
+                        "Auto-tune gains applied and pushed into FOC/Test controls. Reading back parameters...",
+                        5000,
+                    )
+                else:
+                    self.statusBar().showMessage(
+                        "Auto-tune gains applied. Reading back parameters from firmware...",
+                        5000,
+                    )
+                self._queue_autotune_parameter_resync()
             self._try_send_next()
             return
 
@@ -7642,6 +7755,13 @@ class MainWindow(QtWidgets.QMainWindow):
             elif sent_command == Command.CMD_WRITE_MOTOR:
                 self._set_parameter_status("Motor parameter write failed.", "error")
                 QtWidgets.QMessageBox.warning(self, "Write Motor Parameters", "Motor parameter write failed.")
+            elif sent_command == Command.CMD_UPDATE_TUNING_GAIN:
+                self._set_parameter_status("Auto-tune estimate apply failed.", "error")
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Apply Auto-Tune Estimates",
+                    "Firmware did not accept the auto-tune parameters.",
+                )
             self._ack_timer.stop()
             self._awaiting_ack = False
             self._last_sent = None
