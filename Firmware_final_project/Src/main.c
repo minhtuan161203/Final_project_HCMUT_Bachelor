@@ -1247,7 +1247,9 @@ uint8_t StartUerrorCharacterization(
 		return 0u;
 	}
 
-	gUerrorCharacterization.theta_lock_rad = Parameter.fTheta;
+	/* Use the same validated control frame as runtime FOC so open-loop Uerror
+	   survey injects along the compensated d-axis rather than raw encoder theta. */
+	gUerrorCharacterization.theta_lock_rad = GetRuntimeFocControlTheta();
 	voltage_limit_cap = GetOpenLoopVoltageLimit();
 	if (voltage_limit_cap > UERROR_MAX_VOLTAGE_LIMIT_V)
 	{
