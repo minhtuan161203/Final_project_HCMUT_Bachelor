@@ -83,6 +83,7 @@ extern float RecordTable1[TRACE_DATA_LENGTH * 4u];
 extern TraceData Trace_Data;
 extern IdSquareTuning_t IdSquareTuning;
 extern MotorAutoTune_t gMotorAutoTune;
+extern UerrorCharacterization_t gUerrorCharacterization;
 extern void ApplyControlTimingMode(uint8_t mode);
 extern volatile uint8_t gEncoderAlignmentPolicy;
 extern volatile uint8_t gEncoderAlignmentStatus;
@@ -94,6 +95,7 @@ extern volatile uint8_t gEncoderAlignmentResumeRunMode;
 extern volatile uint8_t gServoArmOnlyRequested;
 extern volatile uint8_t gFocElectricalAngleTestMode;
 extern volatile uint8_t gFocCurrentUvSwapTest;
+extern volatile uint8_t gFocSpeedRampBypass;
 extern volatile uint8_t gFocCurrentPolarityInvertTest;
 extern volatile uint8_t gFocRotatingThetaTestRunning;
 extern volatile uint8_t gFocRotatingThetaVoltageTestRunning;
@@ -103,6 +105,17 @@ extern uint8_t SaveParametersToFlash(void);
 extern uint8_t StartFocRotatingThetaTest(void);
 extern uint8_t StartFocRotatingThetaVoltageTest(void);
 extern uint8_t StartFocCurrentFeedbackMapTest(void);
+extern uint8_t StartUerrorCharacterization(
+	float rs_actual_ohm,
+	float sweep_current_max_a,
+	float fine_zone_a,
+	float fine_step_a,
+	float coarse_step_a,
+	uint16_t settle_ticks,
+	uint16_t average_samples);
+extern void StopUerrorCharacterization(void);
+extern uint8_t ApplyUerrorLut(const float *lut_norm_values, uint8_t point_count, float current_max_a);
+extern uint8_t SaveUerrorLutToFlash(void);
 extern void StopFocDiagnosticModes(void);
 
 static void USB_StartServoSequence(uint8_t allow_auto_encoder_alignment);
@@ -111,6 +124,9 @@ static void USB_HandleFocControlStop(void);
 static uint8_t USB_HandleStartFocRotatingThetaTest(void);
 static uint8_t USB_HandleStartFocRotatingThetaVoltageTest(void);
 static uint8_t USB_HandleStartFocCurrentFeedbackMapTest(void);
+static uint8_t USB_HandleUerrorCharacterizationStart(USB_Comunication_t *USB_Comunicate, const uint8_t *payload, uint8_t payload_length);
+static void USB_HandleUerrorCharacterizationStop(USB_Comunication_t *USB_Comunicate);
+static uint8_t USB_HandleApplyUerrorLut(const uint8_t *payload, uint8_t payload_length);
 static uint8_t USB_GetCurrentCalibrationStatus(void);
 static void USB_ResetTraceCaptureState(void);
 
@@ -686,6 +702,81 @@ static void USB_SendAutoTuneChunk(USB_Comunication_t *USB_Comunicate)
 	}
 }
 
+static void USB_SendUerrorChunk(USB_Comunication_t *USB_Comunicate)
+{
+	uint16_t start_index;
+	uint16_t remaining;
+	uint8_t valid_samples;
+	uint8_t offset = 0u;
+	uint16_t sample_index;
+
+	if ((gUerrorCharacterization.transfer_active == 0u) ||
+		(gUerrorCharacterization.point_count == 0u))
+	{
+		USB_Comunicate->ReadUerrorData = 0u;
+		return;
+	}
+
+	start_index = gUerrorCharacterization.send_index;
+	if (start_index >= gUerrorCharacterization.point_index)
+	{
+		if ((gUerrorCharacterization.active == 0u) &&
+			((gUerrorCharacterization.state == UERROR_STATE_DONE) ||
+			 (gUerrorCharacterization.state == UERROR_STATE_ABORTED) ||
+			 (gUerrorCharacterization.state == UERROR_STATE_ERROR)))
+		{
+			gUerrorCharacterization.transfer_active = 0u;
+			USB_Comunicate->ReadUerrorData = 0u;
+		}
+		return;
+	}
+
+	remaining = (uint16_t)(gUerrorCharacterization.point_index - start_index);
+	valid_samples = (remaining > UERROR_SWEEP_CHUNK_SAMPLES) ?
+		UERROR_SWEEP_CHUNK_SAMPLES : (uint8_t)remaining;
+
+	memcpy(&USB_Comunicate->TransmitData[offset], &gUerrorCharacterization.state, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &start_index, sizeof(uint16_t));
+	offset = (uint8_t)(offset + sizeof(uint16_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &valid_samples, sizeof(uint8_t));
+	offset = (uint8_t)(offset + sizeof(uint8_t));
+	memcpy(&USB_Comunicate->TransmitData[offset], &gUerrorCharacterization.point_count, sizeof(uint16_t));
+	offset = (uint8_t)(offset + sizeof(uint16_t));
+
+	for (sample_index = 0u; sample_index < UERROR_SWEEP_CHUNK_SAMPLES; sample_index++)
+	{
+		uint16_t data_index = (uint16_t)(start_index + sample_index);
+		float values[10] = {0.0f};
+
+		if (data_index < gUerrorCharacterization.point_index)
+		{
+			values[0] = gUerrorCharacterization.target_current_a[data_index];
+			values[1] = gUerrorCharacterization.measured_id_a[data_index];
+			values[2] = gUerrorCharacterization.phase_u_a[data_index];
+			values[3] = gUerrorCharacterization.phase_v_a[data_index];
+			values[4] = gUerrorCharacterization.phase_w_a[data_index];
+			values[5] = gUerrorCharacterization.phase_voltage_u_v[data_index];
+			values[6] = gUerrorCharacterization.phase_voltage_v_v[data_index];
+			values[7] = gUerrorCharacterization.phase_voltage_w_v[data_index];
+			values[8] = gUerrorCharacterization.bus_voltage_v[data_index];
+			values[9] = gUerrorCharacterization.temperature_c[data_index];
+		}
+
+		memcpy(&USB_Comunicate->TransmitData[offset], values, sizeof(values));
+		offset = (uint8_t)(offset + sizeof(values));
+	}
+
+	SendData(CMD_UERROR_DATA, offset, USB_Comunicate->TransmitData);
+	gUerrorCharacterization.send_index = (uint16_t)(gUerrorCharacterization.send_index + valid_samples);
+	if ((gUerrorCharacterization.active == 0u) &&
+		(gUerrorCharacterization.send_index >= gUerrorCharacterization.point_index))
+	{
+		gUerrorCharacterization.transfer_active = 0u;
+		USB_Comunicate->ReadUerrorData = 0u;
+	}
+}
+
 static void USB_SendParameterChunk(UpdateDataCmd_e code, const float *source, USB_Comunication_t *USB_Comunicate)
 {
 	uint8_t index;
@@ -1012,6 +1103,8 @@ static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_lengt
 {
 	float speed_limit_rpm = DriverParameter[MAXIMUM_SPEED];
 	float motor_max_speed_rpm = MotorParameter[MOTOR_MAXIMUM_SPEED];
+	float accel_time_ms = DriverParameter[ACCELERATION_TIME];
+	float decel_time_ms = DriverParameter[DECELERATION_TIME];
 	uint8_t foc_angle_test_mode = ID_SQUARE_ANGLE_TEST_NONE;
 	uint8_t foc_current_uv_swap_test = 0u;
 
@@ -1025,6 +1118,7 @@ static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_lengt
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	ResetControl_V_over_F();
 	gServoArmOnlyRequested = 0u;
+	gFocSpeedRampBypass = 0u;
 
 	if (payload_length >= sizeof(float))
 	{
@@ -1037,8 +1131,17 @@ static void USB_HandleSpeedCommand(const uint8_t *payload, uint8_t payload_lengt
 	}
 	if (payload_length >= 20u)
 	{
-		memcpy(&DriverParameter[ACCELERATION_TIME], &payload[12], sizeof(float));
-		memcpy(&DriverParameter[DECELERATION_TIME], &payload[16], sizeof(float));
+		memcpy(&accel_time_ms, &payload[12], sizeof(float));
+		memcpy(&decel_time_ms, &payload[16], sizeof(float));
+		if ((accel_time_ms < 0.0f) || (decel_time_ms < 0.0f))
+		{
+			gFocSpeedRampBypass = 1u;
+		}
+		else
+		{
+			DriverParameter[ACCELERATION_TIME] = accel_time_ms;
+			DriverParameter[DECELERATION_TIME] = decel_time_ms;
+		}
 	}
 	if (payload_length >= 24u)
 	{
@@ -1116,6 +1219,7 @@ static void USB_HandlePositionCommand(const uint8_t *payload, uint8_t payload_le
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
+	gFocSpeedRampBypass = 0u;
 	DriverParameter[CONTROL_MODE] = (float)POSITION_CONTROL_MODE;
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
@@ -1240,6 +1344,9 @@ static void USB_HandleFocControlStop(void)
 	gFocRotatingThetaTestRunning = 0u;
 	gFocRotatingThetaVoltageTestRunning = 0u;
 	gFocCurrentFeedbackMapTestRunning = 0u;
+	gFocSpeedRampBypass = 0u;
+	StopUerrorCharacterization();
+	USB_Comm.ReadUerrorData = 0u;
 	ResetControl_V_over_F();
 	IdSquareTuning.Enable = 0u;
 	IdSquareTuning.fPhase = 0.0f;
@@ -1527,6 +1634,118 @@ static void USB_HandleAutoTuneContinue(void)
 	MotorAutoTune_ClearDataReady(&gMotorAutoTune);
 }
 
+static uint8_t USB_HandleUerrorCharacterizationStart(
+	USB_Comunication_t *USB_Comunicate,
+	const uint8_t *payload,
+	uint8_t payload_length)
+{
+	float rs_actual_ohm;
+	float sweep_current_max_a;
+	float fine_zone_a;
+	float fine_step_a;
+	float coarse_step_a;
+	float settle_ms;
+	float average_samples_f;
+	uint16_t settle_ticks;
+	uint16_t average_samples;
+
+	if (payload_length < 28u)
+	{
+		return USB_COMM_FAIL;
+	}
+
+	memcpy(&rs_actual_ohm, &payload[0], sizeof(float));
+	memcpy(&sweep_current_max_a, &payload[4], sizeof(float));
+	memcpy(&fine_zone_a, &payload[8], sizeof(float));
+	memcpy(&fine_step_a, &payload[12], sizeof(float));
+	memcpy(&coarse_step_a, &payload[16], sizeof(float));
+	memcpy(&settle_ms, &payload[20], sizeof(float));
+	memcpy(&average_samples_f, &payload[24], sizeof(float));
+
+	if (gEffectiveCurrentLoopFrequencyHz <= 1.0f)
+	{
+		return USB_COMM_FAIL;
+	}
+
+	settle_ticks = (uint16_t)((settle_ms * 0.001f * gEffectiveCurrentLoopFrequencyHz) + 0.5f);
+	average_samples = (uint16_t)(average_samples_f + 0.5f);
+
+	StopFocDiagnosticModes();
+	MotorAutoTune_Stop(&gMotorAutoTune);
+	if (Trace_Data.Enable != 0u)
+	{
+		USB_ResetTraceCaptureState();
+	}
+
+	if (StartUerrorCharacterization(
+		rs_actual_ohm,
+		sweep_current_max_a,
+		fine_zone_a,
+		fine_step_a,
+		coarse_step_a,
+		settle_ticks,
+		average_samples) == 0u)
+	{
+		return USB_COMM_FAIL;
+	}
+
+	gRunMode = RUN_MODE_UERROR_CHARACTERIZATION;
+	gTargetSpeedRpm = 0.0f;
+	gTargetPositionCounts = Parameter.fPosition;
+	gCommandedSpeedRpm = 0.0f;
+	gTracePosError = 0.0f;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	IdSquareTuning.Enable = 0u;
+	IdSquareTuning.AlignmentDone = 0u;
+	IdSquareTuning.AlignmentCounter = 0u;
+	IdSquareTuning.fPhase = 0.0f;
+	IdSquareTuning.fVoltageLimitApplied = 0.0f;
+	gServoArmOnlyRequested = 0u;
+	ResetControl_V_over_F();
+	USB_Comunicate->ReadUerrorData = 1u;
+	USB_StartServoSequence(1u);
+	return USB_COMM_OK;
+}
+
+static void USB_HandleUerrorCharacterizationStop(USB_Comunication_t *USB_Comunicate)
+{
+	StopUerrorCharacterization();
+	USB_Comunicate->ReadUerrorData = (gUerrorCharacterization.point_index > gUerrorCharacterization.send_index) ? 1u : 0u;
+}
+
+static uint8_t USB_HandleApplyUerrorLut(const uint8_t *payload, uint8_t payload_length)
+{
+	uint8_t point_count;
+	float current_max_a;
+	uint8_t required_length;
+	float lut_values[UERROR_LUT_MAX_POINTS];
+	uint8_t index;
+
+	if (payload_length < 5u)
+	{
+		return USB_COMM_FAIL;
+	}
+
+	point_count = payload[0];
+	memcpy(&current_max_a, &payload[1], sizeof(float));
+	required_length = (uint8_t)(1u + sizeof(float) + (point_count * sizeof(float)));
+	if ((point_count < 2u) || (point_count > UERROR_LUT_MAX_POINTS) || (payload_length < required_length))
+	{
+		return USB_COMM_FAIL;
+	}
+
+	for (index = 0u; index < point_count; index++)
+	{
+		memcpy(&lut_values[index], &payload[5u + (index * sizeof(float))], sizeof(float));
+	}
+
+	return (ApplyUerrorLut(lut_values, point_count, current_max_a) != 0u) ?
+		USB_COMM_OK : USB_COMM_FAIL;
+}
+
 static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t command, const uint8_t *payload, uint8_t payload_length)
 {
 	switch (command)
@@ -1688,6 +1907,44 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 
 		case CMD_START_FOC_CURRENT_FEEDBACK_MAP_TEST:
 			if (USB_HandleStartFocCurrentFeedbackMapTest() == USB_COMM_OK)
+			{
+				USB_SendAckPacket(ACK, command, payload, payload_length);
+			}
+			else
+			{
+				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
+			}
+			break;
+
+		case CMD_START_UERROR_CHARACTERIZATION:
+			if (USB_HandleUerrorCharacterizationStart(USB_Comunicate, payload, payload_length) == USB_COMM_OK)
+			{
+				USB_SendAckPacket(ACK, command, payload, payload_length);
+			}
+			else
+			{
+				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
+			}
+			break;
+
+		case CMD_STOP_UERROR_CHARACTERIZATION:
+			USB_SendAckPacket(ACK, command, payload, payload_length);
+			USB_HandleUerrorCharacterizationStop(USB_Comunicate);
+			break;
+
+		case CMD_APPLY_UERROR_LUT:
+			if (USB_HandleApplyUerrorLut(payload, payload_length) == USB_COMM_OK)
+			{
+				USB_SendAckPacket(ACK, command, payload, payload_length);
+			}
+			else
+			{
+				USB_SendAckPacket(ACK_ERROR, command, payload, payload_length);
+			}
+			break;
+
+		case CMD_SAVE_UERROR_LUT_FLASH:
+			if (SaveUerrorLutToFlash() != 0u)
 			{
 				USB_SendAckPacket(ACK, command, payload, payload_length);
 			}
@@ -1886,6 +2143,11 @@ int16_t USB_TransmitData(USB_Comunication_t *USB_Comunicate)
 		(gMotorAutoTune.chart_transfer_active != 0u))
 	{
 		USB_SendAutoTuneChunk(USB_Comunicate);
+	}
+
+	if (USB_Comunicate->ReadUerrorData == 1u)
+	{
+		USB_SendUerrorChunk(USB_Comunicate);
 	}
 
 	if (USB_Comunicate->ReadFocDebugLog == 1u)

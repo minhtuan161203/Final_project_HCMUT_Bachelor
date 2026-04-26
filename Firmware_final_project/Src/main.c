@@ -130,6 +130,7 @@ volatile uint8_t gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
 volatile uint8_t gServoArmOnlyRequested = 0u;
 volatile uint8_t gFocElectricalAngleTestMode = ID_SQUARE_ANGLE_TEST_NONE;
 volatile uint8_t gFocCurrentUvSwapTest = 0u;
+volatile uint8_t gFocSpeedRampBypass = 0u;
 volatile uint8_t gFocCurrentPolarityInvertTest = 0u;
 volatile uint8_t gFpgaEncoderParserConfigured = 0u;
 volatile uint8_t gFpgaDoneLatched = 0u;
@@ -148,6 +149,7 @@ float RecordTable1[TRACE_DATA_LENGTH * 4u];
 TraceData Trace_Data;
 IdSquareTuning_t IdSquareTuning;
 MotorAutoTune_t gMotorAutoTune;
+UerrorCharacterization_t gUerrorCharacterization;
 
 Parameterhandle_t Parameter;
 CurrentSensor_t Current_Sensor;
@@ -224,6 +226,16 @@ static float GetConfiguredPositionVffFilterHz(void);
 static uint8_t GetConfiguredPositionTrackingMode(void);
 static float GetConfiguredSpeedLimitRpm(void);
 static float GetConfiguredSpeedIqLimitA(void);
+static float GetConfiguredMotorInductanceHenry(void);
+static float GetConfiguredFluxLinkageWb(void);
+static float GetConfiguredPolePairsFloat(void);
+static float GetElectricalSpeedRadPerSec(float mechanical_speed_rpm);
+static void ApplyCurrentLoopDecoupling(
+	float *vd_command,
+	float *vq_command,
+	float id_current_a,
+	float iq_current_a,
+	float mechanical_speed_rpm);
 static float ApplySpeedRampLimit(float current_command, float target_command, float max_speed_rpm, float dt_sec);
 static float WrapPositionErrorCounts(float error_counts, float encoder_resolution);
 static float GetPositionControlErrorCounts(float target_position_counts, float actual_position_counts, float encoder_resolution);
@@ -252,8 +264,16 @@ static void RunFocCurrentFeedbackMapTestLoop(void);
 static void LoadDiagnosticCurrentPiGains(void);
 static void LoadAutoTuneCurrentPiGains(uint8_t reset_state);
 static uint8_t LoadParametersFromFlashIfAvailable(void);
+static uint8_t LoadUerrorLutFromFlashIfAvailable(void);
 static const char *GetCurrentFeedbackMapCaseName(uint8_t index);
 static void ServiceFpgaStartup(void);
+static void ResetUerrorCharacterizationRuntime(void);
+static uint16_t BuildUerrorSweepTargets(UerrorCharacterization_t *survey);
+static void ApplyUerrorCompensationToPhaseVoltages(void);
+static float LookupUerrorLutNorm(float phase_current_a);
+static void RunUerrorCharacterizationLoop(void);
+static void AdvanceUerrorSweepPoint(UerrorCharacterization_t *survey);
+static void FinishUerrorCharacterization(uint8_t aborted);
 void ApplyControlTimingMode(uint8_t mode);
 void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode);
 uint8_t StartFocRotatingThetaTest(void);
@@ -261,6 +281,17 @@ uint8_t StartFocRotatingThetaVoltageTest(void);
 uint8_t StartFocCurrentFeedbackMapTest(void);
 void StopFocDiagnosticModes(void);
 uint8_t SaveParametersToFlash(void);
+uint8_t StartUerrorCharacterization(
+	float rs_actual_ohm,
+	float sweep_current_max_a,
+	float fine_zone_a,
+	float fine_step_a,
+	float coarse_step_a,
+	uint16_t settle_ticks,
+	uint16_t average_samples);
+void StopUerrorCharacterization(void);
+uint8_t ApplyUerrorLut(const float *lut_norm_values, uint8_t point_count, float current_max_a);
+uint8_t SaveUerrorLutToFlash(void);
 
 /* USER CODE END PFP */
 
@@ -320,6 +351,18 @@ uint8_t SaveParametersToFlash(void);
 #define FOC_DIAGNOSTIC_CURRENT_KI_SCALE 1.0f
 #define AUTOTUNE_CURRENT_KP_DEFAULT 3.0f
 #define AUTOTUNE_CURRENT_KI_DEFAULT 5.0f
+#define UERROR_FLASH_MAGIC_F 54123.0f
+#define UERROR_FLASH_VERSION_F 1.0f
+#define UERROR_FLASH_WORD_COUNT (4u + UERROR_LUT_MAX_POINTS)
+#define UERROR_MIN_CURRENT_STEP_A 0.01f
+#define UERROR_MIN_AVERAGE_SAMPLES 8u
+#define UERROR_MAX_AVERAGE_SAMPLES 512u
+#define UERROR_MIN_SETTLE_TICKS 8u
+#define UERROR_MAX_SETTLE_TICKS 4096u
+#define UERROR_MIN_SWEEP_CURRENT_A 0.10f
+#define UERROR_MAX_VOLTAGE_LIMIT_V 16.0f
+#define UERROR_MIN_VOLTAGE_LIMIT_V 1.0f
+#define UERROR_VOLTAGE_LIMIT_GAIN 1.8f
 #define SPEED_ESTIMATE_LPF_ALPHA 0.1f
 #define DEBUG_AVG_SAMPLES 256u
 #define MOTOR_PARAMETER_COUNT 32u
@@ -896,6 +939,519 @@ uint8_t SaveParametersToFlash(void)
 	return success;
 }
 
+static void ResetUerrorCharacterizationRuntime(void)
+{
+	gUerrorCharacterization.active = 0u;
+	gUerrorCharacterization.state = UERROR_STATE_IDLE;
+	gUerrorCharacterization.transfer_active = 0u;
+	gUerrorCharacterization.point_count = 0u;
+	gUerrorCharacterization.point_index = 0u;
+	gUerrorCharacterization.send_index = 0u;
+	gUerrorCharacterization.settle_ticks = 0u;
+	gUerrorCharacterization.settle_counter = 0u;
+	gUerrorCharacterization.average_samples = 0u;
+	gUerrorCharacterization.average_counter = 0u;
+	gUerrorCharacterization.rs_actual_ohm = 0.0f;
+	gUerrorCharacterization.sweep_current_max_a = 0.0f;
+	gUerrorCharacterization.fine_zone_a = 0.0f;
+	gUerrorCharacterization.fine_step_a = 0.0f;
+	gUerrorCharacterization.coarse_step_a = 0.0f;
+	gUerrorCharacterization.theta_lock_rad = 0.0f;
+	gUerrorCharacterization.voltage_limit_v = 0.0f;
+	gUerrorCharacterization.accum_measured_id = 0.0f;
+	gUerrorCharacterization.accum_phase_u = 0.0f;
+	gUerrorCharacterization.accum_phase_v = 0.0f;
+	gUerrorCharacterization.accum_phase_w = 0.0f;
+	gUerrorCharacterization.accum_phase_voltage_u = 0.0f;
+	gUerrorCharacterization.accum_phase_voltage_v = 0.0f;
+	gUerrorCharacterization.accum_phase_voltage_w = 0.0f;
+	gUerrorCharacterization.accum_bus_voltage = 0.0f;
+	gUerrorCharacterization.accum_temperature = 0.0f;
+	memset(gUerrorCharacterization.target_current_a, 0, sizeof(gUerrorCharacterization.target_current_a));
+	memset(gUerrorCharacterization.measured_id_a, 0, sizeof(gUerrorCharacterization.measured_id_a));
+	memset(gUerrorCharacterization.phase_u_a, 0, sizeof(gUerrorCharacterization.phase_u_a));
+	memset(gUerrorCharacterization.phase_v_a, 0, sizeof(gUerrorCharacterization.phase_v_a));
+	memset(gUerrorCharacterization.phase_w_a, 0, sizeof(gUerrorCharacterization.phase_w_a));
+	memset(gUerrorCharacterization.phase_voltage_u_v, 0, sizeof(gUerrorCharacterization.phase_voltage_u_v));
+	memset(gUerrorCharacterization.phase_voltage_v_v, 0, sizeof(gUerrorCharacterization.phase_voltage_v_v));
+	memset(gUerrorCharacterization.phase_voltage_w_v, 0, sizeof(gUerrorCharacterization.phase_voltage_w_v));
+	memset(gUerrorCharacterization.bus_voltage_v, 0, sizeof(gUerrorCharacterization.bus_voltage_v));
+	memset(gUerrorCharacterization.temperature_c, 0, sizeof(gUerrorCharacterization.temperature_c));
+}
+
+static uint16_t AppendUerrorTargetPoint(float *targets, uint16_t count, float value)
+{
+	if ((targets == 0) || (count >= UERROR_SWEEP_MAX_POINTS))
+	{
+		return count;
+	}
+	if ((count > 0u) && (fabsf(value - targets[count - 1u]) < (0.25f * UERROR_MIN_CURRENT_STEP_A)))
+	{
+		return count;
+	}
+	targets[count] = value;
+	return (uint16_t)(count + 1u);
+}
+
+static uint16_t BuildUerrorSweepTargets(UerrorCharacterization_t *survey)
+{
+	uint16_t count = 0u;
+	float current_max;
+	float fine_zone;
+	float fine_step;
+	float coarse_step;
+	float current;
+
+	if (survey == 0)
+	{
+		return 0u;
+	}
+
+	current_max = fabsf(survey->sweep_current_max_a);
+	if (current_max < UERROR_MIN_SWEEP_CURRENT_A)
+	{
+		current_max = UERROR_MIN_SWEEP_CURRENT_A;
+	}
+
+	fine_zone = fabsf(survey->fine_zone_a);
+	if (fine_zone > current_max)
+	{
+		fine_zone = current_max;
+	}
+
+	fine_step = fabsf(survey->fine_step_a);
+	if (fine_step < UERROR_MIN_CURRENT_STEP_A)
+	{
+		fine_step = UERROR_MIN_CURRENT_STEP_A;
+	}
+
+	coarse_step = fabsf(survey->coarse_step_a);
+	if (coarse_step < fine_step)
+	{
+		coarse_step = fine_step;
+	}
+
+	current = -current_max;
+	while ((current < (-fine_zone - (0.5f * coarse_step))) && (count < UERROR_SWEEP_MAX_POINTS))
+	{
+		count = AppendUerrorTargetPoint(survey->target_current_a, count, current);
+		current += coarse_step;
+	}
+
+	current = -fine_zone;
+	while ((current <= (fine_zone + (0.5f * fine_step))) && (count < UERROR_SWEEP_MAX_POINTS))
+	{
+		count = AppendUerrorTargetPoint(survey->target_current_a, count, current);
+		current += fine_step;
+	}
+
+	current = fine_zone + coarse_step;
+	while ((current < (current_max - (0.5f * coarse_step))) && (count < UERROR_SWEEP_MAX_POINTS))
+	{
+		count = AppendUerrorTargetPoint(survey->target_current_a, count, current);
+		current += coarse_step;
+	}
+
+	count = AppendUerrorTargetPoint(survey->target_current_a, count, current_max);
+	survey->sweep_current_max_a = current_max;
+	survey->fine_zone_a = fine_zone;
+	survey->fine_step_a = fine_step;
+	survey->coarse_step_a = coarse_step;
+	return count;
+}
+
+static void AdvanceUerrorSweepPoint(UerrorCharacterization_t *survey)
+{
+	if (survey == 0)
+	{
+		return;
+	}
+	survey->settle_counter = 0u;
+	survey->average_counter = 0u;
+	survey->accum_measured_id = 0.0f;
+	survey->accum_phase_u = 0.0f;
+	survey->accum_phase_v = 0.0f;
+	survey->accum_phase_w = 0.0f;
+	survey->accum_phase_voltage_u = 0.0f;
+	survey->accum_phase_voltage_v = 0.0f;
+	survey->accum_phase_voltage_w = 0.0f;
+	survey->accum_bus_voltage = 0.0f;
+	survey->accum_temperature = 0.0f;
+	survey->state = UERROR_STATE_SETTLE;
+}
+
+static void FinishUerrorCharacterization(uint8_t aborted)
+{
+	gUerrorCharacterization.active = 0u;
+	gUerrorCharacterization.state = (aborted != 0u) ? UERROR_STATE_ABORTED : UERROR_STATE_DONE;
+	gUerrorCharacterization.transfer_active = 1u;
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gCommandedSpeedRpm = 0.0f;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+	gRunMode = RUN_MODE_FOC;
+	STM_NextState(&StateMachine, STOP);
+}
+
+static uint8_t LoadUerrorLutFromFlashIfAvailable(void)
+{
+	float flash_words[UERROR_FLASH_WORD_COUNT];
+	uint32_t point_count;
+	uint32_t index;
+
+	if (FlashRegionHasData(PAGE_ADDRESS_UERROR_LUT, UERROR_FLASH_WORD_COUNT) == 0u)
+	{
+		return 0u;
+	}
+
+	LoadFloatArrayFromFlash(PAGE_ADDRESS_UERROR_LUT, flash_words, UERROR_FLASH_WORD_COUNT);
+	if ((fabsf(flash_words[0] - UERROR_FLASH_MAGIC_F) > 0.5f) ||
+		(fabsf(flash_words[1] - UERROR_FLASH_VERSION_F) > 0.5f))
+	{
+		return 0u;
+	}
+
+	point_count = (uint32_t)(flash_words[3] + 0.5f);
+	if ((point_count < 2u) || (point_count > UERROR_LUT_MAX_POINTS) || (flash_words[2] <= 0.0f))
+	{
+		return 0u;
+	}
+
+	gUerrorCharacterization.lut_current_max_a = flash_words[2];
+	gUerrorCharacterization.lut_point_count = (uint8_t)point_count;
+	for (index = 0u; index < point_count; index++)
+	{
+		gUerrorCharacterization.lut_norm[index] = flash_words[4u + index];
+	}
+	for (; index < UERROR_LUT_MAX_POINTS; index++)
+	{
+		gUerrorCharacterization.lut_norm[index] = 0.0f;
+	}
+	gUerrorCharacterization.compensation_enabled = 1u;
+	return 1u;
+}
+
+uint8_t SaveUerrorLutToFlash(void)
+{
+	float flash_words[UERROR_FLASH_WORD_COUNT];
+	uint32_t index;
+	uint8_t success;
+
+	if ((gUerrorCharacterization.lut_point_count < 2u) ||
+		(gUerrorCharacterization.lut_current_max_a <= 0.0f))
+	{
+		return 0u;
+	}
+
+	if ((StateMachine.bState == RUN) || (StateMachine.bState == START))
+	{
+		return 0u;
+	}
+
+	memset(flash_words, 0, sizeof(flash_words));
+	flash_words[0] = UERROR_FLASH_MAGIC_F;
+	flash_words[1] = UERROR_FLASH_VERSION_F;
+	flash_words[2] = gUerrorCharacterization.lut_current_max_a;
+	flash_words[3] = (float)gUerrorCharacterization.lut_point_count;
+	for (index = 0u; index < gUerrorCharacterization.lut_point_count; index++)
+	{
+		flash_words[4u + index] = gUerrorCharacterization.lut_norm[index];
+	}
+
+	HAL_FLASH_Unlock();
+	success = FlashWriteFloatArray(PAGE_ADDRESS_UERROR_LUT, flash_words, UERROR_FLASH_WORD_COUNT);
+	HAL_FLASH_Lock();
+	return success;
+}
+
+uint8_t ApplyUerrorLut(const float *lut_norm_values, uint8_t point_count, float current_max_a)
+{
+	uint32_t index;
+
+	if ((lut_norm_values == 0) || (point_count < 2u) || (point_count > UERROR_LUT_MAX_POINTS) ||
+		(current_max_a <= 0.0f))
+	{
+		return 0u;
+	}
+
+	gUerrorCharacterization.lut_current_max_a = current_max_a;
+	gUerrorCharacterization.lut_point_count = point_count;
+	for (index = 0u; index < point_count; index++)
+	{
+		gUerrorCharacterization.lut_norm[index] = lut_norm_values[index];
+	}
+	for (; index < UERROR_LUT_MAX_POINTS; index++)
+	{
+		gUerrorCharacterization.lut_norm[index] = 0.0f;
+	}
+	gUerrorCharacterization.compensation_enabled = 1u;
+	return 1u;
+}
+
+uint8_t StartUerrorCharacterization(
+	float rs_actual_ohm,
+	float sweep_current_max_a,
+	float fine_zone_a,
+	float fine_step_a,
+	float coarse_step_a,
+	uint16_t settle_ticks,
+	uint16_t average_samples)
+{
+	float voltage_limit_cap;
+	float requested_limit_v;
+
+	if ((StateMachine.bState != IDLE) && (StateMachine.bState != STOP))
+	{
+		return 0u;
+	}
+	if ((gEncoderAlignmentPolicy != ENCODER_ALIGNMENT_POLICY_POWER_ON) &&
+		(gEncoderAlignmentStatus != ENCODER_ALIGNMENT_STATUS_DONE))
+	{
+		return 0u;
+	}
+	if ((rs_actual_ohm <= 0.0f) || (sweep_current_max_a <= 0.0f))
+	{
+		return 0u;
+	}
+
+	ResetUerrorCharacterizationRuntime();
+	gUerrorCharacterization.rs_actual_ohm = rs_actual_ohm;
+	gUerrorCharacterization.sweep_current_max_a = sweep_current_max_a;
+	gUerrorCharacterization.fine_zone_a = fine_zone_a;
+	gUerrorCharacterization.fine_step_a = fine_step_a;
+	gUerrorCharacterization.coarse_step_a = coarse_step_a;
+	gUerrorCharacterization.settle_ticks = settle_ticks;
+	if (gUerrorCharacterization.settle_ticks < UERROR_MIN_SETTLE_TICKS)
+	{
+		gUerrorCharacterization.settle_ticks = UERROR_MIN_SETTLE_TICKS;
+	}
+	if (gUerrorCharacterization.settle_ticks > UERROR_MAX_SETTLE_TICKS)
+	{
+		gUerrorCharacterization.settle_ticks = UERROR_MAX_SETTLE_TICKS;
+	}
+	gUerrorCharacterization.average_samples = average_samples;
+	if (gUerrorCharacterization.average_samples < UERROR_MIN_AVERAGE_SAMPLES)
+	{
+		gUerrorCharacterization.average_samples = UERROR_MIN_AVERAGE_SAMPLES;
+	}
+	if (gUerrorCharacterization.average_samples > UERROR_MAX_AVERAGE_SAMPLES)
+	{
+		gUerrorCharacterization.average_samples = UERROR_MAX_AVERAGE_SAMPLES;
+	}
+	gUerrorCharacterization.point_count = BuildUerrorSweepTargets(&gUerrorCharacterization);
+	if (gUerrorCharacterization.point_count < 3u)
+	{
+		ResetUerrorCharacterizationRuntime();
+		return 0u;
+	}
+
+	gUerrorCharacterization.theta_lock_rad = Parameter.fTheta;
+	voltage_limit_cap = GetOpenLoopVoltageLimit();
+	if (voltage_limit_cap > UERROR_MAX_VOLTAGE_LIMIT_V)
+	{
+		voltage_limit_cap = UERROR_MAX_VOLTAGE_LIMIT_V;
+	}
+	requested_limit_v = fabsf(gUerrorCharacterization.rs_actual_ohm) *
+		fabsf(gUerrorCharacterization.sweep_current_max_a) * UERROR_VOLTAGE_LIMIT_GAIN;
+	gUerrorCharacterization.voltage_limit_v = ClampFloat(
+		requested_limit_v,
+		UERROR_MIN_VOLTAGE_LIMIT_V,
+		voltage_limit_cap);
+	gUerrorCharacterization.active = 1u;
+	gUerrorCharacterization.state = UERROR_STATE_SETTLE;
+	gUerrorCharacterization.transfer_active = 1u;
+	gUerrorCharacterization.point_index = 0u;
+	gUerrorCharacterization.send_index = 0u;
+	AdvanceUerrorSweepPoint(&gUerrorCharacterization);
+	return 1u;
+}
+
+void StopUerrorCharacterization(void)
+{
+	if ((gUerrorCharacterization.active == 0u) &&
+		(gUerrorCharacterization.state != UERROR_STATE_SETTLE) &&
+		(gUerrorCharacterization.state != UERROR_STATE_AVERAGE))
+	{
+		return;
+	}
+	FinishUerrorCharacterization(1u);
+}
+
+static float LookupUerrorLutNorm(float phase_current_a)
+{
+	float current_max = gUerrorCharacterization.lut_current_max_a;
+	float position;
+	uint32_t lower_index;
+	float fraction;
+
+	if ((gUerrorCharacterization.compensation_enabled == 0u) ||
+		(gUerrorCharacterization.lut_point_count < 2u) ||
+		(current_max <= 0.0f))
+	{
+		return 0.0f;
+	}
+
+	if (phase_current_a <= -current_max)
+	{
+		return gUerrorCharacterization.lut_norm[0];
+	}
+	if (phase_current_a >= current_max)
+	{
+		return gUerrorCharacterization.lut_norm[gUerrorCharacterization.lut_point_count - 1u];
+	}
+
+	position = ((phase_current_a + current_max) / (2.0f * current_max)) *
+		(float)(gUerrorCharacterization.lut_point_count - 1u);
+	lower_index = (uint32_t)position;
+	if (lower_index >= (uint32_t)(gUerrorCharacterization.lut_point_count - 1u))
+	{
+		return gUerrorCharacterization.lut_norm[gUerrorCharacterization.lut_point_count - 1u];
+	}
+
+	fraction = position - (float)lower_index;
+	return gUerrorCharacterization.lut_norm[lower_index] +
+		((gUerrorCharacterization.lut_norm[lower_index + 1u] -
+		  gUerrorCharacterization.lut_norm[lower_index]) * fraction);
+}
+
+static void ApplyUerrorCompensationToPhaseVoltages(void)
+{
+	float phase_u;
+	float phase_v;
+	float phase_w;
+	float comp_u;
+	float comp_v;
+	float comp_w;
+	float common_mode;
+
+	if ((gRunMode != RUN_MODE_FOC) ||
+		(gUerrorCharacterization.compensation_enabled == 0u) ||
+		(gUerrorCharacterization.lut_point_count < 2u) ||
+		(Parameter.fVdc <= 1.0f))
+	{
+		return;
+	}
+
+	phase_u = Parameter.fIabc[0];
+	phase_v = Parameter.fIabc[1];
+	ApplyPhaseCurrentFeedbackMapping(&phase_u, &phase_v);
+	phase_w = -phase_u - phase_v;
+
+	comp_u = LookupUerrorLutNorm(phase_u) * Parameter.fVdc;
+	comp_v = LookupUerrorLutNorm(phase_v) * Parameter.fVdc;
+	comp_w = LookupUerrorLutNorm(phase_w) * Parameter.fVdc;
+	common_mode = (comp_u + comp_v + comp_w) / 3.0f;
+
+	Parameter.fVabc[0] += (comp_u - common_mode);
+	Parameter.fVabc[1] += (comp_v - common_mode);
+	Parameter.fVabc[2] += (comp_w - common_mode);
+}
+
+static void RunUerrorCharacterizationLoop(void)
+{
+	float target_current;
+	float target_voltage;
+	float inv_average_samples;
+	uint16_t sample_index;
+
+	if (Parameter.fVdc < 1.0f)
+	{
+		Parameter.fVdq[0] = 0.0f;
+		Parameter.fVdq[1] = 0.0f;
+		Parameter.fVabc[0] = 0.0f;
+		Parameter.fVabc[1] = 0.0f;
+		Parameter.fVabc[2] = 0.0f;
+		GeneratePWM(0.5f, 0.5f, 0.5f);
+		return;
+	}
+
+	if (gUerrorCharacterization.active == 0u)
+	{
+		FinishUerrorCharacterization(0u);
+		return;
+	}
+
+	UpdateMeasuredCurrentsForTheta(
+		gUerrorCharacterization.theta_lock_rad,
+		Parameter.fIabc[0],
+		Parameter.fIabc[1]);
+
+	gIdRefA = 0.0f;
+	gIqRefA = 0.0f;
+	gTargetSpeedRpm = 0.0f;
+	gCommandedSpeedRpm = 0.0f;
+	gVfFrequencyHz = 0.0f;
+	gVfVoltageV = 0.0f;
+
+	if (gUerrorCharacterization.point_index >= gUerrorCharacterization.point_count)
+	{
+		FinishUerrorCharacterization(0u);
+		return;
+	}
+
+	target_current = gUerrorCharacterization.target_current_a[gUerrorCharacterization.point_index];
+	target_voltage = ClampFloat(
+		target_current * gUerrorCharacterization.rs_actual_ohm,
+		-gUerrorCharacterization.voltage_limit_v,
+		gUerrorCharacterization.voltage_limit_v);
+	ApplyVoltageVectorForTheta(gUerrorCharacterization.theta_lock_rad, target_voltage, 0.0f);
+
+	if (gUerrorCharacterization.settle_counter < gUerrorCharacterization.settle_ticks)
+	{
+		gUerrorCharacterization.state = UERROR_STATE_SETTLE;
+		gUerrorCharacterization.settle_counter++;
+		return;
+	}
+
+	gUerrorCharacterization.state = UERROR_STATE_AVERAGE;
+	gUerrorCharacterization.accum_measured_id += Parameter.fIdq[0];
+	gUerrorCharacterization.accum_phase_u += Parameter.fIabc[0];
+	gUerrorCharacterization.accum_phase_v += Parameter.fIabc[1];
+	gUerrorCharacterization.accum_phase_w += Parameter.fIabc[2];
+	gUerrorCharacterization.accum_phase_voltage_u += Parameter.fVabc[0];
+	gUerrorCharacterization.accum_phase_voltage_v += Parameter.fVabc[1];
+	gUerrorCharacterization.accum_phase_voltage_w += Parameter.fVabc[2];
+	gUerrorCharacterization.accum_bus_voltage += Parameter.fVdc;
+	gUerrorCharacterization.accum_temperature += Parameter.fTemparature;
+	gUerrorCharacterization.average_counter++;
+	if (gUerrorCharacterization.average_counter < gUerrorCharacterization.average_samples)
+	{
+		return;
+	}
+
+	inv_average_samples = 1.0f / (float)gUerrorCharacterization.average_counter;
+	sample_index = gUerrorCharacterization.point_index;
+	gUerrorCharacterization.measured_id_a[sample_index] =
+		gUerrorCharacterization.accum_measured_id * inv_average_samples;
+	gUerrorCharacterization.phase_u_a[sample_index] =
+		gUerrorCharacterization.accum_phase_u * inv_average_samples;
+	gUerrorCharacterization.phase_v_a[sample_index] =
+		gUerrorCharacterization.accum_phase_v * inv_average_samples;
+	gUerrorCharacterization.phase_w_a[sample_index] =
+		gUerrorCharacterization.accum_phase_w * inv_average_samples;
+	gUerrorCharacterization.phase_voltage_u_v[sample_index] =
+		gUerrorCharacterization.accum_phase_voltage_u * inv_average_samples;
+	gUerrorCharacterization.phase_voltage_v_v[sample_index] =
+		gUerrorCharacterization.accum_phase_voltage_v * inv_average_samples;
+	gUerrorCharacterization.phase_voltage_w_v[sample_index] =
+		gUerrorCharacterization.accum_phase_voltage_w * inv_average_samples;
+	gUerrorCharacterization.bus_voltage_v[sample_index] =
+		gUerrorCharacterization.accum_bus_voltage * inv_average_samples;
+	gUerrorCharacterization.temperature_c[sample_index] =
+		gUerrorCharacterization.accum_temperature * inv_average_samples;
+
+	gUerrorCharacterization.point_index++;
+	if (gUerrorCharacterization.point_index >= gUerrorCharacterization.point_count)
+	{
+		FinishUerrorCharacterization(0u);
+		return;
+	}
+
+	AdvanceUerrorSweepPoint(&gUerrorCharacterization);
+}
+
 static float GetEffectiveCurrentLoopFrequency(void)
 {
 	if (gEffectiveCurrentLoopFrequencyHz > 1.0f)
@@ -1139,6 +1695,88 @@ static float GetConfiguredSpeedIqLimitA(void)
 	return iq_limit;
 }
 
+static float GetConfiguredMotorInductanceHenry(void)
+{
+	float inductance_h = MotorParameter[MOTOR_INDUCTANCE] * 1.0e-6f;
+
+	if (inductance_h < 0.0f)
+	{
+		inductance_h = 0.0f;
+	}
+	return inductance_h;
+}
+
+static float GetConfiguredFluxLinkageWb(void)
+{
+	float flux_linkage_wb = MotorParameter[MOTOR_BACK_EMF_CONSTANT] * 1.0e-3f;
+
+	if (flux_linkage_wb < 0.0f)
+	{
+		flux_linkage_wb = 0.0f;
+	}
+	return flux_linkage_wb;
+}
+
+static float GetConfiguredPolePairsFloat(void)
+{
+	float pole_pairs = MotorParameter[MOTOR_NUMBER_POLE_PAIRS];
+
+	if (pole_pairs <= 0.0f)
+	{
+		pole_pairs = (float)INITIAL_MOTOR_POLE_PAIRS;
+	}
+	if (pole_pairs <= 0.0f)
+	{
+		pole_pairs = 1.0f;
+	}
+	return pole_pairs;
+}
+
+static float GetElectricalSpeedRadPerSec(float mechanical_speed_rpm)
+{
+	return mechanical_speed_rpm * GetConfiguredPolePairsFloat() * (2.0f * PI / 60.0f);
+}
+
+static void ApplyCurrentLoopDecoupling(
+	float *vd_command,
+	float *vq_command,
+	float id_current_a,
+	float iq_current_a,
+	float mechanical_speed_rpm)
+{
+	float inductance_h;
+	float flux_linkage_wb;
+	float electrical_speed_rad_s;
+
+	if ((vd_command == 0) || (vq_command == 0))
+	{
+		return;
+	}
+
+	inductance_h = GetConfiguredMotorInductanceHenry();
+	flux_linkage_wb = GetConfiguredFluxLinkageWb();
+	electrical_speed_rad_s = GetElectricalSpeedRadPerSec(mechanical_speed_rpm);
+
+	if ((inductance_h <= 0.0f) && (flux_linkage_wb <= 0.0f))
+	{
+		return;
+	}
+
+	/* Default assumption for this project: Ld = Lq = estimated MOTOR_INDUCTANCE.
+	   For SPMSM-like motors this is the expected baseline, and it already fixes the
+	   dominant speed-dependent dq coupling without introducing a second inductance
+	   parameter before IPMSM-specific modeling is needed.
+
+	   Important: this firmware's validated speed/torque sign convention uses
+	   negative Iq for positive accelerating torque, so the practical decoupling
+	   signs must follow that convention rather than a textbook q-axis sign. */
+	*vd_command += electrical_speed_rad_s * inductance_h * iq_current_a;
+	*vq_command += -electrical_speed_rad_s * ((inductance_h * id_current_a) + flux_linkage_wb);
+	// *vd_command += -electrical_speed_rad_s * inductance_h * iq_current_a;
+	// *vq_command += electrical_speed_rad_s * ((inductance_h * id_current_a) + flux_linkage_wb);
+
+}
+
 static float WrapPositionErrorCounts(float error_counts, float encoder_resolution)
 {
 	float half_encoder_resolution;
@@ -1247,6 +1885,10 @@ static float ApplySpeedRampLimit(float current_command, float target_command, fl
 	float delta;
 
 	if ((dt_sec <= 0.0f) || (max_speed_rpm <= 0.0f))
+	{
+		return target_command;
+	}
+	if (gFocSpeedRampBypass != 0u)
 	{
 		return target_command;
 	}
@@ -2472,6 +3114,7 @@ static void ApplyVoltageVectorForTheta(float electrical_theta, float vd, float v
 	Parameter.fVabc[0] = gInvClarke.fA;
 	Parameter.fVabc[1] = gInvClarke.fB;
 	Parameter.fVabc[2] = gInvClarke.fC;
+	ApplyUerrorCompensationToPhaseVoltages();
 
 	inv_vbus = 1.0f / Parameter.fVdc;
 	duty_u = 0.5f + (Parameter.fVabc[0] * inv_vbus);
@@ -2537,6 +3180,12 @@ static void RunCurrentLoopForTheta(
 			gIqPi.m_calc(&gIqPi);
 			vq_command = gIqPi.fOut;
 		}
+		ApplyCurrentLoopDecoupling(
+			&vd_command,
+			&vq_command,
+			Parameter.fIdq[0],
+			Parameter.fIdq[1],
+			Parameter.fActSpeed);
 		LimitDqVoltageVector(&vd_command, &vq_command, voltage_limit);
 	}
 
@@ -3074,6 +3723,12 @@ static void RunFocLoop(void)
 			gIqPi.fIn = gIqRefA - gPark.fQ;
 			gIqPi.m_calc(&gIqPi);
 		}
+		ApplyCurrentLoopDecoupling(
+			&gIdPi.fOut,
+			&gIqPi.fOut,
+			gPark.fD,
+			gPark.fQ,
+			Parameter.fActSpeed);
 		LimitDqVoltageVector(&gIdPi.fOut, &gIqPi.fOut, voltage_limit);
 	}
 	
@@ -3094,6 +3749,7 @@ static void RunFocLoop(void)
 	Parameter.fVabc[0] = gInvClarke.fA;
 	Parameter.fVabc[1] = gInvClarke.fB;
 	Parameter.fVabc[2] = gInvClarke.fC;
+	ApplyUerrorCompensationToPhaseVoltages();
 
 	inv_vbus = 1.0f / Parameter.fVdc;
 	duty_u = 0.5f + (Parameter.fVabc[0] * inv_vbus);
@@ -3275,10 +3931,13 @@ int main(void)
 	STM_Init(&StateMachine);
 	memset(&USB_Comm, 0, sizeof(USB_Comm));
 	MotorAutoTune_Reset(&gMotorAutoTune);
+	memset(&gUerrorCharacterization, 0, sizeof(gUerrorCharacterization));
 	LoadDefaultParameters();
 	(void)LoadParametersFromFlashIfAvailable();
 	UpdateDriverParameter(DriverParameter);
 	UpdateMotorParameter(MotorParameter);
+	(void)LoadUerrorLutFromFlashIfAvailable();
+	ResetUerrorCharacterizationRuntime();
 	gEncoderAlignmentLastCapturedOffset = Parameter.Offset_Enc;
 	ApplyControlTimingMode(USER_DEFAULT_CONTROL_TIMING_MODE);
 	
@@ -3913,6 +4572,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if (gRunMode == RUN_MODE_OPEN_LOOP_VF)
 	{
 		RunOpenLoopVf();
+	}
+	else if (gRunMode == RUN_MODE_UERROR_CHARACTERIZATION)
+	{
+		RunUerrorCharacterizationLoop();
 	}
 	else if (gRunMode == RUN_MODE_AUTOTUNE)
 	{

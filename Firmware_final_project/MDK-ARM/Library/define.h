@@ -85,6 +85,7 @@
 /*Flash Memory Address*/
 #define PAGE_ADDRESS_DRIVER_PARAMETER				(uint32_t)0x0805F000	//2kbyte: 0x0803F000 --> 0x0803F7FF: page 126
 #define PAGE_ADDRESS_MOTOR_PARAMETER				(uint32_t)0x08060000	//2kbyte: 0x08040000 --> 0x080407FF: page 127
+#define PAGE_ADDRESS_UERROR_LUT						(uint32_t)0x080E0000	// dedicated sector for inverter compensation LUT
 #define FLASH_USER_START_ADDR								PAGE_ADDRESS_DRIVER_PARAMETER
 #define FLASH_USER_END_ADDR								(PAGE_ADDRESS_MOTOR_PARAMETER + 0x000007FF)
 

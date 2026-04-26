@@ -63,6 +63,7 @@ from protocol import (
     RUN_MODE_AUTOTUNE,
     RUN_MODE_FOC,
     RUN_MODE_OPEN_LOOP_VF,
+    RUN_MODE_UERROR_CHARACTERIZATION,
     SPEED_CONTROL_MODE,
     Command,
     DRIVER_PARAMETER_NAMES,
@@ -70,10 +71,13 @@ from protocol import (
     ParsedFrame,
     TraceChunk,
     TRACE_TOTAL_SAMPLES,
+    UERROR_LUT_POINT_COUNT_MAX,
+    UerrorSweepChunk,
     UpdateCode,
     FrameStreamParser,
     build_command_frame,
     build_parameter_write_chunks,
+    build_uerror_lut_payload,
     decode_fault_flags,
     format_fault_text,
     parse_autotune_payload,
@@ -82,6 +86,7 @@ from protocol import (
     parse_monitor_payload,
     parse_parameter_chunk,
     parse_trace_payload,
+    parse_uerror_payload,
 )
 from transport import PortDescriptor, SerialWorker, list_serial_ports
 
@@ -97,6 +102,7 @@ SPEED_TEST_PROFILE_STEP = "step_response"
 SPEED_TEST_PROFILE_REVERSE = "reversing"
 SPEED_TEST_PROFILE_LOW_SPEED = "low_speed"
 SPEED_TEST_PROFILE_TRAPEZOID = "trapezoidal"
+SPEED_TEST_STEP_RAMP_BYPASS_SENTINEL_MS = -1.0
 POSITION_TEST_TIMER_INTERVAL_MS = 20
 POSITION_TEST_PROFILE_SHORT = "short_distance"
 POSITION_TEST_PROFILE_LONG = "long_distance"
@@ -296,6 +302,20 @@ class PositionTestSession:
     endpoint_baselines: dict[str, float] = field(default_factory=dict)
     long_start_counts: float | None = None
     long_last_logged_turn: int = 0
+
+
+@dataclass(slots=True)
+class UerrorRawSample:
+    target_current_a: float
+    measured_id_a: float
+    phase_u_a: float
+    phase_v_a: float
+    phase_w_a: float
+    phase_voltage_u_v: float
+    phase_voltage_v_v: float
+    phase_voltage_w_v: float
+    bus_voltage_v: float
+    temperature_c: float
 
 
 def _chart_scale_from_font_size(font_pt: int) -> float:
@@ -3007,6 +3027,199 @@ class ScopeCaptureView(QtWidgets.QWidget):
         super().leaveEvent(event)
 
 
+class XyPlotView(QtWidgets.QWidget):
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._title = "Plot"
+        self._x_label = "X"
+        self._x_unit = ""
+        self._y_label = "Y"
+        self._y_unit = ""
+        self._series_defs: list[dict[str, str]] = []
+        self._series_data: list[list[tuple[float, float]]] = []
+        self._status_text = "Waiting for data..."
+        self.setMinimumHeight(250)
+
+    def clear(self, status_text: str = "Waiting for data...") -> None:
+        self._series_defs = []
+        self._series_data = []
+        self._status_text = status_text
+        self.update()
+
+    def set_plot(
+        self,
+        *,
+        title: str,
+        x_label: str,
+        x_unit: str,
+        y_label: str,
+        y_unit: str,
+        series_defs: list[dict[str, str]],
+        series_data: list[list[tuple[float, float]]],
+        status_text: str,
+    ) -> None:
+        self._title = title
+        self._x_label = x_label
+        self._x_unit = x_unit
+        self._y_label = y_label
+        self._y_unit = y_unit
+        self._series_defs = list(series_defs)
+        self._series_data = [[(float(x), float(y)) for x, y in series] for series in series_data]
+        self._status_text = status_text
+        self.update()
+
+    def _chart_colors(self) -> dict[str, QtGui.QColor]:
+        return {
+            "background": self.palette().base().color(),
+            "text": self.palette().text().color(),
+            "border": self.palette().mid().color(),
+            "grid": self.palette().midlight().color(),
+        }
+
+    def _plot_geometry(self, rect: QtCore.QRectF) -> tuple[QtCore.QRectF, int, int]:
+        title_height = QtGui.QFontMetrics(self.font()).height() + 6
+        legend_height = QtGui.QFontMetrics(self.font()).height() + 14
+        bottom_space = QtGui.QFontMetrics(self.font()).height() + 42
+        plot_rect = QtCore.QRectF(
+            rect.left() + 8.0,
+            rect.top() + title_height + legend_height + 14.0,
+            max(80.0, rect.width() - 80.0),
+            max(80.0, rect.height() - title_height - legend_height - bottom_space),
+        )
+        return plot_rect, title_height, legend_height
+
+    def _ranges(self) -> tuple[float, float, float, float]:
+        xs = [point[0] for series in self._series_data for point in series]
+        ys = [point[1] for series in self._series_data for point in series]
+        if not xs or not ys:
+            return (-1.0, 1.0, -1.0, 1.0)
+        x_min = min(xs)
+        x_max = max(xs)
+        y_min = min(ys)
+        y_max = max(ys)
+        if abs(x_max - x_min) < 1.0e-6:
+            x_min -= 1.0
+            x_max += 1.0
+        if abs(y_max - y_min) < 1.0e-6:
+            y_min -= 1.0
+            y_max += 1.0
+        x_margin = (x_max - x_min) * 0.08
+        y_margin = (y_max - y_min) * 0.12
+        return (
+            x_min - x_margin,
+            x_max + x_margin,
+            y_min - y_margin,
+            y_max + y_margin,
+        )
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+        rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
+        colors = self._chart_colors()
+        painter.fillRect(rect, colors["background"])
+        painter.setPen(colors["text"])
+        painter.drawText(
+            QtCore.QRectF(rect.left(), rect.top(), rect.width(), 24.0),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            self._title,
+        )
+
+        plot_rect, title_height, legend_height = self._plot_geometry(rect)
+        legend_x = rect.left()
+        legend_y = rect.top() + title_height + 2.0
+        for series_def in self._series_defs:
+            label = series_def.get("label", "Series")
+            color = QtGui.QColor(series_def.get("color", "#4dabf7"))
+            painter.fillRect(QtCore.QRectF(legend_x, legend_y + 6.0, 10.0, 10.0), color)
+            painter.drawText(
+                QtCore.QRectF(legend_x + 16.0, legend_y, 170.0, legend_height),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
+            legend_x += 170.0
+
+        painter.setPen(QtGui.QPen(colors["border"], 1.0))
+        painter.drawRect(plot_rect)
+
+        if not self._series_data or not any(self._series_data):
+            painter.drawText(
+                plot_rect,
+                QtCore.Qt.AlignmentFlag.AlignCenter,
+                self._status_text,
+            )
+            return
+
+        x_min, x_max, y_min, y_max = self._ranges()
+        x_span = max(1.0e-6, x_max - x_min)
+        y_span = max(1.0e-6, y_max - y_min)
+
+        grid_pen = QtGui.QPen(colors["grid"], 1.0)
+        grid_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        painter.setPen(grid_pen)
+        for grid_index in range(1, 5):
+            y = plot_rect.top() + (plot_rect.height() * grid_index / 5.0)
+            painter.drawLine(QtCore.QPointF(plot_rect.left(), y), QtCore.QPointF(plot_rect.right(), y))
+
+        painter.setPen(colors["text"])
+        painter.drawText(
+            QtCore.QRectF(plot_rect.right() - 92.0, plot_rect.top() + 6.0, 88.0, 18.0),
+            QtCore.Qt.AlignmentFlag.AlignRight,
+            _format_axis_value(y_max, unit=self._y_unit, decimals=3),
+        )
+        painter.drawText(
+            QtCore.QRectF(plot_rect.right() - 92.0, plot_rect.bottom() - 30.0, 88.0, 18.0),
+            QtCore.Qt.AlignmentFlag.AlignRight,
+            _format_axis_value(y_min, unit=self._y_unit, decimals=3),
+        )
+        painter.drawText(
+            QtCore.QRectF(plot_rect.left(), plot_rect.bottom() + 12.0, 110.0, 18.0),
+            QtCore.Qt.AlignmentFlag.AlignLeft,
+            _format_axis_value(x_min, unit=self._x_unit, decimals=3),
+        )
+        painter.drawText(
+            QtCore.QRectF(plot_rect.right() - 110.0, plot_rect.bottom() + 12.0, 110.0, 18.0),
+            QtCore.Qt.AlignmentFlag.AlignRight,
+            _format_axis_value(x_max, unit=self._x_unit, decimals=3),
+        )
+        painter.drawText(
+            QtCore.QRectF(plot_rect.left(), plot_rect.bottom() + 28.0, plot_rect.width(), 18.0),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            f"{self._x_label} / {self._y_label}",
+        )
+
+        for series_index, series in enumerate(self._series_data):
+            if not series:
+                continue
+            color = QtGui.QColor(
+                self._series_defs[series_index].get("color", "#4dabf7")
+                if series_index < len(self._series_defs)
+                else "#4dabf7"
+            )
+            pen = QtGui.QPen(color, 1.8)
+            painter.setPen(pen)
+            path = QtGui.QPainterPath()
+            for point_index, (x_value, y_value) in enumerate(series):
+                x = plot_rect.left() + ((x_value - x_min) / x_span) * plot_rect.width()
+                y = plot_rect.bottom() - ((y_value - y_min) / y_span) * plot_rect.height()
+                point = QtCore.QPointF(x, y)
+                if point_index == 0:
+                    path.moveTo(point)
+                else:
+                    path.lineTo(point)
+            painter.drawPath(path)
+
+            marker_brush = QtGui.QBrush(color)
+            painter.setBrush(marker_brush)
+            for marker_index in _report_marker_indices(len(series), 10):
+                x_value, y_value = series[marker_index]
+                x = plot_rect.left() + ((x_value - x_min) / x_span) * plot_rect.width()
+                y = plot_rect.bottom() - ((y_value - y_min) / y_span) * plot_rect.height()
+                painter.drawEllipse(QtCore.QPointF(x, y), 2.0, 2.0)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -3035,6 +3248,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._autotune_capture = _empty_scope_state("Motor Auto-Tune Charts")
         self._autotune_continue_signature: tuple[int, int] | None = None
         self._trace_capture = _empty_scope_state("Firmware Trace Scope")
+        self._uerror_samples: list[UerrorRawSample] = []
+        self._uerror_status_text = "Waiting for survey..."
+        self._uerror_total_samples = 0
+        self._uerror_state = 0
+        self._uerror_lut_preview_norm: list[float] = []
+        self._uerror_lut_preview_current_max_a = 0.0
         self._active_trace_target: str | None = None
         self._alarm_history: list[AlarmHistoryEntry] = []
         self._active_fault_code = 0
@@ -3332,11 +3551,35 @@ class MainWindow(QtWidgets.QMainWindow):
 
         layout = QtWidgets.QVBoxLayout(dialog)
         tabs = QtWidgets.QTabWidget(dialog)
-        tabs.addTab(self._build_id_tuning_tab(), "Id Tuning")
-        tabs.addTab(self._build_autotune_tab(), "Motor Auto-Tune")
-        tabs.addTab(self._build_trace_scope_tab(), "Trace Scope")
+        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_id_tuning_tab()), "Id Tuning")
+        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_autotune_tab()), "Motor Auto-Tune")
+        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_trace_scope_tab()), "Trace Scope")
+        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_uerror_tab()), "Uerror Characterization")
         layout.addWidget(tabs)
         return dialog
+
+    def _wrap_tuning_tab_scroll_area(
+        self,
+        content: QtWidgets.QWidget,
+    ) -> QtWidgets.QScrollArea:
+        layout = content.layout()
+        if layout is not None:
+            layout.setSizeConstraint(
+                QtWidgets.QLayout.SizeConstraint.SetMinimumSize
+            )
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        scroll.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(content)
+        return scroll
 
     def _build_current_tuning_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
@@ -3732,6 +3975,131 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_trace_preset(self.trace_preset_combo.currentText())
         return widget
 
+    def _build_uerror_tab(self) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        config_group = QtWidgets.QGroupBox("Driver Uerror Characterization")
+        config_layout = QtWidgets.QGridLayout(config_group)
+
+        self.uerror_rs_actual_spin = QtWidgets.QDoubleSpinBox()
+        self.uerror_rs_actual_spin.setRange(0.001, 100.0)
+        self.uerror_rs_actual_spin.setDecimals(5)
+        self.uerror_rs_actual_spin.setValue(3.40000)
+        self.uerror_rs_actual_spin.setSuffix(" ohm")
+
+        self.uerror_sweep_current_spin = QtWidgets.QDoubleSpinBox()
+        self.uerror_sweep_current_spin.setRange(0.05, 20.0)
+        self.uerror_sweep_current_spin.setDecimals(3)
+        self.uerror_sweep_current_spin.setValue(0.60)
+        self.uerror_sweep_current_spin.setSuffix(" A")
+
+        self.uerror_fine_zone_spin = QtWidgets.QDoubleSpinBox()
+        self.uerror_fine_zone_spin.setRange(0.01, 10.0)
+        self.uerror_fine_zone_spin.setDecimals(3)
+        self.uerror_fine_zone_spin.setValue(0.15)
+        self.uerror_fine_zone_spin.setSuffix(" A")
+
+        self.uerror_fine_step_spin = QtWidgets.QDoubleSpinBox()
+        self.uerror_fine_step_spin.setRange(0.005, 5.0)
+        self.uerror_fine_step_spin.setDecimals(3)
+        self.uerror_fine_step_spin.setValue(0.02)
+        self.uerror_fine_step_spin.setSuffix(" A")
+
+        self.uerror_coarse_step_spin = QtWidgets.QDoubleSpinBox()
+        self.uerror_coarse_step_spin.setRange(0.01, 5.0)
+        self.uerror_coarse_step_spin.setDecimals(3)
+        self.uerror_coarse_step_spin.setValue(0.05)
+        self.uerror_coarse_step_spin.setSuffix(" A")
+
+        self.uerror_settle_ms_spin = QtWidgets.QDoubleSpinBox()
+        self.uerror_settle_ms_spin.setRange(1.0, 2000.0)
+        self.uerror_settle_ms_spin.setDecimals(1)
+        self.uerror_settle_ms_spin.setValue(40.0)
+        self.uerror_settle_ms_spin.setSuffix(" ms")
+
+        self.uerror_average_samples_spin = QtWidgets.QSpinBox()
+        self.uerror_average_samples_spin.setRange(8, 512)
+        self.uerror_average_samples_spin.setValue(96)
+
+        self.uerror_start_button = QtWidgets.QPushButton("Start Sweep")
+        self.uerror_stop_button = QtWidgets.QPushButton("Stop")
+        self.uerror_clear_button = QtWidgets.QPushButton("Clear")
+        self.uerror_apply_runtime_button = QtWidgets.QPushButton("Apply Runtime LUT")
+        self.uerror_save_flash_button = QtWidgets.QPushButton("Save LUT to Flash")
+        self.uerror_progress_bar = QtWidgets.QProgressBar()
+        self.uerror_progress_bar.setRange(0, 100)
+        self.uerror_progress_bar.setValue(0)
+        self.uerror_status_label = QtWidgets.QLabel("Idle")
+        self.uerror_status_label.setWordWrap(True)
+
+        self.uerror_enforce_odd_checkbox = QtWidgets.QCheckBox("Force odd symmetry")
+        self.uerror_enforce_odd_checkbox.setChecked(True)
+        self.uerror_smooth_checkbox = QtWidgets.QCheckBox("Smooth LUT")
+        self.uerror_smooth_checkbox.setChecked(True)
+
+        config_hint = QtWidgets.QLabel(
+            "<b>How To Read These Settings</b>"
+            "<ul>"
+            "<li><b>Rs Actual</b>: the real stator resistance that GUI uses for "
+            "<code>Uerror = Vcmd - Rs * I</code>. Enter the measured value you trust.</li>"
+            "<li><b>Sweep Current Max</b>: the largest positive and negative current target used to span the driver characteristic.</li>"
+            "<li><b>Fine Zone</b>: the low-current region around 0 A that is sampled more densely to capture dead-time and zero-crossing nonlinearity.</li>"
+            "<li><b>Fine Step</b>: current step inside the Fine Zone.</li>"
+            "<li><b>Coarse Step</b>: current step outside the Fine Zone, where the curve is usually smoother.</li>"
+            "<li><b>Settle Time</b>: wait time at each sweep point before averaging starts.</li>"
+            "<li><b>Average Samples</b>: number of samples averaged at each point to suppress noise.</li>"
+            "<li><b>Force odd symmetry</b>: enforces <code>f(-I) = -f(I)</code> on the preview LUT.</li>"
+            "<li><b>Smooth LUT</b>: applies a light smoothing pass before runtime apply or flash save.</li>"
+            "</ul>"
+            "<b>Recommended Flow</b>"
+            "<ul>"
+            "<li>Lock the rotor mechanically and make sure encoder alignment is already valid.</li>"
+            "<li>Run the sweep, inspect the three raw plots, then review the normalized LUT preview.</li>"
+            "<li>Apply the LUT in RAM first. Save to flash only after the low-speed behavior looks better.</li>"
+            "</ul>"
+        )
+        config_hint.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        config_hint.setWordWrap(True)
+
+        config_layout.addWidget(QtWidgets.QLabel("Rs Actual"), 0, 0)
+        config_layout.addWidget(self.uerror_rs_actual_spin, 0, 1)
+        config_layout.addWidget(QtWidgets.QLabel("Sweep Current Max"), 0, 2)
+        config_layout.addWidget(self.uerror_sweep_current_spin, 0, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Fine Zone"), 1, 0)
+        config_layout.addWidget(self.uerror_fine_zone_spin, 1, 1)
+        config_layout.addWidget(QtWidgets.QLabel("Fine Step"), 1, 2)
+        config_layout.addWidget(self.uerror_fine_step_spin, 1, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Coarse Step"), 2, 0)
+        config_layout.addWidget(self.uerror_coarse_step_spin, 2, 1)
+        config_layout.addWidget(QtWidgets.QLabel("Settle Time"), 2, 2)
+        config_layout.addWidget(self.uerror_settle_ms_spin, 2, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Average Samples"), 3, 0)
+        config_layout.addWidget(self.uerror_average_samples_spin, 3, 1)
+        config_layout.addWidget(self.uerror_enforce_odd_checkbox, 3, 2)
+        config_layout.addWidget(self.uerror_smooth_checkbox, 3, 3)
+        config_layout.addWidget(self.uerror_start_button, 4, 0)
+        config_layout.addWidget(self.uerror_stop_button, 4, 1)
+        config_layout.addWidget(self.uerror_clear_button, 4, 2)
+        config_layout.addWidget(self.uerror_apply_runtime_button, 4, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Progress"), 5, 0)
+        config_layout.addWidget(self.uerror_progress_bar, 5, 1, 1, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Status"), 6, 0)
+        config_layout.addWidget(self.uerror_status_label, 6, 1, 1, 3)
+        config_layout.addWidget(self.uerror_save_flash_button, 7, 0, 1, 4)
+        config_layout.addWidget(config_hint, 8, 0, 1, 4)
+
+        self.uerror_voltage_plot = XyPlotView()
+        self.uerror_uerror_plot = XyPlotView()
+        self.uerror_lut_plot = XyPlotView()
+        self._refresh_uerror_plots()
+
+        layout.addWidget(config_group)
+        layout.addWidget(self.uerror_voltage_plot, 1)
+        layout.addWidget(self.uerror_uerror_plot, 1)
+        layout.addWidget(self.uerror_lut_plot, 1)
+        return widget
+
     def _build_quick_command_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Controls")
         layout = QtWidgets.QVBoxLayout(box)
@@ -4026,10 +4394,19 @@ class MainWindow(QtWidgets.QMainWindow):
         note_layout = QtWidgets.QVBoxLayout(note_group)
         self.foc_mode_description_label = QtWidgets.QLabel()
         self.foc_mode_description_label.setWordWrap(True)
+        self.foc_mode_description_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.foc_servo_note_label = QtWidgets.QLabel(
-            "Servo ON only runs the safe arm sequence: current-sensor offset calibration, zero-current references, and PWM enable without any motion target. Watch Driver Monitor for encoder alignment status, then Start FOC sends the selected mode, target, gains, and ramp limits to the firmware; runtime FOC now uses raw theta with no extra electrical frame offset."
+            "<b>FOC Runtime Notes</b>"
+            "<ul style='margin-top:6px; margin-bottom:0px; margin-left:18px;'>"
+            "<li><b>Servo ON</b> only arms the drive: current-sensor offset calibration, zero-current references, and PWM enable.</li>"
+            "<li>Watch <b>Driver Monitor</b> until encoder alignment is done before starting motion.</li>"
+            "<li><b>Start FOC</b> sends the selected mode, target, gains, and ramp limits to firmware.</li>"
+            "<li>Runtime FOC uses <b>raw theta</b> with no extra electrical frame offset.</li>"
+            "<li>Current-loop decoupling assumes <b>Ld = Lq = estimated MOTOR_INDUCTANCE</b>, matching the present motor setup.</li>"
+            "</ul>"
         )
         self.foc_servo_note_label.setWordWrap(True)
+        self.foc_servo_note_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         note_layout.addWidget(self.foc_mode_description_label)
         note_layout.addWidget(self.foc_servo_note_label)
 
@@ -4664,6 +5041,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_stop_button.clicked.connect(self._stop_trace_capture)
         self.trace_clear_button.clicked.connect(self._clear_trace_capture)
         self.trace_auto_scale_checkbox.toggled.connect(self.trace_scope_view.set_auto_scale)
+        self.uerror_start_button.clicked.connect(self._start_uerror_characterization)
+        self.uerror_stop_button.clicked.connect(self._stop_uerror_characterization)
+        self.uerror_clear_button.clicked.connect(self._clear_uerror_characterization)
+        self.uerror_apply_runtime_button.clicked.connect(self._apply_uerror_runtime_lut)
+        self.uerror_save_flash_button.clicked.connect(self._save_uerror_lut_to_flash)
+        self.uerror_rs_actual_spin.valueChanged.connect(self._refresh_uerror_plots)
+        self.uerror_enforce_odd_checkbox.toggled.connect(self._refresh_uerror_plots)
+        self.uerror_smooth_checkbox.toggled.connect(self._refresh_uerror_plots)
 
         self._worker.frame_received.connect(self._handle_frame)
         self._worker.status_changed.connect(self._handle_connection_status)
@@ -5247,7 +5632,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"{description_prefix} chunk {index}/{total_chunks}",
             )
 
-    def _build_speed_start_payload(self, target_rpm: float) -> tuple[bytes, float]:
+    def _build_speed_start_payload(
+        self,
+        target_rpm: float,
+        *,
+        bypass_speed_ramp: bool = False,
+    ) -> tuple[bytes, float]:
         speed_limit_rpm = max(
             abs(float(target_rpm)),
             self._driver_max_speed_rpm(),
@@ -5255,13 +5645,18 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if speed_limit_rpm <= 0.0:
             speed_limit_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM
+        accel_ms = float(self.foc_accel_spin.value())
+        decel_ms = float(self.foc_decel_spin.value())
+        if bypass_speed_ramp:
+            accel_ms = SPEED_TEST_STEP_RAMP_BYPASS_SENTINEL_MS
+            decel_ms = SPEED_TEST_STEP_RAMP_BYPASS_SENTINEL_MS
         payload = struct.pack(
             "<6fBB",
             float(target_rpm),
             float(self.foc_speed_kp_spin.value()),
             float(self.foc_speed_ki_spin.value()),
-            float(self.foc_accel_spin.value()),
-            float(self.foc_decel_spin.value()),
+            accel_ms,
+            decel_ms,
             float(speed_limit_rpm),
             ID_SQUARE_ANGLE_TEST_NONE,
             0,
@@ -5288,10 +5683,14 @@ class MainWindow(QtWidgets.QMainWindow):
         description: str,
         quiet: bool = False,
         request_monitor: bool = False,
+        bypass_speed_ramp: bool = False,
     ) -> None:
         self._apply_speed_target_to_ui(target_rpm)
         self._sync_foc_controls_to_driver_table()
-        payload, _ = self._build_speed_start_payload(target_rpm)
+        payload, _ = self._build_speed_start_payload(
+            target_rpm,
+            bypass_speed_ramp=bypass_speed_ramp,
+        )
         self._enqueue_command(Command.CMD_START_SPEEDCONTROL, payload, description, quiet=quiet)
         if request_monitor:
             self._request_monitor_once()
@@ -5396,6 +5795,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Target: {self.speed_test_step_target_spin.value():.1f} rpm",
             f"Pre-step wait: {self.speed_test_step_pre_delay_spin.value():.0f} ms",
             f"Run time: {self.speed_test_step_run_time_spin.value():.2f} s",
+            "Ramp: bypassed during the commanded step",
         ]
 
     def _update_position_test_profile_ui(self) -> None:
@@ -6204,10 +6604,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if step_type == "start_foc":
             if not step.get("_queued") and self._communication_idle():
+                bypass_speed_ramp = session.profile_key == SPEED_TEST_PROFILE_STEP
                 self._enqueue_speed_start_command(
                     float(step.get("target_rpm", self.foc_target_speed_spin.value())),
                     "Automated Speed Test: Start FOC Speed Mode",
                     request_monitor=True,
+                    bypass_speed_ramp=bypass_speed_ramp,
                 )
                 step["_queued"] = True
                 return
@@ -6218,10 +6620,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if step_type == "set_speed":
             if not step.get("_queued") and self._communication_idle():
                 target_rpm = float(step.get("target_rpm", 0.0))
+                bypass_speed_ramp = session.profile_key == SPEED_TEST_PROFILE_STEP
                 self._enqueue_speed_start_command(
                     target_rpm,
                     f"Automated Speed Test: Set speed to {target_rpm:.1f} rpm",
                     request_monitor=True,
+                    bypass_speed_ramp=bypass_speed_ramp,
                 )
                 step["_queued"] = True
                 session.last_target_rpm = target_rpm
@@ -6311,14 +6715,26 @@ class MainWindow(QtWidgets.QMainWindow):
             if tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN:
                 self.foc_angle_slider_value_label.setText("Disabled in multi-turn")
                 self.foc_mode_description_label.setText(
-                    "Position Mode / Multi Turn: enter an accumulated target angle in degrees and the firmware will compare it against the accumulated encoder position without shortest-path wrapping. Use this mode for long-distance moves across many turns. The angle slider is disabled because it only makes sense for one-turn moves."
+                    "<b>Position Mode / Multi Turn</b>"
+                    "<ul style='margin-top:6px; margin-bottom:0px; margin-left:18px;'>"
+                    "<li>Enter an <b>accumulated target angle</b> in degrees.</li>"
+                    "<li>Firmware compares it against the accumulated encoder position with <b>no shortest-path wrapping</b>.</li>"
+                    "<li>Use this mode for <b>long-distance moves across many turns</b>.</li>"
+                    "<li>The angle slider is disabled because it only makes sense for one-turn moves.</li>"
+                    "</ul>"
                 )
             else:
                 self.foc_angle_slider_value_label.setText(
                     f"{self.foc_angle_slider.value() / 10.0:.1f} deg"
                 )
                 self.foc_mode_description_label.setText(
-                    "Position Mode / Single Turn: enter the target in degrees, use relative jog buttons for quick moves, and release the angle slider to send a clean one-turn target. The firmware uses shortest-path wrapping so the motor always takes the nearest route inside one mechanical revolution."
+                    "<b>Position Mode / Single Turn</b>"
+                    "<ul style='margin-top:6px; margin-bottom:0px; margin-left:18px;'>"
+                    "<li>Enter the target in degrees for a <b>one-turn move</b>.</li>"
+                    "<li>Use the relative jog buttons for quick manual moves.</li>"
+                    "<li>Release the angle slider to send a clean target update.</li>"
+                    "<li>Firmware uses <b>shortest-path wrapping</b> so the motor takes the nearest route within one mechanical turn.</li>"
+                    "</ul>"
                 )
             if not self._connected:
                 self.foc_live_summary_label.setText(
@@ -6326,7 +6742,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
         else:
             self.foc_mode_description_label.setText(
-                "Speed Mode: the position loop is bypassed. Target Speed is sent directly into the speed loop, which generates Iq for the inner current loop."
+                "<b>Speed Mode</b>"
+                "<ul style='margin-top:6px; margin-bottom:0px; margin-left:18px;'>"
+                "<li>The <b>position loop is bypassed</b>.</li>"
+                "<li><b>Target Speed</b> goes directly into the speed loop.</li>"
+                "<li>The speed loop generates <b>Iq</b> for the inner current loop.</li>"
+                "</ul>"
             )
             if not self._connected:
                 self.foc_live_summary_label.setText(
@@ -7373,6 +7794,261 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._active_trace_target == "trace":
             self._active_trace_target = None
 
+    def _uerror_state_text(self, state: int) -> str:
+        return {
+            0: "Idle",
+            1: "Settling",
+            2: "Averaging",
+            3: "Done",
+            4: "Aborted",
+            5: "Error",
+        }.get(int(state), f"State {state}")
+
+    def _set_uerror_status(self, text: str, progress_percent: int | None = None) -> None:
+        self._uerror_status_text = text
+        if hasattr(self, "uerror_status_label"):
+            self.uerror_status_label.setText(text)
+        if (progress_percent is not None) and hasattr(self, "uerror_progress_bar"):
+            self.uerror_progress_bar.setValue(max(0, min(int(progress_percent), 100)))
+
+    def _clear_uerror_characterization(self) -> None:
+        self._uerror_samples = []
+        self._uerror_total_samples = 0
+        self._uerror_state = 0
+        self._uerror_lut_preview_norm = []
+        self._uerror_lut_preview_current_max_a = 0.0
+        self._set_uerror_status("Waiting for survey...", 0)
+        self._refresh_uerror_plots()
+
+    def _start_uerror_characterization(self) -> None:
+        payload = struct.pack(
+            "<7f",
+            float(self.uerror_rs_actual_spin.value()),
+            float(self.uerror_sweep_current_spin.value()),
+            float(self.uerror_fine_zone_spin.value()),
+            float(self.uerror_fine_step_spin.value()),
+            float(self.uerror_coarse_step_spin.value()),
+            float(self.uerror_settle_ms_spin.value()),
+            float(self.uerror_average_samples_spin.value()),
+        )
+        self._clear_uerror_characterization()
+        self._set_uerror_status("Starting survey...", 0)
+        self._enqueue_command(
+            Command.CMD_START_UERROR_CHARACTERIZATION,
+            payload,
+            "Start Uerror Characterization",
+        )
+
+    def _stop_uerror_characterization(self) -> None:
+        self._enqueue_command(
+            Command.CMD_STOP_UERROR_CHARACTERIZATION,
+            b"",
+            "Stop Uerror Characterization",
+        )
+        self._set_uerror_status("Stopping survey...", self.uerror_progress_bar.value())
+
+    def _build_uerror_plot_series(
+        self,
+    ) -> tuple[
+        list[list[tuple[float, float]]],
+        list[list[tuple[float, float]]],
+        list[tuple[float, float]],
+    ]:
+        voltage_series = [[], [], []]
+        uerror_series = [[], [], []]
+        merged_norm: list[tuple[float, float]] = []
+        rs_actual = float(self.uerror_rs_actual_spin.value()) if hasattr(self, "uerror_rs_actual_spin") else 0.0
+        for sample in self._uerror_samples:
+            if (
+                abs(sample.bus_voltage_v) < 1.0e-9
+                and abs(sample.target_current_a) < 1.0e-9
+                and abs(sample.phase_u_a) < 1.0e-9
+                and abs(sample.phase_v_a) < 1.0e-9
+                and abs(sample.phase_w_a) < 1.0e-9
+            ):
+                continue
+            phase_points = [
+                (sample.phase_u_a, sample.phase_voltage_u_v),
+                (sample.phase_v_a, sample.phase_voltage_v_v),
+                (sample.phase_w_a, sample.phase_voltage_w_v),
+            ]
+            for series_index, (phase_current, phase_voltage) in enumerate(phase_points):
+                voltage_series[series_index].append((phase_current, phase_voltage))
+                uerror_value = phase_voltage - (rs_actual * phase_current)
+                uerror_series[series_index].append((phase_current, uerror_value))
+                if sample.bus_voltage_v > 1.0e-6:
+                    merged_norm.append((phase_current, uerror_value / sample.bus_voltage_v))
+        for series in voltage_series:
+            series.sort(key=lambda item: item[0])
+        for series in uerror_series:
+            series.sort(key=lambda item: item[0])
+        merged_norm.sort(key=lambda item: item[0])
+        return voltage_series, uerror_series, merged_norm
+
+    def _refresh_uerror_plots(self) -> None:
+        if not hasattr(self, "uerror_voltage_plot"):
+            return
+
+        if not self._uerror_samples:
+            self.uerror_voltage_plot.clear("Waiting for survey data...")
+            self.uerror_uerror_plot.clear("Waiting for survey data...")
+            self.uerror_lut_plot.clear("Waiting for survey data...")
+            return
+
+        voltage_series, uerror_series, merged_norm = self._build_uerror_plot_series()
+        phase_series_defs = [
+            {"label": "Phase U", "color": "#1f77b4"},
+            {"label": "Phase V", "color": "#2ca02c"},
+            {"label": "Phase W", "color": "#d62728"},
+        ]
+        sample_count_text = f"{len(merged_norm) // 3 if merged_norm else 0} sweep points captured"
+        self.uerror_voltage_plot.set_plot(
+            title="Phase Command Voltage vs Current",
+            x_label="Phase Current",
+            x_unit="A",
+            y_label="Phase Voltage",
+            y_unit="V",
+            series_defs=phase_series_defs,
+            series_data=voltage_series,
+            status_text=sample_count_text,
+        )
+        self.uerror_uerror_plot.set_plot(
+            title="Raw Uerror vs Current",
+            x_label="Phase Current",
+            x_unit="A",
+            y_label="Uerror",
+            y_unit="V",
+            series_defs=phase_series_defs,
+            series_data=uerror_series,
+            status_text=sample_count_text,
+        )
+
+        self._uerror_lut_preview_norm = []
+        self._uerror_lut_preview_current_max_a = 0.0
+        if not merged_norm:
+            self.uerror_lut_plot.clear("No valid Vbus samples available for LUT preview.")
+            return
+
+        currents = [point[0] for point in merged_norm]
+        values = [point[1] for point in merged_norm]
+        current_max = max(abs(min(currents)), abs(max(currents)))
+        if current_max < 1.0e-6:
+            self.uerror_lut_plot.clear("Measured phase current range is too small for LUT preview.")
+            return
+
+        grid_count = UERROR_LUT_POINT_COUNT_MAX
+        grid = [
+            (-current_max + ((2.0 * current_max * index) / max(grid_count - 1, 1)))
+            for index in range(grid_count)
+        ]
+        lut_values: list[float] = []
+        for current_target in grid:
+            insert_at = bisect_left(currents, current_target)
+            if insert_at <= 0:
+                lut_values.append(values[0])
+                continue
+            if insert_at >= len(currents):
+                lut_values.append(values[-1])
+                continue
+            x0 = currents[insert_at - 1]
+            x1 = currents[insert_at]
+            y0 = values[insert_at - 1]
+            y1 = values[insert_at]
+            if abs(x1 - x0) < 1.0e-9:
+                lut_values.append(0.5 * (y0 + y1))
+                continue
+            ratio = (current_target - x0) / (x1 - x0)
+            lut_values.append(y0 + ((y1 - y0) * ratio))
+
+        if self.uerror_enforce_odd_checkbox.isChecked():
+            midpoint = grid_count // 2
+            for index in range(midpoint):
+                odd_pos = 0.5 * (lut_values[-1 - index] - lut_values[index])
+                lut_values[index] = -odd_pos
+                lut_values[-1 - index] = odd_pos
+            if grid_count % 2 == 1:
+                lut_values[midpoint] = 0.0
+
+        if self.uerror_smooth_checkbox.isChecked() and len(lut_values) >= 5:
+            smoothed = list(lut_values)
+            for index in range(1, len(lut_values) - 1):
+                smoothed[index] = (
+                    (lut_values[index - 1] * 0.25)
+                    + (lut_values[index] * 0.50)
+                    + (lut_values[index + 1] * 0.25)
+                )
+            lut_values = smoothed
+            if self.uerror_enforce_odd_checkbox.isChecked():
+                midpoint = grid_count // 2
+                for index in range(midpoint):
+                    odd_pos = 0.5 * (lut_values[-1 - index] - lut_values[index])
+                    lut_values[index] = -odd_pos
+                    lut_values[-1 - index] = odd_pos
+                if grid_count % 2 == 1:
+                    lut_values[midpoint] = 0.0
+
+        self._uerror_lut_preview_norm = [float(value) for value in lut_values]
+        self._uerror_lut_preview_current_max_a = float(current_max)
+        raw_norm_series = merged_norm
+        lut_preview_series = list(zip(grid, self._uerror_lut_preview_norm))
+        self.uerror_lut_plot.set_plot(
+            title="Normalized LUT Preview",
+            x_label="Phase Current",
+            x_unit="A",
+            y_label="Uerror / Vbus",
+            y_unit="pu",
+            series_defs=[
+                {"label": "Merged Raw", "color": "#7f7f7f"},
+                {"label": "Preview LUT", "color": "#ff7f0e"},
+            ],
+            series_data=[raw_norm_series, lut_preview_series],
+            status_text=f"{grid_count}-point shared LUT preview",
+        )
+
+    def _apply_uerror_runtime_lut(self) -> None:
+        if (not self._uerror_lut_preview_norm) or (self._uerror_lut_preview_current_max_a <= 0.0):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Apply Uerror LUT",
+                "No valid LUT preview is available yet. Run a sweep first.",
+            )
+            return
+        payload = build_uerror_lut_payload(
+            self._uerror_lut_preview_current_max_a,
+            self._uerror_lut_preview_norm,
+        )
+        self._enqueue_command(
+            Command.CMD_APPLY_UERROR_LUT,
+            payload,
+            "Apply Uerror LUT",
+        )
+        self._set_uerror_status("Applying runtime LUT...", self.uerror_progress_bar.value())
+
+    def _save_uerror_lut_to_flash(self) -> None:
+        if (not self._uerror_lut_preview_norm) or (self._uerror_lut_preview_current_max_a <= 0.0):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Save Uerror LUT",
+                "No valid LUT preview is available yet. Run a sweep first.",
+            )
+            return
+        payload = build_uerror_lut_payload(
+            self._uerror_lut_preview_current_max_a,
+            self._uerror_lut_preview_norm,
+        )
+        self._enqueue_command(
+            Command.CMD_APPLY_UERROR_LUT,
+            payload,
+            "Apply Uerror LUT Before Save",
+            quiet=True,
+        )
+        self._enqueue_command(
+            Command.CMD_SAVE_UERROR_LUT_FLASH,
+            b"",
+            "Save Uerror LUT to Flash",
+        )
+        self._set_uerror_status("Saving LUT to flash...", self.uerror_progress_bar.value())
+
     def _refresh_ports(self) -> None:
         self._port_descriptors = list_serial_ports()
         self.port_combo.clear()
@@ -7714,6 +8390,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._set_parameter_status("Driver parameter write acknowledged.", "ok")
             elif sent_command == Command.CMD_WRITE_MOTOR:
                 self._set_parameter_status("Motor parameter write chunk acknowledged.", "ok")
+            elif sent_command == Command.CMD_START_UERROR_CHARACTERIZATION:
+                self._set_uerror_status("Survey running...", 0)
+            elif sent_command == Command.CMD_STOP_UERROR_CHARACTERIZATION:
+                self._set_uerror_status("Survey stop acknowledged.", self.uerror_progress_bar.value())
+            elif sent_command == Command.CMD_APPLY_UERROR_LUT:
+                self._set_uerror_status("Runtime LUT applied.", self.uerror_progress_bar.value())
+            elif sent_command == Command.CMD_SAVE_UERROR_LUT_FLASH:
+                self._set_uerror_status("LUT saved to flash.", self.uerror_progress_bar.value())
             elif should_resync_after_autotune_apply:
                 self._set_parameter_status(
                     "Auto-tune estimates acknowledged. Refreshing GUI and parameter tables...",
@@ -7761,6 +8445,27 @@ class MainWindow(QtWidgets.QMainWindow):
                     self,
                     "Apply Auto-Tune Estimates",
                     "Firmware did not accept the auto-tune parameters.",
+                )
+            elif sent_command == Command.CMD_START_UERROR_CHARACTERIZATION:
+                self._set_uerror_status("Survey start rejected by firmware.", 0)
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Start Uerror Characterization",
+                    "Firmware did not accept the Uerror survey request.",
+                )
+            elif sent_command == Command.CMD_APPLY_UERROR_LUT:
+                self._set_uerror_status("Runtime LUT apply failed.", self.uerror_progress_bar.value())
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Apply Uerror LUT",
+                    "Firmware did not accept the LUT payload.",
+                )
+            elif sent_command == Command.CMD_SAVE_UERROR_LUT_FLASH:
+                self._set_uerror_status("Flash save failed.", self.uerror_progress_bar.value())
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Save Uerror LUT",
+                    "Firmware could not save the LUT to flash.",
                 )
             self._ack_timer.stop()
             self._awaiting_ack = False
@@ -7830,6 +8535,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._append_log(f"Trace parse error: {exc}")
                 return
             self._handle_trace_chunk(chunk)
+            return
+
+        if subcommand == UpdateCode.CMD_UERROR_DATA:
+            try:
+                chunk = parse_uerror_payload(body)
+            except ValueError as exc:
+                self._append_log(f"Uerror parse error: {exc}")
+                return
+            self._handle_uerror_chunk(chunk)
             return
 
         if subcommand == UpdateCode.CMD_READ_DRIVER_DATA:
@@ -8007,6 +8721,54 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_current_tuning_scope_views()
         else:
             self._update_scope_view(view, capture, prefix)
+
+    def _handle_uerror_chunk(self, chunk: UerrorSweepChunk) -> None:
+        self._uerror_state = int(chunk.state)
+        self._uerror_total_samples = max(0, int(chunk.total_samples))
+
+        expected_size = max(self._uerror_total_samples, chunk.sample_start + chunk.sample_count)
+        if expected_size > len(self._uerror_samples):
+            self._uerror_samples.extend(
+                UerrorRawSample(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                for _ in range(expected_size - len(self._uerror_samples))
+            )
+
+        for index in range(chunk.sample_count):
+            sample_index = chunk.sample_start + index
+            if sample_index >= len(self._uerror_samples):
+                continue
+            self._uerror_samples[sample_index] = UerrorRawSample(
+                target_current_a=chunk.target_current[index],
+                measured_id_a=chunk.measured_id[index],
+                phase_u_a=chunk.phase_u[index],
+                phase_v_a=chunk.phase_v[index],
+                phase_w_a=chunk.phase_w[index],
+                phase_voltage_u_v=chunk.v_phase_u[index],
+                phase_voltage_v_v=chunk.v_phase_v[index],
+                phase_voltage_w_v=chunk.v_phase_w[index],
+                bus_voltage_v=chunk.vdc[index],
+                temperature_c=chunk.temperature[index],
+            )
+
+        valid_count = sum(
+            1
+            for sample in self._uerror_samples
+            if (
+                abs(sample.bus_voltage_v) >= 1.0e-9
+                or abs(sample.target_current_a) >= 1.0e-9
+                or abs(sample.phase_u_a) >= 1.0e-9
+                or abs(sample.phase_v_a) >= 1.0e-9
+                or abs(sample.phase_w_a) >= 1.0e-9
+            )
+        )
+        progress_percent = 0
+        if self._uerror_total_samples > 0:
+            progress_percent = int(round((valid_count / self._uerror_total_samples) * 100.0))
+        self._set_uerror_status(
+            f"{self._uerror_state_text(chunk.state)}: {valid_count}/{self._uerror_total_samples} points",
+            progress_percent,
+        )
+        self._refresh_uerror_plots()
 
     def _append_snapshot_to_trend_buffer(self, snapshot) -> None:
         tracking_mode = self._position_tracking_mode()

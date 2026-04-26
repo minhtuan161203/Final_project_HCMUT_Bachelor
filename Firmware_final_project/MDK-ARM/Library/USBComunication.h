@@ -73,6 +73,10 @@ typedef enum
 		CMD_START_FOC_ROTATING_THETA_TEST = 0x5E,
 		CMD_START_FOC_ROTATING_THETA_VOLTAGE_TEST = 0x5F,
 		CMD_START_FOC_CURRENT_FEEDBACK_MAP_TEST = 0x60,
+		CMD_START_UERROR_CHARACTERIZATION = 0x61,
+		CMD_STOP_UERROR_CHARACTERIZATION = 0x62,
+		CMD_APPLY_UERROR_LUT = 0x63,
+		CMD_SAVE_UERROR_LUT_FLASH = 0x64,
 }Command_e;
 
 typedef enum
@@ -87,6 +91,7 @@ typedef enum
 	CMD_FFT_DATA_THINH = 0x37,
 	CMD_AUTOTUNING_DATA_THINH = 0x38,
 	CMD_FOC_DEBUG_TEXT = 0x39,
+	CMD_UERROR_DATA = 0x3A,
 	MTR_CODE_ERROR = 0xE1
 }UpdateDataCmd_e;
 
@@ -95,7 +100,8 @@ typedef enum
 	RUN_MODE_FOC = 0u,
 	RUN_MODE_OPEN_LOOP_VF = 1u,
 	RUN_MODE_ALIGNMENT_ONLY = 2u,
-	RUN_MODE_AUTOTUNE = 3u
+	RUN_MODE_AUTOTUNE = 3u,
+	RUN_MODE_UERROR_CHARACTERIZATION = 4u
 }RunMode_e;
 
 typedef enum
@@ -146,6 +152,20 @@ typedef enum
 	CURRENT_CALIB_STATUS_OFFSET_INVALID = 4u
 }CurrentCalibStatus_e;
 
+#define UERROR_SWEEP_MAX_POINTS 257u
+#define UERROR_LUT_MAX_POINTS 33u
+#define UERROR_SWEEP_CHUNK_SAMPLES 6u
+
+typedef enum
+{
+	UERROR_STATE_IDLE = 0u,
+	UERROR_STATE_SETTLE = 1u,
+	UERROR_STATE_AVERAGE = 2u,
+	UERROR_STATE_DONE = 3u,
+	UERROR_STATE_ABORTED = 4u,
+	UERROR_STATE_ERROR = 5u
+}UerrorState_e;
+
 typedef struct
 {
 	uint8_t TransmitData[1024];
@@ -157,6 +177,7 @@ typedef struct
 	uint8_t ReadFFTData_th;
 	uint8_t ReadFFTData_ng;
 	uint8_t ReadAutoTuningData_T;
+	uint8_t ReadUerrorData;
 	uint8_t ReadFocDebugLog;
 	uint8_t PriorityFlag;
 	uint8_t TotalLength, Counter;
@@ -199,6 +220,50 @@ typedef struct
 	float fAlignmentCurrentApplied;
 	int32_t OffsetCaptured;
 }IdSquareTuning_t;
+
+typedef struct
+{
+	uint8_t active;
+	uint8_t state;
+	uint8_t compensation_enabled;
+	uint8_t transfer_active;
+	uint16_t point_count;
+	uint16_t point_index;
+	uint16_t send_index;
+	uint16_t settle_ticks;
+	uint16_t settle_counter;
+	uint16_t average_samples;
+	uint16_t average_counter;
+	float rs_actual_ohm;
+	float sweep_current_max_a;
+	float fine_zone_a;
+	float fine_step_a;
+	float coarse_step_a;
+	float theta_lock_rad;
+	float voltage_limit_v;
+	float accum_measured_id;
+	float accum_phase_u;
+	float accum_phase_v;
+	float accum_phase_w;
+	float accum_phase_voltage_u;
+	float accum_phase_voltage_v;
+	float accum_phase_voltage_w;
+	float accum_bus_voltage;
+	float accum_temperature;
+	float target_current_a[UERROR_SWEEP_MAX_POINTS];
+	float measured_id_a[UERROR_SWEEP_MAX_POINTS];
+	float phase_u_a[UERROR_SWEEP_MAX_POINTS];
+	float phase_v_a[UERROR_SWEEP_MAX_POINTS];
+	float phase_w_a[UERROR_SWEEP_MAX_POINTS];
+	float phase_voltage_u_v[UERROR_SWEEP_MAX_POINTS];
+	float phase_voltage_v_v[UERROR_SWEEP_MAX_POINTS];
+	float phase_voltage_w_v[UERROR_SWEEP_MAX_POINTS];
+	float bus_voltage_v[UERROR_SWEEP_MAX_POINTS];
+	float temperature_c[UERROR_SWEEP_MAX_POINTS];
+	float lut_current_max_a;
+	uint8_t lut_point_count;
+	float lut_norm[UERROR_LUT_MAX_POINTS];
+}UerrorCharacterization_t;
 
 void UpdateDriverParameter(float *DriverParameter);
 

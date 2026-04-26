@@ -22,6 +22,8 @@ CURRENT_TUNING_SAMPLES_PER_CHUNK = 20
 CURRENT_TUNING_TOTAL_SAMPLES = 600
 TRACE_TOTAL_SAMPLES = 1000
 AUTOTUNE_SAMPLES_PER_CHUNK = 8
+UERROR_SWEEP_SAMPLES_PER_CHUNK = 6
+UERROR_LUT_POINT_COUNT_MAX = 33
 
 CONTROL_TIMING_MODE_16KHZ = 0
 SPEED_CONTROL_MODE = 1
@@ -32,6 +34,7 @@ RUN_MODE_FOC = 0
 RUN_MODE_OPEN_LOOP_VF = 1
 RUN_MODE_ALIGNMENT_ONLY = 2
 RUN_MODE_AUTOTUNE = 3
+RUN_MODE_UERROR_CHARACTERIZATION = 4
 ENCODER_ALIGNMENT_POLICY_POWER_ON = 0
 ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE = 1
 ENCODER_ALIGNMENT_STATUS_IDLE = 0
@@ -145,6 +148,10 @@ class Command(IntEnum):
     CMD_START_FOC_ROTATING_THETA_TEST = 0x5E
     CMD_START_FOC_ROTATING_THETA_VOLTAGE_TEST = 0x5F
     CMD_START_FOC_CURRENT_FEEDBACK_MAP_TEST = 0x60
+    CMD_START_UERROR_CHARACTERIZATION = 0x61
+    CMD_STOP_UERROR_CHARACTERIZATION = 0x62
+    CMD_APPLY_UERROR_LUT = 0x63
+    CMD_SAVE_UERROR_LUT_FLASH = 0x64
 
 
 class UpdateCode(IntEnum):
@@ -158,6 +165,7 @@ class UpdateCode(IntEnum):
     CMD_FFT_DATA_THINH = 0x37
     CMD_AUTOTUNING_DATA_THINH = 0x38
     CMD_FOC_DEBUG_TEXT = 0x39
+    CMD_UERROR_DATA = 0x3A
     MTR_CODE_ERROR = 0xE1
 
 
@@ -376,6 +384,24 @@ class AutoTuneChunk:
     primary: list[float]
     secondary: list[float]
     tertiary: list[float]
+
+
+@dataclass(slots=True)
+class UerrorSweepChunk:
+    state: int
+    sample_start: int
+    sample_count: int
+    total_samples: int
+    target_current: list[float]
+    measured_id: list[float]
+    phase_u: list[float]
+    phase_v: list[float]
+    phase_w: list[float]
+    v_phase_u: list[float]
+    v_phase_v: list[float]
+    v_phase_w: list[float]
+    vdc: list[float]
+    temperature: list[float]
 
 
 def calc_crc(u_code: int, u_size: int, buffer: bytes) -> int:
@@ -705,6 +731,59 @@ def parse_autotune_payload(payload: bytes) -> AutoTuneChunk:
     )
 
 
+def parse_uerror_payload(payload: bytes) -> UerrorSweepChunk:
+    expected_header = struct.calcsize("<BHBH")
+    expected_total = expected_header + (UERROR_SWEEP_SAMPLES_PER_CHUNK * 10 * 4)
+    if len(payload) < expected_total:
+        raise ValueError(f"Uerror payload too short: {len(payload)}")
+
+    state, sample_start, sample_count_raw, total_samples = struct.unpack_from(
+        "<BHBH", payload, 0
+    )
+    sample_count = max(0, min(int(sample_count_raw), UERROR_SWEEP_SAMPLES_PER_CHUNK))
+    offset = expected_header
+    target_current: list[float] = []
+    measured_id: list[float] = []
+    phase_u: list[float] = []
+    phase_v: list[float] = []
+    phase_w: list[float] = []
+    v_phase_u: list[float] = []
+    v_phase_v: list[float] = []
+    v_phase_w: list[float] = []
+    vdc: list[float] = []
+    temperature: list[float] = []
+    for _ in range(UERROR_SWEEP_SAMPLES_PER_CHUNK):
+        values = struct.unpack_from("<10f", payload, offset)
+        offset += 40
+        target_current.append(values[0])
+        measured_id.append(values[1])
+        phase_u.append(values[2])
+        phase_v.append(values[3])
+        phase_w.append(values[4])
+        v_phase_u.append(values[5])
+        v_phase_v.append(values[6])
+        v_phase_w.append(values[7])
+        vdc.append(values[8])
+        temperature.append(values[9])
+
+    return UerrorSweepChunk(
+        state=int(state),
+        sample_start=int(sample_start),
+        sample_count=sample_count,
+        total_samples=int(total_samples),
+        target_current=target_current[:sample_count],
+        measured_id=measured_id[:sample_count],
+        phase_u=phase_u[:sample_count],
+        phase_v=phase_v[:sample_count],
+        phase_w=phase_w[:sample_count],
+        v_phase_u=v_phase_u[:sample_count],
+        v_phase_v=v_phase_v[:sample_count],
+        v_phase_w=v_phase_w[:sample_count],
+        vdc=vdc[:sample_count],
+        temperature=temperature[:sample_count],
+    )
+
+
 def parse_parameter_chunk(payload: bytes) -> dict[int, float]:
     clean = payload.rstrip(b"\r\n")
     result: dict[int, float] = {}
@@ -733,6 +812,16 @@ def build_parameter_write_chunks(values: list[float], chunk_size: int) -> list[b
             payload.extend(struct.pack("<f", value))
         chunks.append(bytes(payload))
     return chunks
+
+
+def build_uerror_lut_payload(current_max_a: float, lut_norm_values: list[float]) -> bytes:
+    point_count = max(0, min(len(lut_norm_values), UERROR_LUT_POINT_COUNT_MAX))
+    payload = bytearray()
+    payload.append(point_count & 0xFF)
+    payload.extend(struct.pack("<f", float(current_max_a)))
+    for value in lut_norm_values[:point_count]:
+        payload.extend(struct.pack("<f", float(value)))
+    return bytes(payload)
 
 
 def format_hex(data: bytes) -> str:
