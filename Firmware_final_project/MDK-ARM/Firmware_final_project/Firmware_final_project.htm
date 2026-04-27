@@ -3,7 +3,7 @@
 <title>Static Call Graph - [Firmware_final_project\Firmware_final_project.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image Firmware_final_project\Firmware_final_project.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sun Apr 26 13:45:30 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Mon Apr 27 21:50:37 2026
 <BR><P>
 <H3>Maximum Stack Usage =        832 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -2293,10 +2293,11 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[21e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
 
-<P><STRONG><a name="[1f5]"></a>StartUerrorCharacterization</STRONG> (Thumb, 258 bytes, Stack size 40 bytes, main.o(i.StartUerrorCharacterization))
-<BR><BR>[Stack]<UL><LI>Max Depth = 88<LI>Call Chain = StartUerrorCharacterization &rArr; BuildUerrorSweepTargets
+<P><STRONG><a name="[1f5]"></a>StartUerrorCharacterization</STRONG> (Thumb, 256 bytes, Stack size 40 bytes, main.o(i.StartUerrorCharacterization))
+<BR><BR>[Stack]<UL><LI>Max Depth = 96<LI>Call Chain = StartUerrorCharacterization &rArr; GetRuntimeFocControlTheta &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetUerrorCharacterizationRuntime
+<LI><a href="#[122]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetRuntimeFocControlTheta
 <LI><a href="#[fe]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetOpenLoopVoltageLimit
 <LI><a href="#[ff]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ClampFloat
 <LI><a href="#[106]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;BuildUerrorSweepTargets
@@ -3351,6 +3352,7 @@ Local Symbols
 
 <P><STRONG><a name="[101]"></a>ApplyPhaseCurrentFeedbackMapping</STRONG> (Thumb, 72 bytes, Stack size 0 bytes, main.o(i.ApplyPhaseCurrentFeedbackMapping))
 <BR><BR>[Called By]<UL><LI><a href="#[140]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredCurrentsForTheta
+<LI><a href="#[141]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunUerrorCharacterizationLoop
 <LI><a href="#[13d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 <LI><a href="#[102]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ApplyUerrorCompensationToPhaseVoltages
 <LI><a href="#[fd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ApplyOpenLoopVfCommand
@@ -3542,7 +3544,8 @@ Local Symbols
 </UL>
 <BR>[Calls]<UL><LI><a href="#[123]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 </UL>
-<BR>[Called By]<UL><LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
+<BR>[Called By]<UL><LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
 <LI><a href="#[13d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 </UL>
 
@@ -3745,7 +3748,7 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[13d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 </UL>
 
-<P><STRONG><a name="[13d]"></a>RunFocLoop</STRONG> (Thumb, 1772 bytes, Stack size 88 bytes, main.o(i.RunFocLoop))
+<P><STRONG><a name="[13d]"></a>RunFocLoop</STRONG> (Thumb, 1776 bytes, Stack size 88 bytes, main.o(i.RunFocLoop))
 <BR><BR>[Stack]<UL><LI>Max Depth = 352 + Unknown Stack Size
 <LI>Call Chain = RunFocLoop &rArr; RunFocRotatingThetaVoltageTestLoop &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
@@ -3833,13 +3836,14 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[131]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[141]"></a>RunUerrorCharacterizationLoop</STRONG> (Thumb, 558 bytes, Stack size 24 bytes, main.o(i.RunUerrorCharacterizationLoop))
-<BR><BR>[Stack]<UL><LI>Max Depth = 100<LI>Call Chain = RunUerrorCharacterizationLoop &rArr; UpdateMeasuredCurrentsForTheta &rArr; __hardfp_sinf &rArr; __mathlib_rredf2
+<P><STRONG><a name="[141]"></a>RunUerrorCharacterizationLoop</STRONG> (Thumb, 572 bytes, Stack size 32 bytes, main.o(i.RunUerrorCharacterizationLoop))
+<BR><BR>[Stack]<UL><LI>Max Depth = 108<LI>Call Chain = RunUerrorCharacterizationLoop &rArr; UpdateMeasuredCurrentsForTheta &rArr; __hardfp_sinf &rArr; __mathlib_rredf2
 </UL>
 <BR>[Calls]<UL><LI><a href="#[140]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredCurrentsForTheta
 <LI><a href="#[11c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FinishUerrorCharacterization
 <LI><a href="#[ff]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ClampFloat
 <LI><a href="#[104]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ApplyVoltageVectorForTheta
+<LI><a href="#[101]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ApplyPhaseCurrentFeedbackMapping
 <LI><a href="#[1e5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;AdvanceUerrorSweepPoint
 <LI><a href="#[105]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GeneratePWM
 </UL>
@@ -4308,7 +4312,7 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[22e]"></a>USB_HandleUerrorCharacterizationStart</STRONG> (Thumb, 266 bytes, Stack size 40 bytes, usbcomunication.o(i.USB_HandleUerrorCharacterizationStart))
-<BR><BR>[Stack]<UL><LI>Max Depth = 128<LI>Call Chain = USB_HandleUerrorCharacterizationStart &rArr; StartUerrorCharacterization &rArr; BuildUerrorSweepTargets
+<BR><BR>[Stack]<UL><LI>Max Depth = 136<LI>Call Chain = USB_HandleUerrorCharacterizationStart &rArr; StartUerrorCharacterization &rArr; GetRuntimeFocControlTheta &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
 <LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization

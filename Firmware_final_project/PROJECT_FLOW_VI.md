@@ -1930,3 +1930,311 @@ Neu ban muon mo rong tai lieu nay, huong tiep theo hop ly nhat la:
 2. ve so do data-flow cho `Position -> Speed -> Current -> PWM`
 3. tach rieng mot file danh cho `USB protocol` va bang command
 4. tach rieng mot file danh cho `encoder/feedback decoding`
+# ASD04 - Uerror, Current Loop va Low-speed Debug Notes
+
+## Muc tieu cua note nay
+
+Tai lieu nay tong hop nhanh:
+
+- nhung thay doi da implement trong firmware va GUI
+- nhung ket luan ky thuat da chot trong qua trinh debug
+- cach test de phan biet truoc / sau cho `Uerror compensation`
+- cac diem can nho khi danh gia current PI va low-speed behavior
+
+Tai lieu nay khong co y thay the `PROJECT_FLOW_VI.md`. Day la note engineering de track cac quyet dinh va cac tradeoff da duoc chot.
+
+---
+
+## 1. Nhung thay doi da implement
+
+### 1.1 Current-loop decoupling
+
+Da them decoupling cho current loop theo gia thiet:
+
+- `Ld = Lq = MOTOR_INDUCTANCE`
+- dung mot `L` thong nhat lay tu estimate motor
+- dung sign convention da validate tren codebase hien tai
+
+Ghi chu:
+
+- day la first-pass decoupling de giam `Id` drift theo toc do
+- no khong phai mo hinh IPMSM day du
+- muc tieu la lam runtime FOC on hon truoc khi tinh den model co `Ld/Lq` tach rieng
+
+### 1.2 Tab `Uerror Characterization` rieng
+
+Da tach `Uerror` thanh mot flow rieng trong `Commissioning / Scope`, khong chen vao `Motor Auto-Tune`.
+
+Flow hien tai:
+
+1. user nhap `Rs Actual`
+2. firmware chay `locked-rotor fixed-theta d-axis open-loop voltage sweep`
+3. GUI nhan raw data
+4. GUI tinh:
+   - `Uerror = Vphase_cmd - Rs_actual * Iphase`
+5. GUI ve:
+   - `Phase Command Voltage vs Current`
+   - `Raw Uerror vs Current`
+   - `Normalized LUT Preview`
+6. user co the:
+   - `Apply Runtime LUT`
+   - `Save LUT to Flash`
+
+### 1.3 Transport / flash cho Uerror LUT
+
+Da them:
+
+- command USB moi cho start / stop survey
+- command apply LUT runtime
+- command save LUT to flash
+- block flash rieng cho `Uerror LUT`
+
+LUT duoc luu tach rieng, khong nhung vao `MotorParameter`.
+
+### 1.4 Fix frame dung cho Uerror survey
+
+Ban dau `Uerror survey` lock theta theo `Parameter.fTheta` raw.
+
+Da sua lai de survey dung cung control frame voi runtime FOC:
+
+- su dung `GetRuntimeFocControlTheta()`
+- tuc la survey da di qua frame compensation da validate
+
+Dieu nay tranh viec bơm `Vd` tren raw theta nhung runtime FOC lai dieu khien tren compensated theta.
+
+### 1.5 Tabs trong `Commissioning / Scope` cho phep scroll
+
+Da boc cac tab commissioning trong `QScrollArea` de:
+
+- khi cua so thay doi kich thuoc, chart va controls khong bi ep dẹt
+- form va charts co the cuon doc thay vi bi co layout
+
+### 1.6 Uerror plots da doi cach hien thi
+
+Ban dau plot `Uerror` noi tat ca raw points thanh polyline, nen:
+
+- nhin giong nhu bi to mau
+- phase line de chong len nhau
+- de hieu nham thanh mot duong tich phan / polygon
+
+Da sua:
+
+- raw data -> ve dang `scatter`
+- local trend -> ve dang `solid line`
+- LUT preview -> giu line muot
+
+### 1.7 Uerror plots da dung mapped phase current
+
+Ban dau survey luu raw `Parameter.fIabc[]`.
+
+Da sua:
+
+- firmware luu current da qua `ApplyPhaseCurrentFeedbackMapping()`
+- plot va tinh `Uerror` dung cung sign / mapping ma FOC dang dung
+
+Muc tieu:
+
+- doc plot truc quan hon
+- tranh hien tuong `Phase U` nhin nhu "nguoc dau" so voi nhung phase con lai chi vi raw sensor sign
+
+### 1.8 Guard cho `Save LUT to Flash`
+
+Firmware co chu dong chan flash write neu state machine van dang `RUN` hoac `START`.
+
+Da them canh bao som o GUI:
+
+- phai `Servo OFF`
+- cho dong co dung han
+- roi moi `Save LUT to Flash`
+
+### 1.9 Zero-hold D-axis chi giu cho tuning, bo cho runtime FOC
+
+Da sua logic `D-axis zero-hold`:
+
+- giu nguyen cho `IdSquareTuning / alignment`
+- bo trong runtime FOC binh thuong
+
+Ly do:
+
+- o low speed, `gIdPi` bi reset quanh 0 qua thuong xuyen
+- sau do PI lai nap `Vd`, roi lai reset
+- ket qua la `Vd` co shape ramp-snap / chattering
+- dong co co cam giac "ghi ghi" / "ghim lai" o toc do thap
+
+Muc tieu cua patch:
+
+- de `Id` loop chay lien tuc quanh 0 trong runtime FOC
+- giam low-speed chattering tren `Vd`
+
+---
+
+## 2. Nhung ket luan ky thuat da chot
+
+### 2.1 `Uerror compensation` chua chung minh duoc hieu qua ro rang
+
+Sau khi implement va test:
+
+- khac biet before / after chua ro rang
+- `Trend Charts` khong du de ket luan
+- `Trace Scope` cung chua cho thay cai thien thuyet phuc
+
+Ket luan hien tai:
+
+- feature nay dang o muc "experimental"
+- chua du bang chung de dua vao flow chinh nhu mot commissioning step bat buoc
+
+### 2.2 Vi sao 2 plot `Phase Command Voltage` va `Uerror` nhin giong nhau
+
+Ve toan hoc:
+
+- `Uerror(I) = Vphase_cmd(I) - Rs * I`
+
+Nen neu `Vphase_cmd` da gan tuyen tinh, thi `Uerror` se co hinh dang tong the kha giong, khac nhau chu yeu o do doc va offset.
+
+### 2.3 Vi sao phase U dai hon phase V/W trong survey
+
+Survey dang giu mot `theta` co dinh va bom mot vector `Vd`.
+
+3 phase `U/V/W` chi la 3 hinh chieu cua cung mot vector do len 3 truc lech nhau `120 deg`.
+
+He qua:
+
+- phase nao nam gan huong vector hon -> duong se "dai" hon
+- phase nao xa huong vector hon -> duong se "ngan" hon
+
+Dieu nay la binh thuong, khong phai bug.
+
+### 2.4 Giam current PI va thay waveform "min hon" khong co nghia la dieu khien tot hon
+
+Khi giam current PI:
+
+- loop it aggressive hon
+- it chase noise hon
+- waveform co the dep hon
+
+Nhung dong thoi:
+
+- current bandwidth giam
+- tracking `Id/Iq ref` cham hon
+- disturbance rejection te hon
+
+Ket luan:
+
+- "min hon" khong dong nghia "tot hon"
+- current PI tot phai can bang giua:
+  - tracking
+  - overshoot / ringing
+  - ripple / noise
+  - tac dong len speed loop
+
+### 2.5 Auto-tune current PI co xu huong ra gain hoi cao so voi phan cung thuc te
+
+Neu current PI tu auto-tune lam he "gat", nhung giam di mot chut lai chay de chiu hon, thi cach hieu hop ly la:
+
+- auto-tune dang ra gain hoi tham
+- model `Rs/L`, sensing, delay, inverter non-idealities chua du ly tuong de dung gain ly thuyet cao
+
+Do do:
+
+- khong nen mac dinh tin 100% gain current PI tu auto-tune
+- can co `scale` hoac can benchmark bang trace step
+
+### 2.6 Low-speed duoi ~100 rpm van de lon hon `Uerror`
+
+Hien tuong:
+
+- toc do cao chay em
+- toc do thap thi `Vd` ky la, dong co bi "ghi ghi"
+
+Phan tich:
+
+- root cause nghiem trong hon kha nang cao la low-speed current-loop / speed-loop behavior
+- cu the, `D-axis zero-hold` cu chui vao chui ra quanh 0 tao `Vd` chattering
+
+Nghia la:
+
+- low-speed issue khong nhat thiet do `Uerror`
+- khong nen co gang ep `Uerror` thanh "thuoc chua bach benh"
+
+---
+
+## 3. Cach test dung cho `Uerror`
+
+Neu muon test `Uerror compensation` nghiem tuc:
+
+1. dung `Trace Scope`, khong dung `Trend Charts`
+2. sample rate cao nhat co the
+3. test o toc do thap:
+   - `5 rpm`
+   - `10 rpm`
+   - `20 rpm`
+4. capture cung mot bai test truoc va sau khi apply LUT
+5. so:
+   - notch quanh zero-crossing
+   - phase current ripple peak-to-peak
+   - dead-zone / flat-spot
+   - speed ripple
+
+Neu test nhieu lan ma van khong thay cai thien ro:
+
+- khong nen tiep tuc dau tu qua nhieu vao feature nay cho flow chinh
+
+---
+
+## 4. Cach test dung cho current PI
+
+Khong chot current PI chi bang mat nhin waveform.
+
+Can co it nhat 2 bai:
+
+1. `Iq step test`
+   - xem rise time
+   - overshoot
+   - settling
+
+2. `Speed step test`
+   - cung speed PI
+   - cung tai
+   - so current quality va speed response
+
+Gain current PI phu hop la gain:
+
+- du nhanh
+- khong rung qua muc
+- khong chase noise qua nhieu
+- khong lam low-speed bi "ghi"
+
+---
+
+## 5. Open items neu muon di tiep
+
+Neu can debug tiep, nhung viec hop ly nhat la:
+
+1. them toggle `Uerror Compensation ON/OFF`
+   - de A/B test truc tiep
+
+2. danh gia lai current PI theo step response
+   - thay vi chi nhin waveform phase current
+
+3. neu low-speed van con ghim sau patch D-axis zero-hold
+   - ra tiep speed loop low-speed behavior
+   - kiem tra hunting quanh zero
+   - kiem tra speed feedback / quantization / friction / cogging
+
+---
+
+## 6. Chot trang thai hien tai
+
+Tinh den luc ghi note nay:
+
+- `Uerror Characterization` da duoc implement end-to-end
+- GUI va UX cua tab nay da duoc lam de doc hon
+- `Save LUT to Flash` da co guard ro rang
+- `Uerror` chua chung minh duoc hieu qua ro rang tren bench test
+- low-speed issue hien tai dang nghieng nhieu hon ve logic current loop / speed loop
+- da patch zero-hold D-axis chi giu cho tuning, bo cho runtime FOC
+
+Neu can uu tien cho product chay on:
+
+- uu tien current PI / low-speed runtime behavior
+- khong uu tien day `Uerror` thanh mot commissioning feature bat buoc o thoi diem hien tai

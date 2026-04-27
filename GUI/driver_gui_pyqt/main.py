@@ -3131,8 +3131,12 @@ class XyPlotView(QtWidgets.QWidget):
         legend_x = rect.left()
         legend_y = rect.top() + title_height + 2.0
         for series_def in self._series_defs:
+            if not series_def.get("show_legend", True):
+                continue
             label = series_def.get("label", "Series")
             color = QtGui.QColor(series_def.get("color", "#4dabf7"))
+            alpha = int(series_def.get("alpha", 255))
+            color.setAlpha(max(0, min(255, alpha)))
             painter.fillRect(QtCore.QRectF(legend_x, legend_y + 6.0, 10.0, 10.0), color)
             painter.drawText(
                 QtCore.QRectF(legend_x + 16.0, legend_y, 170.0, legend_height),
@@ -3193,31 +3197,40 @@ class XyPlotView(QtWidgets.QWidget):
         for series_index, series in enumerate(self._series_data):
             if not series:
                 continue
-            color = QtGui.QColor(
-                self._series_defs[series_index].get("color", "#4dabf7")
-                if series_index < len(self._series_defs)
-                else "#4dabf7"
-            )
-            pen = QtGui.QPen(color, 1.8)
-            painter.setPen(pen)
-            path = QtGui.QPainterPath()
-            for point_index, (x_value, y_value) in enumerate(series):
-                x = plot_rect.left() + ((x_value - x_min) / x_span) * plot_rect.width()
-                y = plot_rect.bottom() - ((y_value - y_min) / y_span) * plot_rect.height()
-                point = QtCore.QPointF(x, y)
-                if point_index == 0:
-                    path.moveTo(point)
-                else:
-                    path.lineTo(point)
-            painter.drawPath(path)
+            series_def = self._series_defs[series_index] if series_index < len(self._series_defs) else {}
+            color = QtGui.QColor(series_def.get("color", "#4dabf7"))
+            alpha = int(series_def.get("alpha", 255))
+            color.setAlpha(max(0, min(255, alpha)))
+            mode = str(series_def.get("mode", "line"))
+            line_width = float(series_def.get("line_width", 1.8))
+            marker_radius = float(series_def.get("marker_radius", 2.0))
+            marker_every = int(series_def.get("marker_every", 1))
+            marker_every = max(1, marker_every)
+            draw_line = mode in ("line", "line_scatter")
+            draw_scatter = mode in ("scatter", "line_scatter")
 
-            marker_brush = QtGui.QBrush(color)
-            painter.setBrush(marker_brush)
-            for marker_index in _report_marker_indices(len(series), 10):
-                x_value, y_value = series[marker_index]
+            points: list[QtCore.QPointF] = []
+            for x_value, y_value in series:
                 x = plot_rect.left() + ((x_value - x_min) / x_span) * plot_rect.width()
                 y = plot_rect.bottom() - ((y_value - y_min) / y_span) * plot_rect.height()
-                painter.drawEllipse(QtCore.QPointF(x, y), 2.0, 2.0)
+                points.append(QtCore.QPointF(x, y))
+
+            if draw_line and points:
+                pen = QtGui.QPen(color, line_width)
+                painter.setPen(pen)
+                path = QtGui.QPainterPath()
+                path.moveTo(points[0])
+                for point in points[1:]:
+                    path.lineTo(point)
+                painter.drawPath(path)
+
+            if draw_scatter and points:
+                painter.setPen(QtGui.QPen(color, max(1.0, marker_radius * 0.4)))
+                painter.setBrush(QtGui.QBrush(color))
+                for point_index, point in enumerate(points):
+                    if (point_index % marker_every) != 0:
+                        continue
+                    painter.drawEllipse(point, marker_radius, marker_radius)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -7852,12 +7865,32 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> tuple[
         list[list[tuple[float, float]]],
         list[list[tuple[float, float]]],
+        list[list[tuple[float, float]]],
+        list[list[tuple[float, float]]],
         list[tuple[float, float]],
     ]:
-        voltage_series = [[], [], []]
-        uerror_series = [[], [], []]
+        voltage_raw_series = [[], [], []]
+        voltage_trend_series = [[], [], []]
+        uerror_raw_series = [[], [], []]
+        uerror_trend_series = [[], [], []]
         merged_norm: list[tuple[float, float]] = []
         rs_actual = float(self.uerror_rs_actual_spin.value()) if hasattr(self, "uerror_rs_actual_spin") else 0.0
+
+        def smoothed_series(
+            series: list[tuple[float, float]],
+            *,
+            window_radius: int = 2,
+        ) -> list[tuple[float, float]]:
+            if len(series) <= 2:
+                return list(series)
+            smoothed: list[tuple[float, float]] = []
+            for index, (x_value, _) in enumerate(series):
+                start = max(0, index - window_radius)
+                end = min(len(series), index + window_radius + 1)
+                y_avg = sum(point[1] for point in series[start:end]) / float(end - start)
+                smoothed.append((x_value, y_avg))
+            return smoothed
+
         for sample in self._uerror_samples:
             if (
                 abs(sample.bus_voltage_v) < 1.0e-9
@@ -7873,17 +7906,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 (sample.phase_w_a, sample.phase_voltage_w_v),
             ]
             for series_index, (phase_current, phase_voltage) in enumerate(phase_points):
-                voltage_series[series_index].append((phase_current, phase_voltage))
+                voltage_raw_series[series_index].append((phase_current, phase_voltage))
                 uerror_value = phase_voltage - (rs_actual * phase_current)
-                uerror_series[series_index].append((phase_current, uerror_value))
+                uerror_raw_series[series_index].append((phase_current, uerror_value))
                 if sample.bus_voltage_v > 1.0e-6:
                     merged_norm.append((phase_current, uerror_value / sample.bus_voltage_v))
-        for series in voltage_series:
+        for series in voltage_raw_series:
             series.sort(key=lambda item: item[0])
-        for series in uerror_series:
+        for series in uerror_raw_series:
             series.sort(key=lambda item: item[0])
+        for raw_series, trend_series in zip(voltage_raw_series, voltage_trend_series):
+            trend_series.extend(smoothed_series(raw_series))
+        for raw_series, trend_series in zip(uerror_raw_series, uerror_trend_series):
+            trend_series.extend(smoothed_series(raw_series))
         merged_norm.sort(key=lambda item: item[0])
-        return voltage_series, uerror_series, merged_norm
+        return (
+            voltage_raw_series,
+            voltage_trend_series,
+            uerror_raw_series,
+            uerror_trend_series,
+            merged_norm,
+        )
 
     def _refresh_uerror_plots(self) -> None:
         if not hasattr(self, "uerror_voltage_plot"):
@@ -7895,31 +7938,91 @@ class MainWindow(QtWidgets.QMainWindow):
             self.uerror_lut_plot.clear("Waiting for survey data...")
             return
 
-        voltage_series, uerror_series, merged_norm = self._build_uerror_plot_series()
-        phase_series_defs = [
-            {"label": "Phase U", "color": "#1f77b4"},
-            {"label": "Phase V", "color": "#2ca02c"},
-            {"label": "Phase W", "color": "#d62728"},
-        ]
-        sample_count_text = f"{len(merged_norm) // 3 if merged_norm else 0} sweep points captured"
+        (
+            voltage_raw_series,
+            voltage_trend_series,
+            uerror_raw_series,
+            uerror_trend_series,
+            merged_norm,
+        ) = self._build_uerror_plot_series()
+        phase_colors = ["#1f77b4", "#2ca02c", "#d62728"]
+        phase_labels = ["Phase U", "Phase V", "Phase W"]
+        voltage_series_defs: list[dict[str, object]] = []
+        voltage_series_data: list[list[tuple[float, float]]] = []
+        uerror_series_defs: list[dict[str, object]] = []
+        uerror_series_data: list[list[tuple[float, float]]] = []
+        for color, label, raw_series, trend_series in zip(
+            phase_colors,
+            phase_labels,
+            voltage_raw_series,
+            voltage_trend_series,
+        ):
+            voltage_series_defs.extend(
+                [
+                    {
+                        "label": f"{label} Raw",
+                        "color": color,
+                        "mode": "scatter",
+                        "marker_radius": 2.3,
+                        "alpha": 95,
+                        "show_legend": False,
+                    },
+                    {
+                        "label": label,
+                        "color": color,
+                        "mode": "line",
+                        "line_width": 2.1,
+                    },
+                ]
+            )
+            voltage_series_data.extend([raw_series, trend_series])
+        for color, label, raw_series, trend_series in zip(
+            phase_colors,
+            phase_labels,
+            uerror_raw_series,
+            uerror_trend_series,
+        ):
+            uerror_series_defs.extend(
+                [
+                    {
+                        "label": f"{label} Raw",
+                        "color": color,
+                        "mode": "scatter",
+                        "marker_radius": 2.3,
+                        "alpha": 95,
+                        "show_legend": False,
+                    },
+                    {
+                        "label": label,
+                        "color": color,
+                        "mode": "line",
+                        "line_width": 2.1,
+                    },
+                ]
+            )
+            uerror_series_data.extend([raw_series, trend_series])
+        sample_count_text = (
+            f"{len(merged_norm) // 3 if merged_norm else 0} sweep points captured. "
+            "Points are mapped phase-current samples; solid lines show a local trend."
+        )
         self.uerror_voltage_plot.set_plot(
             title="Phase Command Voltage vs Current",
-            x_label="Phase Current",
+            x_label="Mapped Phase Current",
             x_unit="A",
             y_label="Phase Voltage",
             y_unit="V",
-            series_defs=phase_series_defs,
-            series_data=voltage_series,
+            series_defs=voltage_series_defs,
+            series_data=voltage_series_data,
             status_text=sample_count_text,
         )
         self.uerror_uerror_plot.set_plot(
             title="Raw Uerror vs Current",
-            x_label="Phase Current",
+            x_label="Mapped Phase Current",
             x_unit="A",
             y_label="Uerror",
             y_unit="V",
-            series_defs=phase_series_defs,
-            series_data=uerror_series,
+            series_defs=uerror_series_defs,
+            series_data=uerror_series_data,
             status_text=sample_count_text,
         )
 
@@ -7998,8 +8101,21 @@ class MainWindow(QtWidgets.QMainWindow):
             y_label="Uerror / Vbus",
             y_unit="pu",
             series_defs=[
-                {"label": "Merged Raw", "color": "#7f7f7f"},
-                {"label": "Preview LUT", "color": "#ff7f0e"},
+                {
+                    "label": "Merged Raw",
+                    "color": "#7f7f7f",
+                    "mode": "scatter",
+                    "marker_radius": 2.0,
+                    "alpha": 120,
+                },
+                {
+                    "label": "Preview LUT",
+                    "color": "#ff7f0e",
+                    "mode": "line_scatter",
+                    "line_width": 2.1,
+                    "marker_radius": 2.4,
+                    "marker_every": 4,
+                },
             ],
             series_data=[raw_norm_series, lut_preview_series],
             status_text=f"{grid_count}-point shared LUT preview",
@@ -8030,6 +8146,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 self,
                 "Save Uerror LUT",
                 "No valid LUT preview is available yet. Run a sweep first.",
+            )
+            return
+        last_monitor = self._latest_monitor_snapshot
+        if last_monitor is not None and (
+            bool(getattr(last_monitor, "enable_run", False))
+            or abs(float(getattr(last_monitor, "act_speed", 0.0))) > 1.0
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Save Uerror LUT",
+                "Servo OFF first, then wait until the motor is fully stopped before saving the LUT to flash. Firmware blocks flash writes while the drive state machine is still RUN/START.",
             )
             return
         payload = build_uerror_lut_payload(

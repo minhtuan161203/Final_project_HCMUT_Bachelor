@@ -1356,6 +1356,9 @@ static void RunUerrorCharacterizationLoop(void)
 	float target_current;
 	float target_voltage;
 	float inv_average_samples;
+	float phase_u_mapped;
+	float phase_v_mapped;
+	float phase_w_mapped;
 	uint16_t sample_index;
 
 	if (Parameter.fVdc < 1.0f)
@@ -1407,11 +1410,16 @@ static void RunUerrorCharacterizationLoop(void)
 		return;
 	}
 
+	phase_u_mapped = Parameter.fIabc[0];
+	phase_v_mapped = Parameter.fIabc[1];
+	ApplyPhaseCurrentFeedbackMapping(&phase_u_mapped, &phase_v_mapped);
+	phase_w_mapped = -phase_u_mapped - phase_v_mapped;
+
 	gUerrorCharacterization.state = UERROR_STATE_AVERAGE;
 	gUerrorCharacterization.accum_measured_id += Parameter.fIdq[0];
-	gUerrorCharacterization.accum_phase_u += Parameter.fIabc[0];
-	gUerrorCharacterization.accum_phase_v += Parameter.fIabc[1];
-	gUerrorCharacterization.accum_phase_w += Parameter.fIabc[2];
+	gUerrorCharacterization.accum_phase_u += phase_u_mapped;
+	gUerrorCharacterization.accum_phase_v += phase_v_mapped;
+	gUerrorCharacterization.accum_phase_w += phase_w_mapped;
 	gUerrorCharacterization.accum_phase_voltage_u += Parameter.fVabc[0];
 	gUerrorCharacterization.accum_phase_voltage_v += Parameter.fVabc[1];
 	gUerrorCharacterization.accum_phase_voltage_w += Parameter.fVabc[2];
@@ -3685,8 +3693,12 @@ static void RunFocLoop(void)
 	gIqPi.fLowOutLim = -voltage_limit;
 
 	
-	// D loop current control
-	if (ShouldHoldCurrentLoopAtZero(gIdRefA, gPark.fD) != 0u)
+	// D-axis zero-hold is useful for locked-rotor commissioning, but in runtime
+	// FOC it can chatter around low-speed zero crossings: the PI gets reset,
+	// rebuilds Vd, then gets reset again. Keep the old behavior only for
+	// Id-tuning/alignment flows and let runtime FOC regulate Id continuously.
+	if ((IdSquareTuning.Enable != 0u) &&
+		(ShouldHoldCurrentLoopAtZero(gIdRefA, gPark.fD) != 0u))
 	{
 		gIdPi.m_rst(&gIdPi);
 		gIdPi.fIn = 0.0f;
