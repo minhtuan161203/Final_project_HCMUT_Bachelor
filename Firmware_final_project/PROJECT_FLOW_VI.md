@@ -2238,3 +2238,7 @@ Neu can uu tien cho product chay on:
 
 - uu tien current PI / low-speed runtime behavior
 - khong uu tien day `Uerror` thanh mot commissioning feature bat buoc o thoi diem hien tai
+
+
+
+Update cái Ld Lq decoupling error nữa --> bằng cách bù trừ sai số và bộ PI

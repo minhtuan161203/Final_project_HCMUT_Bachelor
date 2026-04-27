@@ -111,6 +111,12 @@ POSITION_TEST_SETTLE_SPEED_TOLERANCE_RPM = 3.0
 POSITION_TARGET_COUNT_GUI_LIMIT = 1.0e15
 DEFAULT_CTUNING_CURRENT_KP = 5.0
 DEFAULT_CTUNING_CURRENT_KI = 10.0
+DEFAULT_SPEED_METRIC_SETTLE_BAND_RATIO = 0.05
+DEFAULT_SPEED_METRIC_SETTLE_BAND_MIN_RPM = 5.0
+DEFAULT_SPEED_METRIC_SETTLE_HOLD_S = 0.20
+DEFAULT_POSITION_METRIC_SETTLE_BAND_RATIO = 0.05
+DEFAULT_POSITION_METRIC_SETTLE_BAND_MIN_DEG = 0.10
+DEFAULT_POSITION_METRIC_SETTLE_HOLD_S = 0.20
 
 TREND_SERIES_META = {
     "phase_u": {"label": "Iu", "unit": "A", "color": "#1f77b4"},
@@ -277,6 +283,18 @@ class ChartReportCapture:
 
 
 @dataclass(slots=True)
+class MetricSummary:
+    avg_settling_time_s: float | None = None
+    max_settling_time_s: float | None = None
+    mean_error: float | None = None
+    mean_abs_error: float | None = None
+    std_dev: float | None = None
+    mean_abs_percent: float | None = None
+    settled_segments: int = 0
+    total_segments: int = 0
+
+
+@dataclass(slots=True)
 class SpeedTestSession:
     profile_key: str
     sequence: list[dict[str, object]]
@@ -431,6 +449,104 @@ def _nearest_sorted_index(values: list[float], target: float) -> int:
     if abs(target - prev_value) <= abs(next_value - target):
         return insert_at - 1
     return insert_at
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / float(len(values))
+
+
+def _std_dev(values: list[float]) -> float | None:
+    if not values:
+        return None
+    mean_value = _mean(values)
+    if mean_value is None:
+        return None
+    variance = sum((value - mean_value) ** 2 for value in values) / float(len(values))
+    return math.sqrt(max(variance, 0.0))
+
+
+def _window_metric_summary(
+    times: list[float],
+    command_values: list[float],
+    actual_values: list[float],
+    error_values: list[float],
+    *,
+    settle_band_ratio: float,
+    settle_band_min: float,
+    settle_hold_s: float,
+    command_epsilon: float,
+) -> MetricSummary:
+    summary = MetricSummary()
+    if not times or not command_values or not actual_values or not error_values:
+        return summary
+
+    usable_count = min(len(times), len(command_values), len(actual_values), len(error_values))
+    if usable_count <= 0:
+        return summary
+
+    times = times[:usable_count]
+    command_values = command_values[:usable_count]
+    actual_values = actual_values[:usable_count]
+    error_values = error_values[:usable_count]
+
+    summary.mean_error = _mean(error_values)
+    summary.mean_abs_error = _mean([abs(value) for value in error_values])
+    summary.std_dev = _std_dev(error_values)
+
+    percent_errors = [
+        (abs(error_value) / abs(command_value)) * 100.0
+        for command_value, error_value in zip(command_values, error_values)
+        if abs(command_value) >= command_epsilon
+    ]
+    summary.mean_abs_percent = _mean(percent_errors)
+
+    command_span = max(command_values) - min(command_values)
+    if command_span < command_epsilon:
+        return summary
+
+    step_threshold = max(command_epsilon, command_span * 0.05)
+    step_index: int | None = None
+    for index in range(1, usable_count):
+        if abs(command_values[index] - command_values[index - 1]) >= step_threshold:
+            step_index = index
+
+    if step_index is None or step_index >= usable_count:
+        return summary
+
+    target_value = command_values[step_index]
+    previous_value = command_values[max(0, step_index - 1)]
+    step_magnitude = max(abs(target_value - previous_value), command_epsilon)
+    tolerance_value = max(settle_band_min, step_magnitude * settle_band_ratio)
+    hold_s = max(0.0, settle_hold_s)
+
+    for index in range(step_index, usable_count):
+        if abs(actual_values[index] - target_value) > tolerance_value:
+            continue
+        settle_start_s = times[index]
+        settle_end_s = settle_start_s + hold_s
+        if times[-1] < settle_end_s:
+            break
+
+        stable = True
+        probe_index = index
+        while probe_index < usable_count and times[probe_index] <= settle_end_s:
+            if abs(actual_values[probe_index] - target_value) > tolerance_value:
+                stable = False
+                break
+            probe_index += 1
+
+        if stable:
+            settling_time_s = settle_end_s - times[step_index]
+            summary.avg_settling_time_s = settling_time_s
+            summary.max_settling_time_s = settling_time_s
+            summary.total_segments = 1
+            summary.settled_segments = 1
+            return summary
+
+    summary.total_segments = 1
+    return summary
 
 
 def _common_unit(units: list[str]) -> str:
@@ -2554,10 +2670,14 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         title: str,
         trend_buffer: CircularSeriesBuffer,
         series_keys: list[str],
+        stats_mode: str | None = None,
         on_export_requested=None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._trend_buffer = trend_buffer
+        self._series_keys = list(series_keys)
+        self._stats_mode = stats_mode
         layout = QtWidgets.QVBoxLayout(self)
         toolbar = QtWidgets.QHBoxLayout()
 
@@ -2588,8 +2708,18 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
+        self.stats_label = QtWidgets.QLabel("")
+        self.stats_label.setWordWrap(False)
+        self.stats_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.stats_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        if stats_mode is not None:
+            layout.addWidget(self.stats_label)
+
         self.plot_view = ScadaTrendView(title, trend_buffer, series_keys, self)
-        layout.addWidget(self.plot_view)
+        layout.addWidget(self.plot_view, 1)
 
         self.pause_button.toggled.connect(self._handle_pause_toggled)
         self.auto_scale_checkbox.toggled.connect(self.plot_view.set_auto_scale)
@@ -2602,10 +2732,12 @@ class ScadaTrendPanel(QtWidgets.QWidget):
     def _handle_pause_toggled(self, checked: bool) -> None:
         self.pause_button.setText("Resume" if checked else "Pause")
         self.plot_view.set_paused(checked)
+        self.refresh()
 
     def _handle_window_changed(self, text: str) -> None:
         value = float(text.split()[0])
         self.plot_view.set_time_window_s(value)
+        self.refresh()
 
     def _handle_report_font_changed(self, value: int) -> None:
         self.report_font_label.setText(f"{int(value)} pt")
@@ -2613,9 +2745,88 @@ class ScadaTrendPanel(QtWidgets.QWidget):
 
     def refresh(self) -> None:
         self.plot_view.refresh_from_buffer()
+        self._refresh_stats()
 
     def clear(self) -> None:
         self.plot_view.clear()
+        self._refresh_stats()
+
+    def _render_stat_text(
+        self,
+        summary: MetricSummary,
+        *,
+        unit: str,
+        percent_suffix: str = "%",
+    ) -> str:
+        def format_value(value: float | None, suffix: str, decimals: int = 3) -> str:
+            if value is None:
+                return "-"
+            return f"{value:.{decimals}f} {suffix}".strip()
+
+        settling_text = (
+            format_value(summary.avg_settling_time_s, "s", 3)
+            if summary.settled_segments > 0
+            else "Not settled in window"
+        )
+        return (
+            f"Window stats | Settling: {settling_text} | "
+            f"Mean error: {format_value(summary.mean_error, unit)} | "
+            f"Mean |error|: {format_value(summary.mean_abs_error, unit)} | "
+            f"Std dev: {format_value(summary.std_dev, unit)} | "
+            f"Mean |error| %: {format_value(summary.mean_abs_percent, percent_suffix, 2)}"
+        )
+
+    def _refresh_stats(self) -> None:
+        if self._stats_mode is None:
+            return
+
+        render_times = list(self.plot_view._render_times)
+        if not render_times:
+            self.stats_label.setText("Window stats: waiting for monitor data...")
+            return
+
+        start_time_s = self.plot_view._render_anchor_s - self.plot_view._time_window_s
+        end_time_s = self.plot_view._render_anchor_s
+
+        if self._stats_mode == "speed_error":
+            times, values = self._trend_buffer.windowed_series(
+                ["cmd_speed", "act_speed", "speed_error"],
+                start_time_s,
+                end_time_s,
+            )
+            summary = _window_metric_summary(
+                times,
+                values["cmd_speed"],
+                values["act_speed"],
+                values["speed_error"],
+                settle_band_ratio=DEFAULT_SPEED_METRIC_SETTLE_BAND_RATIO,
+                settle_band_min=DEFAULT_SPEED_METRIC_SETTLE_BAND_MIN_RPM,
+                settle_hold_s=DEFAULT_SPEED_METRIC_SETTLE_HOLD_S,
+                command_epsilon=1.0,
+            )
+            self.stats_label.setText(self._render_stat_text(summary, unit="rpm"))
+            return
+
+        if self._stats_mode == "position_error":
+            times, values = self._trend_buffer.windowed_series(
+                ["cmd_position_deg", "act_position_deg", "position_error_deg"],
+                start_time_s,
+                end_time_s,
+            )
+            summary = _window_metric_summary(
+                times,
+                values["cmd_position_deg"],
+                values["act_position_deg"],
+                values["position_error_deg"],
+                settle_band_ratio=DEFAULT_POSITION_METRIC_SETTLE_BAND_RATIO,
+                settle_band_min=DEFAULT_POSITION_METRIC_SETTLE_BAND_MIN_DEG,
+                settle_hold_s=DEFAULT_POSITION_METRIC_SETTLE_HOLD_S,
+                command_epsilon=0.1,
+            )
+            self.stats_label.setText(self._render_stat_text(summary, unit="deg"))
+            return
+
+        self.stats_label.setText("")
 
 
 class ScopeCaptureView(QtWidgets.QWidget):
@@ -3076,14 +3287,23 @@ class XyPlotView(QtWidgets.QWidget):
             "grid": self.palette().midlight().color(),
         }
 
+    def _axis_caption(self, label: str, unit: str) -> str:
+        unit_text = unit.strip()
+        if unit_text:
+            return f"{label} [{unit_text}]"
+        return label
+
     def _plot_geometry(self, rect: QtCore.QRectF) -> tuple[QtCore.QRectF, int, int]:
-        title_height = QtGui.QFontMetrics(self.font()).height() + 6
-        legend_height = QtGui.QFontMetrics(self.font()).height() + 14
-        bottom_space = QtGui.QFontMetrics(self.font()).height() + 42
+        font_metrics = QtGui.QFontMetrics(self.font())
+        title_height = font_metrics.height() + 6
+        legend_height = font_metrics.height() + 14
+        left_space = 60.0
+        right_space = 72.0
+        bottom_space = (font_metrics.height() * 2.0) + 54.0
         plot_rect = QtCore.QRectF(
-            rect.left() + 8.0,
+            rect.left() + left_space,
             rect.top() + title_height + legend_height + 14.0,
-            max(80.0, rect.width() - 80.0),
+            max(80.0, rect.width() - left_space - right_space),
             max(80.0, rect.height() - title_height - legend_height - bottom_space),
         )
         return plot_rect, title_height, legend_height
@@ -3191,7 +3411,24 @@ class XyPlotView(QtWidgets.QWidget):
         painter.drawText(
             QtCore.QRectF(plot_rect.left(), plot_rect.bottom() + 28.0, plot_rect.width(), 18.0),
             QtCore.Qt.AlignmentFlag.AlignCenter,
-            f"{self._x_label} / {self._y_label}",
+            f"X-axis: {self._axis_caption(self._x_label, self._x_unit)}",
+        )
+        painter.save()
+        painter.translate(rect.left() + 18.0, plot_rect.center().y())
+        painter.rotate(-90.0)
+        painter.drawText(
+            QtCore.QRectF(-plot_rect.height() * 0.5, -12.0, plot_rect.height(), 24.0),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            f"Y-axis: {self._axis_caption(self._y_label, self._y_unit)}",
+        )
+        painter.restore()
+
+        status_pen = QtGui.QPen(colors["grid"])
+        painter.setPen(status_pen)
+        painter.drawText(
+            QtCore.QRectF(plot_rect.left(), plot_rect.bottom() + 46.0, plot_rect.width(), 18.0),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            self._status_text,
         )
 
         for series_index, series in enumerate(self._series_data):
@@ -3259,6 +3496,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trend_panels: list[ScadaTrendPanel] = []
         self._current_tuning_capture = _empty_scope_state("Current Tuning Response")
         self._autotune_capture = _empty_scope_state("Motor Auto-Tune Charts")
+        self._autotune_rs_capture = _empty_scope_state("Rs Calibration Chart")
+        self._autotune_ls_capture = _empty_scope_state("Ls Sine Injection Response")
         self._autotune_continue_signature: tuple[int, int] | None = None
         self._trace_capture = _empty_scope_state("Firmware Trace Scope")
         self._uerror_samples: list[UerrorRawSample] = []
@@ -3431,21 +3670,6 @@ class MainWindow(QtWidgets.QMainWindow):
             ("mech_angle_multi", "Mech Angle (MT)"),
             ("total_distance", "Total Distance"),
         ]
-        current_fields = [
-            ("id_ref", "Id Ref"),
-            ("id_current", "Id"),
-            ("iq_ref", "Iq Ref"),
-            ("iq_current", "Iq"),
-            ("phase_u", "Iu"),
-            ("phase_v", "Iv"),
-            ("phase_w", "Iw"),
-        ]
-        voltage_fields = [
-            ("vd", "Vd"),
-            ("vq", "Vq"),
-            ("vf_frequency", "V/F Freq"),
-            ("vf_voltage", "V/F Volt"),
-        ]
 
         dashboard_widget = QtWidgets.QWidget()
         dashboard_layout = QtWidgets.QGridLayout(dashboard_widget)
@@ -3453,18 +3677,18 @@ class MainWindow(QtWidgets.QMainWindow):
         dashboard_layout.setHorizontalSpacing(10)
         dashboard_layout.setVerticalSpacing(10)
         dashboard_layout.addWidget(
-            self._build_monitor_dashboard_section("Status", status_fields, columns=2), 0, 0
-        )
-        dashboard_layout.addWidget(
-            self._build_monitor_dashboard_section("Motion", motion_fields, columns=2), 0, 1
-        )
-        dashboard_layout.addWidget(
-            self._build_monitor_dashboard_section("Currents", current_fields, columns=2), 1, 0
-        )
-        dashboard_layout.addWidget(
-            self._build_monitor_dashboard_section("Voltages", voltage_fields, columns=2),
+            self._build_monitor_dashboard_section("Status", status_fields, columns=2),
+            0,
+            0,
             1,
+            2,
+        )
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Motion", motion_fields, columns=2),
             1,
+            0,
+            1,
+            2,
         )
         dashboard_layout.setColumnStretch(0, 1)
         dashboard_layout.setColumnStretch(1, 1)
@@ -3516,29 +3740,45 @@ class MainWindow(QtWidgets.QMainWindow):
             on_export_requested=self._open_report_editor_for_chart,
         )
         self.speed_panel = ScadaTrendPanel(
-            "Speed Trend",
+            "Speed Response",
             self._trend_buffer,
-            ["act_speed", "cmd_speed", "speed_error"],
+            ["act_speed", "cmd_speed"],
+            on_export_requested=self._open_report_editor_for_chart,
+        )
+        self.speed_error_panel = ScadaTrendPanel(
+            "Speed Error",
+            self._trend_buffer,
+            ["speed_error"],
+            stats_mode="speed_error",
             on_export_requested=self._open_report_editor_for_chart,
         )
         self.position_panel = ScadaTrendPanel(
-            "Position Trend",
+            "Position Response",
             self._trend_buffer,
-            ["act_position_deg", "cmd_position_deg", "position_error_deg", "validation_error_deg"],
+            ["act_position_deg", "cmd_position_deg"],
+            on_export_requested=self._open_report_editor_for_chart,
+        )
+        self.position_error_panel = ScadaTrendPanel(
+            "Position Error",
+            self._trend_buffer,
+            ["position_error_deg", "validation_error_deg"],
+            stats_mode="position_error",
             on_export_requested=self._open_report_editor_for_chart,
         )
 
         tabs.addTab(self.phase_current_panel, "Phase Currents")
         tabs.addTab(self.dq_current_panel, "D/Q Currents")
         tabs.addTab(self.vdq_voltage_panel, "Vd/Vq")
-        tabs.addTab(self.speed_panel, "Speed")
-        tabs.addTab(self.position_panel, "Position")
+        tabs.addTab(self.speed_panel, "Speed Response")
+        tabs.addTab(self.speed_error_panel, "Speed Error")
+        tabs.addTab(self.position_panel, "Position Response")
+        tabs.addTab(self.position_error_panel, "Position Error")
 
         toolbar = QtWidgets.QHBoxLayout()
         clear_trend_button = QtWidgets.QPushButton("Clear History")
         clear_trend_button.clicked.connect(self._clear_trend_history)
         trend_hint = QtWidgets.QLabel(
-            "Use Pause to inspect data, Auto-scale Y to freeze the range, and hover to read point values."
+            "Use Pause to inspect data, Auto-scale Y to freeze the range, and hover to read point values. The Speed Error and Position Error tabs now show settling time plus windowed mean/std/% error statistics."
         )
         trend_hint.setWordWrap(True)
         toolbar.addWidget(clear_trend_button)
@@ -3553,6 +3793,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.vdq_voltage_panel,
             self.speed_panel,
             self.position_panel,
+            self.speed_error_panel,
+            self.position_error_panel,
         ]
         return dialog
 
@@ -3564,10 +3806,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         layout = QtWidgets.QVBoxLayout(dialog)
         tabs = QtWidgets.QTabWidget(dialog)
-        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_id_tuning_tab()), "Id Tuning")
-        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_autotune_tab()), "Motor Auto-Tune")
-        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_trace_scope_tab()), "Trace Scope")
         tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_uerror_tab()), "Uerror Characterization")
+        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_autotune_tab()), "Motor Auto-Tune")
+        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_id_tuning_tab()), "Id Tuning")
+        tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_trace_scope_tab()), "Trace Scope")
         layout.addWidget(tabs)
         return dialog
 
@@ -3768,14 +4010,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_rs_low_spin = QtWidgets.QDoubleSpinBox()
         self.autotune_rs_low_spin.setRange(0.05, 20.0)
         self.autotune_rs_low_spin.setDecimals(3)
-        self.autotune_rs_low_spin.setValue(0.20)
+        self.autotune_rs_low_spin.setValue(1.00)
         self.autotune_rs_low_spin.setSuffix(" A")
+        self.autotune_rs_low_spin.setToolTip(
+            "Recommended starting point: roughly 70-80% of motor rated current for Rs estimation."
+        )
 
         self.autotune_rs_high_spin = QtWidgets.QDoubleSpinBox()
         self.autotune_rs_high_spin.setRange(0.10, 20.0)
         self.autotune_rs_high_spin.setDecimals(3)
-        self.autotune_rs_high_spin.setValue(0.45)
+        self.autotune_rs_high_spin.setValue(1.50)
         self.autotune_rs_high_spin.setSuffix(" A")
+        self.autotune_rs_high_spin.setToolTip(
+            "Recommended starting point: roughly 70-80% of motor rated current for Rs estimation."
+        )
 
         self.autotune_ls_voltage_spin = QtWidgets.QDoubleSpinBox()
         self.autotune_ls_voltage_spin.setRange(0.25, DEFAULT_MOTOR_MAXIMUM_VOLTAGE)
@@ -3839,11 +4087,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_speed_gain_value_label = QtWidgets.QLabel("-")
         self.autotune_position_gain_value_label = QtWidgets.QLabel("-")
 
-        autotune_hint = QtWidgets.QLabel(
-            "Workflow: keep the rotor mechanically locked for Rs and the Ls sine-injection stage, then let the motor run unloaded during the open-loop flux stage. Before starting the flux stage, try the same Flux Voltage and Flux Frequency in open-loop V/F mode first. The motor should spin smoothly without obvious jerks or abnormal vibration; otherwise adjust those values before auto-tune so the estimated flux/Ke stays trustworthy. The module now uses the fixed 16 kHz runtime profile reported by firmware."
-        )
-        autotune_hint.setWordWrap(True)
-
         config_layout.addWidget(QtWidgets.QLabel("Rs Low Current"), 0, 0)
         config_layout.addWidget(self.autotune_rs_low_spin, 0, 1)
         config_layout.addWidget(QtWidgets.QLabel("Rs High Current"), 0, 2)
@@ -3867,7 +4110,6 @@ class MainWindow(QtWidgets.QMainWindow):
         config_layout.addWidget(self.autotune_apply_button, 5, 2, 1, 2)
         config_layout.addWidget(QtWidgets.QLabel("Progress"), 6, 0)
         config_layout.addWidget(self.autotune_progress_bar, 6, 1, 1, 3)
-        config_layout.addWidget(autotune_hint, 7, 0, 1, 4)
 
         results_group = QtWidgets.QGroupBox("Measured Results")
         results_layout = QtWidgets.QGridLayout(results_group)
@@ -3896,31 +4138,75 @@ class MainWindow(QtWidgets.QMainWindow):
         results_layout.addWidget(QtWidgets.QLabel("Kt"), 6, 0)
         results_layout.addWidget(self.autotune_kt_value_label, 6, 1)
 
+        help_group = QtWidgets.QGroupBox("Help / Workflow")
+        help_layout = QtWidgets.QVBoxLayout(help_group)
+        autotune_help = QtWidgets.QLabel(
+            "<b>Recommended Workflow</b>"
+            "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
+            "<li>Lock the rotor mechanically for the <b>Rs</b> and <b>Ls</b> stages.</li>"
+            "<li>Run the <b>Flux</b> stage only with the motor unloaded and free to spin.</li>"
+            "<li>Before Flux estimation, try the same <b>Flux Voltage</b> and <b>Flux Frequency</b> in <b>Open Loop V/F</b> first.</li>"
+            "<li>The motor should spin smoothly without strong jerks, buzz, or unstable vibration before you trust the Ke / flux estimate.</li>"
+            "</ul>"
+            "<b>Rs Estimation Note</b>"
+            "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
+            "<li>Use the d-axis test current around <b>1.0 to 1.5 A</b> as a practical starting point here.</li>"
+            "<li>That is roughly <b>70-80% of the motor rated current</b> for this setup, which usually gives a cleaner Rs estimate than very small current.</li>"
+            "</ul>"
+            "<b>Chart Reading Guide</b>"
+            "<ul style='margin-top:6px; margin-bottom:0px; margin-left:18px;'>"
+            "<li><b>Rs chart</b>: compare <code>Id Ref</code>, <code>Id</code>, and <code>Vd</code> during the two-current steady-state test.</li>"
+            "<li><b>Ls chart</b>: inspect the direct-axis sine/response waveform used to estimate inductance and the valid measure window.</li>"
+            "<li>The runtime profile stays on the firmware-reported fixed <b>16 kHz</b> loop.</li>"
+            "</ul>"
+        )
+        autotune_help.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        autotune_help.setWordWrap(True)
+        help_layout.addWidget(autotune_help)
+
         scope_toolbar = QtWidgets.QHBoxLayout()
         self.autotune_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
         self.autotune_auto_scale_checkbox.setChecked(True)
         self.autotune_clear_button = QtWidgets.QPushButton("Clear Capture")
         scope_note = QtWidgets.QLabel(
-            "Rs chart shows Id/Vd during the two-current steady-state test. Ls chart shows the direct d-axis voltage step response used to estimate di/dt with the active loop timing."
+            "Each stage now keeps its own chart so you can inspect Rs and Ls separately without losing the previous capture."
         )
         scope_note.setWordWrap(True)
 
-        self.autotune_scope_view = ScopeCaptureView()
+        self.autotune_rs_scope_view = ScopeCaptureView()
+        self.autotune_rs_scope_view.setMinimumHeight(260)
+        self.autotune_ls_scope_view = ScopeCaptureView()
+        self.autotune_ls_scope_view.setMinimumHeight(260)
+
+        rs_chart_group = QtWidgets.QGroupBox("Rs Estimation Chart")
+        rs_chart_layout = QtWidgets.QVBoxLayout(rs_chart_group)
+        rs_chart_layout.addWidget(self.autotune_rs_scope_view)
+
+        ls_chart_group = QtWidgets.QGroupBox("Ls Estimation Chart")
+        ls_chart_layout = QtWidgets.QVBoxLayout(ls_chart_group)
+        ls_chart_layout.addWidget(self.autotune_ls_scope_view)
+
         self._refresh_autotune_panel(None)
 
         scope_toolbar.addWidget(self.autotune_auto_scale_checkbox)
         scope_toolbar.addWidget(self.autotune_clear_button)
         self._append_report_controls(
             scope_toolbar,
-            [self.autotune_scope_view],
-            export_targets=[("Capture & Edit", self.autotune_scope_view)],
+            [self.autotune_rs_scope_view, self.autotune_ls_scope_view],
+            export_targets=[
+                ("Export Rs Chart", self.autotune_rs_scope_view),
+                ("Export Ls Chart", self.autotune_ls_scope_view),
+            ],
         )
         scope_toolbar.addWidget(scope_note, 1)
 
         layout.addWidget(config_group)
         layout.addWidget(results_group)
+        layout.addWidget(help_group)
         layout.addLayout(scope_toolbar)
-        layout.addWidget(self.autotune_scope_view, 1)
+        layout.addWidget(rs_chart_group)
+        layout.addWidget(ls_chart_group)
+        layout.addStretch(1)
         return widget
 
     def _build_trace_scope_tab(self) -> QtWidgets.QWidget:
@@ -4064,6 +4350,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "<li><b>Average Samples</b>: number of samples averaged at each point to suppress noise.</li>"
             "<li><b>Force odd symmetry</b>: enforces <code>f(-I) = -f(I)</code> on the preview LUT.</li>"
             "<li><b>Smooth LUT</b>: applies a light smoothing pass before runtime apply or flash save.</li>"
+            "<li><b>Normalized LUT</b>: the preview/save format is <code>Uerror / Vbus</code> in <code>pu</code>, so the stored numbers are intentionally smaller than volts.</li>"
             "</ul>"
             "<b>Recommended Flow</b>"
             "<ul>"
@@ -5035,7 +5322,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_stop_button.clicked.connect(self._stop_motor_autotune)
         self.autotune_apply_button.clicked.connect(self._apply_motor_autotune_estimates)
         self.autotune_clear_button.clicked.connect(self._clear_autotune_capture)
-        self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_scope_view.set_auto_scale)
+        self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_rs_scope_view.set_auto_scale)
+        self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_ls_scope_view.set_auto_scale)
         self.read_all_params_button.clicked.connect(self._read_all_parameters)
         self.write_driver_button.clicked.connect(self._write_driver_parameters)
         self.write_motor_button.clicked.connect(self._write_motor_parameters)
@@ -7484,6 +7772,62 @@ class MainWindow(QtWidgets.QMainWindow):
             ]
         return []
 
+    def _autotune_stage_capture(self, stage: int) -> ScopeCaptureState:
+        if int(stage) == MOTOR_AUTOTUNE_CHART_RS:
+            return self._autotune_rs_capture
+        if int(stage) == MOTOR_AUTOTUNE_CHART_LS:
+            return self._autotune_ls_capture
+        return self._autotune_capture
+
+    def _autotune_stage_view(self, stage: int) -> ScopeCaptureView | None:
+        if int(stage) == MOTOR_AUTOTUNE_CHART_RS and hasattr(self, "autotune_rs_scope_view"):
+            return self.autotune_rs_scope_view
+        if int(stage) == MOTOR_AUTOTUNE_CHART_LS and hasattr(self, "autotune_ls_scope_view"):
+            return self.autotune_ls_scope_view
+        return None
+
+    def _autotune_display_capture(
+        self,
+        capture: ScopeCaptureState,
+        stage: int,
+    ) -> ScopeCaptureState:
+        if int(stage) != MOTOR_AUTOTUNE_CHART_LS:
+            return capture
+        if len(capture.series_data) < 2 or not capture.series_data[1]:
+            return capture
+
+        sine_series = capture.series_data[1]
+        sine_peak = max((abs(value) for value in sine_series), default=0.0)
+        if sine_peak <= 1.0e-6:
+            return capture
+
+        delta_threshold = max(0.03, sine_peak * 0.08)
+        start_index = 0
+        for index in range(1, len(sine_series)):
+            if abs(sine_series[index] - sine_series[index - 1]) >= delta_threshold:
+                start_index = max(0, index - 8)
+                break
+
+        if start_index <= 0:
+            return capture
+
+        trimmed_series = [
+            series[start_index:] if len(series) > start_index else []
+            for series in capture.series_data
+        ]
+        trimmed_received = max(0, capture.received_samples - start_index)
+        trimmed_total = max(trimmed_received, capture.total_samples - start_index)
+        return ScopeCaptureState(
+            title=f"{capture.title} (Sine Window)",
+            sample_period_s=capture.sample_period_s,
+            total_samples=trimmed_total,
+            series_defs=[dict(series_def) for series_def in capture.series_defs],
+            series_data=trimmed_series,
+            source_indices=list(capture.source_indices) if capture.source_indices is not None else None,
+            active=capture.active,
+            received_samples=trimmed_received,
+        )
+
     def _refresh_autotune_panel(self, snapshot) -> None:
         if not hasattr(self, "autotune_state_value_label"):
             return
@@ -7545,8 +7889,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _clear_autotune_capture(self) -> None:
         self._autotune_capture = _empty_scope_state("Motor Auto-Tune Charts")
+        self._autotune_rs_capture = _empty_scope_state("Rs Calibration Chart")
+        self._autotune_ls_capture = _empty_scope_state("Ls Sine Injection Response")
         self._autotune_continue_signature = None
-        self.autotune_scope_view.clear()
+        if hasattr(self, "autotune_rs_scope_view"):
+            self.autotune_rs_scope_view.clear()
+        if hasattr(self, "autotune_ls_scope_view"):
+            self.autotune_ls_scope_view.clear()
         self.autotune_chart_state_label.setText("Waiting for capture")
         if self._active_trace_target == "autotune":
             self._active_trace_target = None
@@ -7722,11 +8071,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _handle_autotune_chunk(self, chunk: AutoTuneChunk) -> None:
         stage = int(chunk.stage)
+        capture = self._autotune_stage_capture(stage)
         if (
-            self._autotune_capture.total_samples != chunk.total_samples
-            or self._autotune_capture.title != self._autotune_chart_title(stage)
+            capture.total_samples != chunk.total_samples
+            or capture.title != self._autotune_chart_title(stage)
         ):
-            self._autotune_capture = ScopeCaptureState(
+            capture = ScopeCaptureState(
                 title=self._autotune_chart_title(stage),
                 sample_period_s=chunk.sample_period_s,
                 total_samples=chunk.total_samples,
@@ -7736,27 +8086,32 @@ class MainWindow(QtWidgets.QMainWindow):
                 active=True,
                 received_samples=0,
             )
+            if stage == MOTOR_AUTOTUNE_CHART_RS:
+                self._autotune_rs_capture = capture
+            elif stage == MOTOR_AUTOTUNE_CHART_LS:
+                self._autotune_ls_capture = capture
             self._active_trace_target = "autotune"
+        self._autotune_capture = capture
 
         if chunk.sample_start == 0:
-            self._autotune_capture.series_data = [[], [], []]
-            self._autotune_capture.received_samples = 0
+            capture.series_data = [[], [], []]
+            capture.received_samples = 0
 
-        self._autotune_capture.series_data[0].extend(chunk.primary)
-        self._autotune_capture.series_data[1].extend(chunk.secondary)
-        self._autotune_capture.series_data[2].extend(chunk.tertiary)
-        self._autotune_capture.received_samples = len(self._autotune_capture.series_data[0])
-        self._autotune_capture.active = (
-            self._autotune_capture.received_samples < self._autotune_capture.total_samples
-        )
+        capture.series_data[0].extend(chunk.primary)
+        capture.series_data[1].extend(chunk.secondary)
+        capture.series_data[2].extend(chunk.tertiary)
+        capture.received_samples = len(capture.series_data[0])
+        capture.active = capture.received_samples < capture.total_samples
         self.autotune_chart_state_label.setText(
-            f"Received {self._autotune_capture.received_samples}/{self._autotune_capture.total_samples} chart samples"
+            f"Received {capture.received_samples}/{capture.total_samples} chart samples"
         )
-        self._update_scope_view(
-            self.autotune_scope_view,
-            self._autotune_capture,
-            "Auto-tune chart",
-        )
+        view = self._autotune_stage_view(stage)
+        if view is not None:
+            self._update_scope_view(
+                view,
+                self._autotune_display_capture(capture, stage),
+                "Auto-tune chart",
+            )
         self._maybe_continue_autotune_stage()
 
     def _start_trace_capture(self) -> None:
@@ -7951,6 +8306,12 @@ class MainWindow(QtWidgets.QMainWindow):
         voltage_series_data: list[list[tuple[float, float]]] = []
         uerror_series_defs: list[dict[str, object]] = []
         uerror_series_data: list[list[tuple[float, float]]] = []
+        valid_vbus_values = [
+            float(sample.bus_voltage_v)
+            for sample in self._uerror_samples
+            if float(sample.bus_voltage_v) > 1.0e-6
+        ]
+        avg_vbus = (sum(valid_vbus_values) / float(len(valid_vbus_values))) if valid_vbus_values else 0.0
         for color, label, raw_series, trend_series in zip(
             phase_colors,
             phase_labels,
@@ -8001,9 +8362,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 ]
             )
             uerror_series_data.extend([raw_series, trend_series])
-        sample_count_text = (
+        sweep_point_count = len(merged_norm) // 3 if merged_norm else 0
+        voltage_status_text = (
+            f"{sweep_point_count} sweep points captured. "
+            "X is mapped phase current, Y is the commanded phase voltage. "
+            "Dots are raw samples; solid lines are local trends."
+        )
+        uerror_status_text = (
             f"{len(merged_norm) // 3 if merged_norm else 0} sweep points captured. "
-            "Points are mapped phase-current samples; solid lines show a local trend."
+            "Uerror is computed as Vphase - Rs * Iphase and is shown here in volts."
         )
         self.uerror_voltage_plot.set_plot(
             title="Phase Command Voltage vs Current",
@@ -8013,17 +8380,17 @@ class MainWindow(QtWidgets.QMainWindow):
             y_unit="V",
             series_defs=voltage_series_defs,
             series_data=voltage_series_data,
-            status_text=sample_count_text,
+            status_text=voltage_status_text,
         )
         self.uerror_uerror_plot.set_plot(
             title="Raw Uerror vs Current",
             x_label="Mapped Phase Current",
             x_unit="A",
-            y_label="Uerror",
+            y_label="Uerror = Vphase - Rs*Iphase",
             y_unit="V",
             series_defs=uerror_series_defs,
             series_data=uerror_series_data,
-            status_text=sample_count_text,
+            status_text=uerror_status_text,
         )
 
         self._uerror_lut_preview_norm = []
@@ -8094,11 +8461,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._uerror_lut_preview_current_max_a = float(current_max)
         raw_norm_series = merged_norm
         lut_preview_series = list(zip(grid, self._uerror_lut_preview_norm))
+        lut_peak_pu = max((abs(value) for value in self._uerror_lut_preview_norm), default=0.0)
+        lut_peak_v = lut_peak_pu * avg_vbus
         self.uerror_lut_plot.set_plot(
-            title="Normalized LUT Preview",
+            title="Normalized LUT Preview (Stored LUT)",
             x_label="Phase Current",
             x_unit="A",
-            y_label="Uerror / Vbus",
+            y_label="Normalized Uerror = Uerror / Vbus",
             y_unit="pu",
             series_defs=[
                 {
@@ -8118,7 +8487,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 },
             ],
             series_data=[raw_norm_series, lut_preview_series],
-            status_text=f"{grid_count}-point shared LUT preview",
+            status_text=(
+                f"{grid_count}-point shared LUT preview. Stored value is Uerror / Vbus [pu]. "
+                f"At average Vbus {avg_vbus:.2f} V, peak |LUT| {lut_peak_pu:.4f} pu is about {lut_peak_v:.3f} V."
+            ),
         )
 
     def _apply_uerror_runtime_lut(self) -> None:
