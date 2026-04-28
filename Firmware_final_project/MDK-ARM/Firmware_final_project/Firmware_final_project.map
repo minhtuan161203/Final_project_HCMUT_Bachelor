@@ -3007,126 +3007,126 @@ Image Symbol Table
     i.USB_ResetTraceCaptureState             0x0800c0f0   Section        0  usbcomunication.o(i.USB_ResetTraceCaptureState)
     USB_ResetTraceCaptureState               0x0800c0f1   Thumb Code    16  usbcomunication.o(i.USB_ResetTraceCaptureState)
     i.USB_ResolveTraceChannelPointer         0x0800c104   Section        0  usbcomunication.o(i.USB_ResolveTraceChannelPointer)
-    USB_ResolveTraceChannelPointer           0x0800c105   Thumb Code   102  usbcomunication.o(i.USB_ResolveTraceChannelPointer)
-    i.USB_SendAckPacket                      0x0800c180   Section        0  usbcomunication.o(i.USB_SendAckPacket)
-    USB_SendAckPacket                        0x0800c181   Thumb Code    98  usbcomunication.o(i.USB_SendAckPacket)
-    i.USB_SendAutoTuneChunk                  0x0800c1e4   Section        0  usbcomunication.o(i.USB_SendAutoTuneChunk)
-    USB_SendAutoTuneChunk                    0x0800c1e5   Thumb Code   236  usbcomunication.o(i.USB_SendAutoTuneChunk)
-    i.USB_SendErrorPacket                    0x0800c2d8   Section        0  usbcomunication.o(i.USB_SendErrorPacket)
-    USB_SendErrorPacket                      0x0800c2d9   Thumb Code   194  usbcomunication.o(i.USB_SendErrorPacket)
-    i.USB_SendMonitorPacket                  0x0800c3cc   Section        0  usbcomunication.o(i.USB_SendMonitorPacket)
-    USB_SendMonitorPacket                    0x0800c3cd   Thumb Code   682  usbcomunication.o(i.USB_SendMonitorPacket)
-    i.USB_SendParameterChunk                 0x0800c714   Section        0  usbcomunication.o(i.USB_SendParameterChunk)
-    USB_SendParameterChunk                   0x0800c715   Thumb Code    92  usbcomunication.o(i.USB_SendParameterChunk)
-    i.USB_SendTraceChunk                     0x0800c770   Section        0  usbcomunication.o(i.USB_SendTraceChunk)
-    USB_SendTraceChunk                       0x0800c771   Thumb Code   166  usbcomunication.o(i.USB_SendTraceChunk)
-    i.USB_SendUerrorChunk                    0x0800c820   Section        0  usbcomunication.o(i.USB_SendUerrorChunk)
-    USB_SendUerrorChunk                      0x0800c821   Thumb Code   332  usbcomunication.o(i.USB_SendUerrorChunk)
-    i.USB_SetCurrentMode                     0x0800c970   Section        0  stm32f4xx_ll_usb.o(i.USB_SetCurrentMode)
-    i.USB_SetDevAddress                      0x0800c99c   Section        0  stm32f4xx_ll_usb.o(i.USB_SetDevAddress)
-    i.USB_StartServoSequence                 0x0800c9c0   Section        0  usbcomunication.o(i.USB_StartServoSequence)
-    USB_StartServoSequence                   0x0800c9c1   Thumb Code    72  usbcomunication.o(i.USB_StartServoSequence)
-    i.USB_TransmitData                       0x0800ca2c   Section        0  usbcomunication.o(i.USB_TransmitData)
-    i.USB_TryAssembleFrame                   0x0800cb38   Section        0  usbcomunication.o(i.USB_TryAssembleFrame)
-    USB_TryAssembleFrame                     0x0800cb39   Thumb Code   178  usbcomunication.o(i.USB_TryAssembleFrame)
-    i.USB_WritePacket                        0x0800cbf8   Section        0  stm32f4xx_ll_usb.o(i.USB_WritePacket)
-    i.USB_WriteRaw                           0x0800cc20   Section        0  usbcomunication.o(i.USB_WriteRaw)
-    USB_WriteRaw                             0x0800cc21   Thumb Code    38  usbcomunication.o(i.USB_WriteRaw)
-    i.UpdateDriverParameter                  0x0800cc48   Section        0  main.o(i.UpdateDriverParameter)
-    i.UpdateIsrDebugPeriod                   0x0800ce58   Section        0  main.o(i.UpdateIsrDebugPeriod)
-    UpdateIsrDebugPeriod                     0x0800ce59   Thumb Code    92  main.o(i.UpdateIsrDebugPeriod)
-    i.UpdateIsrMeasureOnlyFrequency          0x0800cec4   Section        0  main.o(i.UpdateIsrMeasureOnlyFrequency)
-    UpdateIsrMeasureOnlyFrequency            0x0800cec5   Thumb Code   102  main.o(i.UpdateIsrMeasureOnlyFrequency)
-    i.UpdateMeasuredCurrentsForTheta         0x0800cf38   Section        0  main.o(i.UpdateMeasuredCurrentsForTheta)
-    UpdateMeasuredCurrentsForTheta           0x0800cf39   Thumb Code   124  main.o(i.UpdateMeasuredCurrentsForTheta)
-    i.UpdateMeasuredSpeedAndTheta            0x0800cfbc   Section        0  main.o(i.UpdateMeasuredSpeedAndTheta)
-    UpdateMeasuredSpeedAndTheta              0x0800cfbd   Thumb Code   402  main.o(i.UpdateMeasuredSpeedAndTheta)
-    i.UpdateMotorParameter                   0x0800d170   Section        0  main.o(i.UpdateMotorParameter)
-    i.UpdatePositionSetpointVelocityRpm      0x0800d38c   Section        0  main.o(i.UpdatePositionSetpointVelocityRpm)
-    UpdatePositionSetpointVelocityRpm        0x0800d38d   Thumb Code   204  main.o(i.UpdatePositionSetpointVelocityRpm)
-    i.UpdateTraceCapture                     0x0800d470   Section        0  main.o(i.UpdateTraceCapture)
-    UpdateTraceCapture                       0x0800d471   Thumb Code   138  main.o(i.UpdateTraceCapture)
-    i.UsageFault_Handler                     0x0800d508   Section        0  stm32f4xx_it.o(i.UsageFault_Handler)
-    i.WrapAngle                              0x0800d50c   Section        0  main.o(i.WrapAngle)
-    WrapAngle                                0x0800d50d   Thumb Code    38  main.o(i.WrapAngle)
-    i.WrapPositionErrorCounts                0x0800d538   Section        0  main.o(i.WrapPositionErrorCounts)
-    WrapPositionErrorCounts                  0x0800d539   Thumb Code    74  main.o(i.WrapPositionErrorCounts)
-    i._Error_Handler                         0x0800d582   Section        0  main.o(i._Error_Handler)
-    i.__ARM_fpclassify                       0x0800d584   Section        0  fpclassify.o(i.__ARM_fpclassify)
-    i.__ARM_fpclassifyf                      0x0800d5b4   Section        0  fpclassifyf.o(i.__ARM_fpclassifyf)
-    i.__hardfp_atan2f                        0x0800d5dc   Section        0  atan2f.o(i.__hardfp_atan2f)
-    i.__hardfp_cosf                          0x0800d888   Section        0  cosf.o(i.__hardfp_cosf)
-    i.__hardfp_floorf                        0x0800d9d8   Section        0  floorf.o(i.__hardfp_floorf)
-    i.__hardfp_fmodf                         0x0800da48   Section        0  fmodf.o(i.__hardfp_fmodf)
-    i.__hardfp_lroundf                       0x0800daf8   Section        0  lroundf.o(i.__hardfp_lroundf)
-    i.__hardfp_sinf                          0x0800dbbc   Section        0  sinf.o(i.__hardfp_sinf)
-    i.__hardfp_sqrtf                         0x0800dd4c   Section        0  sqrtf.o(i.__hardfp_sqrtf)
-    i.__mathlib_flt_infnan                   0x0800dd86   Section        0  funder.o(i.__mathlib_flt_infnan)
-    i.__mathlib_flt_infnan2                  0x0800dd8c   Section        0  funder.o(i.__mathlib_flt_infnan2)
-    i.__mathlib_flt_invalid                  0x0800dd94   Section        0  funder.o(i.__mathlib_flt_invalid)
-    i.__mathlib_flt_underflow                0x0800dda4   Section        0  funder.o(i.__mathlib_flt_underflow)
-    i.__mathlib_rredf2                       0x0800ddb4   Section        0  rredf.o(i.__mathlib_rredf2)
-    i._is_digit                              0x0800df08   Section        0  __printf_wp.o(i._is_digit)
-    i.main                                   0x0800df18   Section        0  main.o(i.main)
-    i.tFPark_albe2dq                         0x0800e084   Section        0  vector_transfs.o(i.tFPark_albe2dq)
-    i.tFRClarke_ab2albe                      0x0800e0ae   Section        0  vector_transfs.o(i.tFRClarke_ab2albe)
-    i.tIFClarke_albe2abc                     0x0800e0e4   Section        0  vector_transfs.o(i.tIFClarke_albe2abc)
-    i.tIPark_dq2albe                         0x0800e12e   Section        0  vector_transfs.o(i.tIPark_dq2albe)
-    i.tPI_calc                               0x0800e158   Section        0  pidcontrol.o(i.tPI_calc)
-    i.tPI_rst                                0x0800e1d0   Section        0  pidcontrol.o(i.tPI_rst)
-    locale$$code                             0x0800e1f4   Section       44  lc_numeric_c.o(locale$$code)
-    locale$$code                             0x0800e220   Section       44  lc_ctype_c.o(locale$$code)
-    x$fpl$dretinf                            0x0800e24c   Section       12  dretinf.o(x$fpl$dretinf)
-    $v0                                      0x0800e24c   Number         0  dretinf.o(x$fpl$dretinf)
-    x$fpl$f2d                                0x0800e258   Section       86  f2d.o(x$fpl$f2d)
-    $v0                                      0x0800e258   Number         0  f2d.o(x$fpl$f2d)
-    x$fpl$ffixr                              0x0800e2ae   Section       14  ffix.o(x$fpl$ffixr)
-    $v0                                      0x0800e2ae   Number         0  ffix.o(x$fpl$ffixr)
-    x$fpl$fnaninf                            0x0800e2bc   Section      140  fnaninf.o(x$fpl$fnaninf)
-    $v0                                      0x0800e2bc   Number         0  fnaninf.o(x$fpl$fnaninf)
-    x$fpl$fpinit                             0x0800e348   Section       10  fpinit.o(x$fpl$fpinit)
-    $v0                                      0x0800e348   Number         0  fpinit.o(x$fpl$fpinit)
-    x$fpl$frem                               0x0800e354   Section      244  frem_clz.o(x$fpl$frem)
-    $v0                                      0x0800e354   Number         0  frem_clz.o(x$fpl$frem)
-    x$fpl$frnd                               0x0800e448   Section       96  frnd.o(x$fpl$frnd)
-    $v0                                      0x0800e448   Number         0  frnd.o(x$fpl$frnd)
-    x$fpl$printf1                            0x0800e4a8   Section        4  printf1.o(x$fpl$printf1)
-    $v0                                      0x0800e4a8   Number         0  printf1.o(x$fpl$printf1)
-    x$fpl$printf2                            0x0800e4ac   Section        4  printf2.o(x$fpl$printf2)
-    $v0                                      0x0800e4ac   Number         0  printf2.o(x$fpl$printf2)
-    .constdata                               0x0800e4b0   Section        8  main.o(.constdata)
-    x$fpl$usenofp                            0x0800e4b0   Section        0  usenofp.o(x$fpl$usenofp)
-    sFocCurrentFeedbackMapSwapCases          0x0800e4b0   Data           4  main.o(.constdata)
-    sFocCurrentFeedbackMapInvertCases        0x0800e4b4   Data           4  main.o(.constdata)
-    .constdata                               0x0800e4b8   Section       16  system_stm32f4xx.o(.constdata)
-    .constdata                               0x0800e4c8   Section        8  _printf_wctomb.o(.constdata)
-    initial_mbstate                          0x0800e4c8   Data           8  _printf_wctomb.o(.constdata)
-    .constdata                               0x0800e4d0   Section       40  _printf_hex_int_ll_ptr.o(.constdata)
-    uc_hextab                                0x0800e4d0   Data          20  _printf_hex_int_ll_ptr.o(.constdata)
-    lc_hextab                                0x0800e4e4   Data          20  _printf_hex_int_ll_ptr.o(.constdata)
-    .constdata                               0x0800e4f8   Section       17  __printf_flags_ss_wp.o(.constdata)
-    maptable                                 0x0800e4f8   Data          17  __printf_flags_ss_wp.o(.constdata)
-    .constdata                               0x0800e50c   Section       32  rredf.o(.constdata)
-    twooverpi                                0x0800e50c   Data          32  rredf.o(.constdata)
-    .constdata                               0x0800e52c   Section       38  _printf_fp_hex.o(.constdata)
-    lc_hextab                                0x0800e52c   Data          19  _printf_fp_hex.o(.constdata)
-    uc_hextab                                0x0800e53f   Data          19  _printf_fp_hex.o(.constdata)
-    .constdata                               0x0800e554   Section      148  bigflt0.o(.constdata)
-    tenpwrs_x                                0x0800e554   Data          60  bigflt0.o(.constdata)
-    tenpwrs_i                                0x0800e590   Data          64  bigflt0.o(.constdata)
-    .conststring                             0x0800e5e8   Section      158  main.o(.conststring)
-    .conststring                             0x0800e688   Section       93  usbcomunication.o(.conststring)
-    locale$$data                             0x0800e708   Section       28  lc_numeric_c.o(locale$$data)
-    __lcnum_c_name                           0x0800e70c   Data           2  lc_numeric_c.o(locale$$data)
-    __lcnum_c_start                          0x0800e714   Data           0  lc_numeric_c.o(locale$$data)
-    __lcnum_c_point                          0x0800e720   Data           0  lc_numeric_c.o(locale$$data)
-    __lcnum_c_thousands                      0x0800e722   Data           0  lc_numeric_c.o(locale$$data)
-    __lcnum_c_grouping                       0x0800e723   Data           0  lc_numeric_c.o(locale$$data)
-    locale$$data                             0x0800e724   Section      272  lc_ctype_c.o(locale$$data)
-    __lcnum_c_end                            0x0800e724   Data           0  lc_numeric_c.o(locale$$data)
-    __lcctype_c_name                         0x0800e728   Data           2  lc_ctype_c.o(locale$$data)
-    __lcctype_c_start                        0x0800e730   Data           0  lc_ctype_c.o(locale$$data)
-    __lcctype_c_end                          0x0800e834   Data           0  lc_ctype_c.o(locale$$data)
+    USB_ResolveTraceChannelPointer           0x0800c105   Thumb Code   106  usbcomunication.o(i.USB_ResolveTraceChannelPointer)
+    i.USB_SendAckPacket                      0x0800c188   Section        0  usbcomunication.o(i.USB_SendAckPacket)
+    USB_SendAckPacket                        0x0800c189   Thumb Code    98  usbcomunication.o(i.USB_SendAckPacket)
+    i.USB_SendAutoTuneChunk                  0x0800c1ec   Section        0  usbcomunication.o(i.USB_SendAutoTuneChunk)
+    USB_SendAutoTuneChunk                    0x0800c1ed   Thumb Code   236  usbcomunication.o(i.USB_SendAutoTuneChunk)
+    i.USB_SendErrorPacket                    0x0800c2e0   Section        0  usbcomunication.o(i.USB_SendErrorPacket)
+    USB_SendErrorPacket                      0x0800c2e1   Thumb Code   194  usbcomunication.o(i.USB_SendErrorPacket)
+    i.USB_SendMonitorPacket                  0x0800c3d4   Section        0  usbcomunication.o(i.USB_SendMonitorPacket)
+    USB_SendMonitorPacket                    0x0800c3d5   Thumb Code   682  usbcomunication.o(i.USB_SendMonitorPacket)
+    i.USB_SendParameterChunk                 0x0800c71c   Section        0  usbcomunication.o(i.USB_SendParameterChunk)
+    USB_SendParameterChunk                   0x0800c71d   Thumb Code    92  usbcomunication.o(i.USB_SendParameterChunk)
+    i.USB_SendTraceChunk                     0x0800c778   Section        0  usbcomunication.o(i.USB_SendTraceChunk)
+    USB_SendTraceChunk                       0x0800c779   Thumb Code   166  usbcomunication.o(i.USB_SendTraceChunk)
+    i.USB_SendUerrorChunk                    0x0800c828   Section        0  usbcomunication.o(i.USB_SendUerrorChunk)
+    USB_SendUerrorChunk                      0x0800c829   Thumb Code   332  usbcomunication.o(i.USB_SendUerrorChunk)
+    i.USB_SetCurrentMode                     0x0800c978   Section        0  stm32f4xx_ll_usb.o(i.USB_SetCurrentMode)
+    i.USB_SetDevAddress                      0x0800c9a4   Section        0  stm32f4xx_ll_usb.o(i.USB_SetDevAddress)
+    i.USB_StartServoSequence                 0x0800c9c8   Section        0  usbcomunication.o(i.USB_StartServoSequence)
+    USB_StartServoSequence                   0x0800c9c9   Thumb Code    72  usbcomunication.o(i.USB_StartServoSequence)
+    i.USB_TransmitData                       0x0800ca34   Section        0  usbcomunication.o(i.USB_TransmitData)
+    i.USB_TryAssembleFrame                   0x0800cb40   Section        0  usbcomunication.o(i.USB_TryAssembleFrame)
+    USB_TryAssembleFrame                     0x0800cb41   Thumb Code   178  usbcomunication.o(i.USB_TryAssembleFrame)
+    i.USB_WritePacket                        0x0800cc00   Section        0  stm32f4xx_ll_usb.o(i.USB_WritePacket)
+    i.USB_WriteRaw                           0x0800cc28   Section        0  usbcomunication.o(i.USB_WriteRaw)
+    USB_WriteRaw                             0x0800cc29   Thumb Code    38  usbcomunication.o(i.USB_WriteRaw)
+    i.UpdateDriverParameter                  0x0800cc50   Section        0  main.o(i.UpdateDriverParameter)
+    i.UpdateIsrDebugPeriod                   0x0800ce60   Section        0  main.o(i.UpdateIsrDebugPeriod)
+    UpdateIsrDebugPeriod                     0x0800ce61   Thumb Code    92  main.o(i.UpdateIsrDebugPeriod)
+    i.UpdateIsrMeasureOnlyFrequency          0x0800cecc   Section        0  main.o(i.UpdateIsrMeasureOnlyFrequency)
+    UpdateIsrMeasureOnlyFrequency            0x0800cecd   Thumb Code   102  main.o(i.UpdateIsrMeasureOnlyFrequency)
+    i.UpdateMeasuredCurrentsForTheta         0x0800cf40   Section        0  main.o(i.UpdateMeasuredCurrentsForTheta)
+    UpdateMeasuredCurrentsForTheta           0x0800cf41   Thumb Code   124  main.o(i.UpdateMeasuredCurrentsForTheta)
+    i.UpdateMeasuredSpeedAndTheta            0x0800cfc4   Section        0  main.o(i.UpdateMeasuredSpeedAndTheta)
+    UpdateMeasuredSpeedAndTheta              0x0800cfc5   Thumb Code   402  main.o(i.UpdateMeasuredSpeedAndTheta)
+    i.UpdateMotorParameter                   0x0800d178   Section        0  main.o(i.UpdateMotorParameter)
+    i.UpdatePositionSetpointVelocityRpm      0x0800d394   Section        0  main.o(i.UpdatePositionSetpointVelocityRpm)
+    UpdatePositionSetpointVelocityRpm        0x0800d395   Thumb Code   204  main.o(i.UpdatePositionSetpointVelocityRpm)
+    i.UpdateTraceCapture                     0x0800d478   Section        0  main.o(i.UpdateTraceCapture)
+    UpdateTraceCapture                       0x0800d479   Thumb Code   138  main.o(i.UpdateTraceCapture)
+    i.UsageFault_Handler                     0x0800d510   Section        0  stm32f4xx_it.o(i.UsageFault_Handler)
+    i.WrapAngle                              0x0800d514   Section        0  main.o(i.WrapAngle)
+    WrapAngle                                0x0800d515   Thumb Code    38  main.o(i.WrapAngle)
+    i.WrapPositionErrorCounts                0x0800d540   Section        0  main.o(i.WrapPositionErrorCounts)
+    WrapPositionErrorCounts                  0x0800d541   Thumb Code    74  main.o(i.WrapPositionErrorCounts)
+    i._Error_Handler                         0x0800d58a   Section        0  main.o(i._Error_Handler)
+    i.__ARM_fpclassify                       0x0800d58c   Section        0  fpclassify.o(i.__ARM_fpclassify)
+    i.__ARM_fpclassifyf                      0x0800d5bc   Section        0  fpclassifyf.o(i.__ARM_fpclassifyf)
+    i.__hardfp_atan2f                        0x0800d5e4   Section        0  atan2f.o(i.__hardfp_atan2f)
+    i.__hardfp_cosf                          0x0800d890   Section        0  cosf.o(i.__hardfp_cosf)
+    i.__hardfp_floorf                        0x0800d9e0   Section        0  floorf.o(i.__hardfp_floorf)
+    i.__hardfp_fmodf                         0x0800da50   Section        0  fmodf.o(i.__hardfp_fmodf)
+    i.__hardfp_lroundf                       0x0800db00   Section        0  lroundf.o(i.__hardfp_lroundf)
+    i.__hardfp_sinf                          0x0800dbc4   Section        0  sinf.o(i.__hardfp_sinf)
+    i.__hardfp_sqrtf                         0x0800dd54   Section        0  sqrtf.o(i.__hardfp_sqrtf)
+    i.__mathlib_flt_infnan                   0x0800dd8e   Section        0  funder.o(i.__mathlib_flt_infnan)
+    i.__mathlib_flt_infnan2                  0x0800dd94   Section        0  funder.o(i.__mathlib_flt_infnan2)
+    i.__mathlib_flt_invalid                  0x0800dd9c   Section        0  funder.o(i.__mathlib_flt_invalid)
+    i.__mathlib_flt_underflow                0x0800ddac   Section        0  funder.o(i.__mathlib_flt_underflow)
+    i.__mathlib_rredf2                       0x0800ddbc   Section        0  rredf.o(i.__mathlib_rredf2)
+    i._is_digit                              0x0800df10   Section        0  __printf_wp.o(i._is_digit)
+    i.main                                   0x0800df20   Section        0  main.o(i.main)
+    i.tFPark_albe2dq                         0x0800e08c   Section        0  vector_transfs.o(i.tFPark_albe2dq)
+    i.tFRClarke_ab2albe                      0x0800e0b6   Section        0  vector_transfs.o(i.tFRClarke_ab2albe)
+    i.tIFClarke_albe2abc                     0x0800e0ec   Section        0  vector_transfs.o(i.tIFClarke_albe2abc)
+    i.tIPark_dq2albe                         0x0800e136   Section        0  vector_transfs.o(i.tIPark_dq2albe)
+    i.tPI_calc                               0x0800e160   Section        0  pidcontrol.o(i.tPI_calc)
+    i.tPI_rst                                0x0800e1d8   Section        0  pidcontrol.o(i.tPI_rst)
+    locale$$code                             0x0800e1fc   Section       44  lc_numeric_c.o(locale$$code)
+    locale$$code                             0x0800e228   Section       44  lc_ctype_c.o(locale$$code)
+    x$fpl$dretinf                            0x0800e254   Section       12  dretinf.o(x$fpl$dretinf)
+    $v0                                      0x0800e254   Number         0  dretinf.o(x$fpl$dretinf)
+    x$fpl$f2d                                0x0800e260   Section       86  f2d.o(x$fpl$f2d)
+    $v0                                      0x0800e260   Number         0  f2d.o(x$fpl$f2d)
+    x$fpl$ffixr                              0x0800e2b6   Section       14  ffix.o(x$fpl$ffixr)
+    $v0                                      0x0800e2b6   Number         0  ffix.o(x$fpl$ffixr)
+    x$fpl$fnaninf                            0x0800e2c4   Section      140  fnaninf.o(x$fpl$fnaninf)
+    $v0                                      0x0800e2c4   Number         0  fnaninf.o(x$fpl$fnaninf)
+    x$fpl$fpinit                             0x0800e350   Section       10  fpinit.o(x$fpl$fpinit)
+    $v0                                      0x0800e350   Number         0  fpinit.o(x$fpl$fpinit)
+    x$fpl$frem                               0x0800e35c   Section      244  frem_clz.o(x$fpl$frem)
+    $v0                                      0x0800e35c   Number         0  frem_clz.o(x$fpl$frem)
+    x$fpl$frnd                               0x0800e450   Section       96  frnd.o(x$fpl$frnd)
+    $v0                                      0x0800e450   Number         0  frnd.o(x$fpl$frnd)
+    x$fpl$printf1                            0x0800e4b0   Section        4  printf1.o(x$fpl$printf1)
+    $v0                                      0x0800e4b0   Number         0  printf1.o(x$fpl$printf1)
+    x$fpl$printf2                            0x0800e4b4   Section        4  printf2.o(x$fpl$printf2)
+    $v0                                      0x0800e4b4   Number         0  printf2.o(x$fpl$printf2)
+    .constdata                               0x0800e4b8   Section        8  main.o(.constdata)
+    x$fpl$usenofp                            0x0800e4b8   Section        0  usenofp.o(x$fpl$usenofp)
+    sFocCurrentFeedbackMapSwapCases          0x0800e4b8   Data           4  main.o(.constdata)
+    sFocCurrentFeedbackMapInvertCases        0x0800e4bc   Data           4  main.o(.constdata)
+    .constdata                               0x0800e4c0   Section       16  system_stm32f4xx.o(.constdata)
+    .constdata                               0x0800e4d0   Section        8  _printf_wctomb.o(.constdata)
+    initial_mbstate                          0x0800e4d0   Data           8  _printf_wctomb.o(.constdata)
+    .constdata                               0x0800e4d8   Section       40  _printf_hex_int_ll_ptr.o(.constdata)
+    uc_hextab                                0x0800e4d8   Data          20  _printf_hex_int_ll_ptr.o(.constdata)
+    lc_hextab                                0x0800e4ec   Data          20  _printf_hex_int_ll_ptr.o(.constdata)
+    .constdata                               0x0800e500   Section       17  __printf_flags_ss_wp.o(.constdata)
+    maptable                                 0x0800e500   Data          17  __printf_flags_ss_wp.o(.constdata)
+    .constdata                               0x0800e514   Section       32  rredf.o(.constdata)
+    twooverpi                                0x0800e514   Data          32  rredf.o(.constdata)
+    .constdata                               0x0800e534   Section       38  _printf_fp_hex.o(.constdata)
+    lc_hextab                                0x0800e534   Data          19  _printf_fp_hex.o(.constdata)
+    uc_hextab                                0x0800e547   Data          19  _printf_fp_hex.o(.constdata)
+    .constdata                               0x0800e55c   Section      148  bigflt0.o(.constdata)
+    tenpwrs_x                                0x0800e55c   Data          60  bigflt0.o(.constdata)
+    tenpwrs_i                                0x0800e598   Data          64  bigflt0.o(.constdata)
+    .conststring                             0x0800e5f0   Section      158  main.o(.conststring)
+    .conststring                             0x0800e690   Section       93  usbcomunication.o(.conststring)
+    locale$$data                             0x0800e710   Section       28  lc_numeric_c.o(locale$$data)
+    __lcnum_c_name                           0x0800e714   Data           2  lc_numeric_c.o(locale$$data)
+    __lcnum_c_start                          0x0800e71c   Data           0  lc_numeric_c.o(locale$$data)
+    __lcnum_c_point                          0x0800e728   Data           0  lc_numeric_c.o(locale$$data)
+    __lcnum_c_thousands                      0x0800e72a   Data           0  lc_numeric_c.o(locale$$data)
+    __lcnum_c_grouping                       0x0800e72b   Data           0  lc_numeric_c.o(locale$$data)
+    locale$$data                             0x0800e72c   Section      272  lc_ctype_c.o(locale$$data)
+    __lcnum_c_end                            0x0800e72c   Data           0  lc_numeric_c.o(locale$$data)
+    __lcctype_c_name                         0x0800e730   Data           2  lc_ctype_c.o(locale$$data)
+    __lcctype_c_start                        0x0800e738   Data           0  lc_ctype_c.o(locale$$data)
+    __lcctype_c_end                          0x0800e83c   Data           0  lc_ctype_c.o(locale$$data)
     .data                                    0x20000000   Section      604  main.o(.data)
     gPwmEnabled                              0x20000014   Data           1  main.o(.data)
     gSpeedLoopDivider                        0x20000015   Data           1  main.o(.data)
@@ -3710,55 +3710,55 @@ Image Symbol Table
     USB_ReadInterrupts                       0x0800c07f   Thumb Code     8  stm32f4xx_ll_usb.o(i.USB_ReadInterrupts)
     USB_ReadPacket                           0x0800c087   Thumb Code    32  stm32f4xx_ll_usb.o(i.USB_ReadPacket)
     USB_ReceiveData                          0x0800c0a9   Thumb Code    40  usbcomunication.o(i.USB_ReceiveData)
-    USB_SetCurrentMode                       0x0800c971   Thumb Code    44  stm32f4xx_ll_usb.o(i.USB_SetCurrentMode)
-    USB_SetDevAddress                        0x0800c99d   Thumb Code    34  stm32f4xx_ll_usb.o(i.USB_SetDevAddress)
-    USB_TransmitData                         0x0800ca2d   Thumb Code   244  usbcomunication.o(i.USB_TransmitData)
-    USB_WritePacket                          0x0800cbf9   Thumb Code    40  stm32f4xx_ll_usb.o(i.USB_WritePacket)
-    UpdateDriverParameter                    0x0800cc49   Thumb Code   478  main.o(i.UpdateDriverParameter)
-    UpdateMotorParameter                     0x0800d171   Thumb Code   490  main.o(i.UpdateMotorParameter)
-    UsageFault_Handler                       0x0800d509   Thumb Code     2  stm32f4xx_it.o(i.UsageFault_Handler)
-    _Error_Handler                           0x0800d583   Thumb Code     2  main.o(i._Error_Handler)
-    __ARM_fpclassify                         0x0800d585   Thumb Code    48  fpclassify.o(i.__ARM_fpclassify)
-    __ARM_fpclassifyf                        0x0800d5b5   Thumb Code    38  fpclassifyf.o(i.__ARM_fpclassifyf)
-    __hardfp_atan2f                          0x0800d5dd   Thumb Code   594  atan2f.o(i.__hardfp_atan2f)
-    __hardfp_cosf                            0x0800d889   Thumb Code   280  cosf.o(i.__hardfp_cosf)
-    __hardfp_floorf                          0x0800d9d9   Thumb Code    98  floorf.o(i.__hardfp_floorf)
-    __hardfp_fmodf                           0x0800da49   Thumb Code   176  fmodf.o(i.__hardfp_fmodf)
-    __hardfp_lroundf                         0x0800daf9   Thumb Code   194  lroundf.o(i.__hardfp_lroundf)
-    __hardfp_sinf                            0x0800dbbd   Thumb Code   344  sinf.o(i.__hardfp_sinf)
-    __hardfp_sqrtf                           0x0800dd4d   Thumb Code    58  sqrtf.o(i.__hardfp_sqrtf)
-    __mathlib_flt_infnan                     0x0800dd87   Thumb Code     6  funder.o(i.__mathlib_flt_infnan)
-    __mathlib_flt_infnan2                    0x0800dd8d   Thumb Code     6  funder.o(i.__mathlib_flt_infnan2)
-    __mathlib_flt_invalid                    0x0800dd95   Thumb Code    10  funder.o(i.__mathlib_flt_invalid)
-    __mathlib_flt_underflow                  0x0800dda5   Thumb Code    10  funder.o(i.__mathlib_flt_underflow)
-    __mathlib_rredf2                         0x0800ddb5   Thumb Code   316  rredf.o(i.__mathlib_rredf2)
-    _is_digit                                0x0800df09   Thumb Code    14  __printf_wp.o(i._is_digit)
-    main                                     0x0800df19   Thumb Code   318  main.o(i.main)
-    tFPark_albe2dq                           0x0800e085   Thumb Code    42  vector_transfs.o(i.tFPark_albe2dq)
-    tFRClarke_ab2albe                        0x0800e0af   Thumb Code    54  vector_transfs.o(i.tFRClarke_ab2albe)
-    tIFClarke_albe2abc                       0x0800e0e5   Thumb Code    74  vector_transfs.o(i.tIFClarke_albe2abc)
-    tIPark_dq2albe                           0x0800e12f   Thumb Code    42  vector_transfs.o(i.tIPark_dq2albe)
-    tPI_calc                                 0x0800e159   Thumb Code   118  pidcontrol.o(i.tPI_calc)
-    tPI_rst                                  0x0800e1d1   Thumb Code    30  pidcontrol.o(i.tPI_rst)
-    _get_lc_numeric                          0x0800e1f5   Thumb Code    44  lc_numeric_c.o(locale$$code)
-    _get_lc_ctype                            0x0800e221   Thumb Code    44  lc_ctype_c.o(locale$$code)
-    __fpl_dretinf                            0x0800e24d   Thumb Code    12  dretinf.o(x$fpl$dretinf)
-    __aeabi_f2d                              0x0800e259   Thumb Code     0  f2d.o(x$fpl$f2d)
-    _f2d                                     0x0800e259   Thumb Code    86  f2d.o(x$fpl$f2d)
-    _ffix_r                                  0x0800e2af   Thumb Code    14  ffix.o(x$fpl$ffixr)
-    __fpl_fnaninf                            0x0800e2bd   Thumb Code   140  fnaninf.o(x$fpl$fnaninf)
-    _fp_init                                 0x0800e349   Thumb Code    10  fpinit.o(x$fpl$fpinit)
-    __fplib_config_fpu_vfp                   0x0800e351   Thumb Code     0  fpinit.o(x$fpl$fpinit)
-    __fplib_config_pureend_doubles           0x0800e351   Thumb Code     0  fpinit.o(x$fpl$fpinit)
-    _frem                                    0x0800e355   Thumb Code   240  frem_clz.o(x$fpl$frem)
-    _frnd                                    0x0800e449   Thumb Code    96  frnd.o(x$fpl$frnd)
-    _printf_fp_dec                           0x0800e4a9   Thumb Code     4  printf1.o(x$fpl$printf1)
-    _printf_fp_hex                           0x0800e4ad   Thumb Code     4  printf2.o(x$fpl$printf2)
-    __I$use$fp                               0x0800e4b0   Number         0  usenofp.o(x$fpl$usenofp)
-    AHBPrescTable                            0x0800e4b8   Data          16  system_stm32f4xx.o(.constdata)
-    Region$$Table$$Base                      0x0800e6e8   Number         0  anon$$obj.o(Region$$Table)
-    Region$$Table$$Limit                     0x0800e708   Number         0  anon$$obj.o(Region$$Table)
-    __ctype                                  0x0800e731   Data           0  lc_ctype_c.o(locale$$data)
+    USB_SetCurrentMode                       0x0800c979   Thumb Code    44  stm32f4xx_ll_usb.o(i.USB_SetCurrentMode)
+    USB_SetDevAddress                        0x0800c9a5   Thumb Code    34  stm32f4xx_ll_usb.o(i.USB_SetDevAddress)
+    USB_TransmitData                         0x0800ca35   Thumb Code   244  usbcomunication.o(i.USB_TransmitData)
+    USB_WritePacket                          0x0800cc01   Thumb Code    40  stm32f4xx_ll_usb.o(i.USB_WritePacket)
+    UpdateDriverParameter                    0x0800cc51   Thumb Code   478  main.o(i.UpdateDriverParameter)
+    UpdateMotorParameter                     0x0800d179   Thumb Code   490  main.o(i.UpdateMotorParameter)
+    UsageFault_Handler                       0x0800d511   Thumb Code     2  stm32f4xx_it.o(i.UsageFault_Handler)
+    _Error_Handler                           0x0800d58b   Thumb Code     2  main.o(i._Error_Handler)
+    __ARM_fpclassify                         0x0800d58d   Thumb Code    48  fpclassify.o(i.__ARM_fpclassify)
+    __ARM_fpclassifyf                        0x0800d5bd   Thumb Code    38  fpclassifyf.o(i.__ARM_fpclassifyf)
+    __hardfp_atan2f                          0x0800d5e5   Thumb Code   594  atan2f.o(i.__hardfp_atan2f)
+    __hardfp_cosf                            0x0800d891   Thumb Code   280  cosf.o(i.__hardfp_cosf)
+    __hardfp_floorf                          0x0800d9e1   Thumb Code    98  floorf.o(i.__hardfp_floorf)
+    __hardfp_fmodf                           0x0800da51   Thumb Code   176  fmodf.o(i.__hardfp_fmodf)
+    __hardfp_lroundf                         0x0800db01   Thumb Code   194  lroundf.o(i.__hardfp_lroundf)
+    __hardfp_sinf                            0x0800dbc5   Thumb Code   344  sinf.o(i.__hardfp_sinf)
+    __hardfp_sqrtf                           0x0800dd55   Thumb Code    58  sqrtf.o(i.__hardfp_sqrtf)
+    __mathlib_flt_infnan                     0x0800dd8f   Thumb Code     6  funder.o(i.__mathlib_flt_infnan)
+    __mathlib_flt_infnan2                    0x0800dd95   Thumb Code     6  funder.o(i.__mathlib_flt_infnan2)
+    __mathlib_flt_invalid                    0x0800dd9d   Thumb Code    10  funder.o(i.__mathlib_flt_invalid)
+    __mathlib_flt_underflow                  0x0800ddad   Thumb Code    10  funder.o(i.__mathlib_flt_underflow)
+    __mathlib_rredf2                         0x0800ddbd   Thumb Code   316  rredf.o(i.__mathlib_rredf2)
+    _is_digit                                0x0800df11   Thumb Code    14  __printf_wp.o(i._is_digit)
+    main                                     0x0800df21   Thumb Code   318  main.o(i.main)
+    tFPark_albe2dq                           0x0800e08d   Thumb Code    42  vector_transfs.o(i.tFPark_albe2dq)
+    tFRClarke_ab2albe                        0x0800e0b7   Thumb Code    54  vector_transfs.o(i.tFRClarke_ab2albe)
+    tIFClarke_albe2abc                       0x0800e0ed   Thumb Code    74  vector_transfs.o(i.tIFClarke_albe2abc)
+    tIPark_dq2albe                           0x0800e137   Thumb Code    42  vector_transfs.o(i.tIPark_dq2albe)
+    tPI_calc                                 0x0800e161   Thumb Code   118  pidcontrol.o(i.tPI_calc)
+    tPI_rst                                  0x0800e1d9   Thumb Code    30  pidcontrol.o(i.tPI_rst)
+    _get_lc_numeric                          0x0800e1fd   Thumb Code    44  lc_numeric_c.o(locale$$code)
+    _get_lc_ctype                            0x0800e229   Thumb Code    44  lc_ctype_c.o(locale$$code)
+    __fpl_dretinf                            0x0800e255   Thumb Code    12  dretinf.o(x$fpl$dretinf)
+    __aeabi_f2d                              0x0800e261   Thumb Code     0  f2d.o(x$fpl$f2d)
+    _f2d                                     0x0800e261   Thumb Code    86  f2d.o(x$fpl$f2d)
+    _ffix_r                                  0x0800e2b7   Thumb Code    14  ffix.o(x$fpl$ffixr)
+    __fpl_fnaninf                            0x0800e2c5   Thumb Code   140  fnaninf.o(x$fpl$fnaninf)
+    _fp_init                                 0x0800e351   Thumb Code    10  fpinit.o(x$fpl$fpinit)
+    __fplib_config_fpu_vfp                   0x0800e359   Thumb Code     0  fpinit.o(x$fpl$fpinit)
+    __fplib_config_pureend_doubles           0x0800e359   Thumb Code     0  fpinit.o(x$fpl$fpinit)
+    _frem                                    0x0800e35d   Thumb Code   240  frem_clz.o(x$fpl$frem)
+    _frnd                                    0x0800e451   Thumb Code    96  frnd.o(x$fpl$frnd)
+    _printf_fp_dec                           0x0800e4b1   Thumb Code     4  printf1.o(x$fpl$printf1)
+    _printf_fp_hex                           0x0800e4b5   Thumb Code     4  printf2.o(x$fpl$printf2)
+    __I$use$fp                               0x0800e4b8   Number         0  usenofp.o(x$fpl$usenofp)
+    AHBPrescTable                            0x0800e4c0   Data          16  system_stm32f4xx.o(.constdata)
+    Region$$Table$$Base                      0x0800e6f0   Number         0  anon$$obj.o(Region$$Table)
+    Region$$Table$$Limit                     0x0800e710   Number         0  anon$$obj.o(Region$$Table)
+    __ctype                                  0x0800e739   Data           0  lc_ctype_c.o(locale$$data)
     system_on                                0x20000000   Data           1  main.o(.data)
     gRunMode                                 0x20000001   Data           1  main.o(.data)
     gIsrMeasureOnlyMode                      0x20000002   Data           1  main.o(.data)
@@ -3876,9 +3876,9 @@ Memory Map of the image
 
   Image Entry point : 0x08000189
 
-  Load Region LR_IROM1 (Base: 0x08000000, Size: 0x0000ec14, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x0000e924])
+  Load Region LR_IROM1 (Base: 0x08000000, Size: 0x0000ec1c, Max: 0x00080000, ABSOLUTE, COMPRESSED[0x0000e92c])
 
-    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000e834, Max: 0x00080000, ABSOLUTE)
+    Execution Region ER_IROM1 (Exec base: 0x08000000, Load base: 0x08000000, Size: 0x0000e83c, Max: 0x00080000, ABSOLUTE)
 
     Exec Addr    Load Addr    Size         Type   Attr      Idx    E Section Name        Object
 
@@ -4381,97 +4381,97 @@ Memory Map of the image
     0x0800c0a8   0x0800c0a8   0x00000030   Code   RO         4842    i.USB_ReceiveData   usbcomunication.o
     0x0800c0d8   0x0800c0d8   0x00000018   Code   RO         4843    i.USB_ResetParser   usbcomunication.o
     0x0800c0f0   0x0800c0f0   0x00000014   Code   RO         4844    i.USB_ResetTraceCaptureState  usbcomunication.o
-    0x0800c104   0x0800c104   0x0000007c   Code   RO         4845    i.USB_ResolveTraceChannelPointer  usbcomunication.o
-    0x0800c180   0x0800c180   0x00000062   Code   RO         4846    i.USB_SendAckPacket  usbcomunication.o
-    0x0800c1e2   0x0800c1e2   0x00000002   PAD
-    0x0800c1e4   0x0800c1e4   0x000000f4   Code   RO         4847    i.USB_SendAutoTuneChunk  usbcomunication.o
-    0x0800c2d8   0x0800c2d8   0x000000f4   Code   RO         4848    i.USB_SendErrorPacket  usbcomunication.o
-    0x0800c3cc   0x0800c3cc   0x00000348   Code   RO         4849    i.USB_SendMonitorPacket  usbcomunication.o
-    0x0800c714   0x0800c714   0x0000005c   Code   RO         4850    i.USB_SendParameterChunk  usbcomunication.o
-    0x0800c770   0x0800c770   0x000000b0   Code   RO         4851    i.USB_SendTraceChunk  usbcomunication.o
-    0x0800c820   0x0800c820   0x00000150   Code   RO         4852    i.USB_SendUerrorChunk  usbcomunication.o
-    0x0800c970   0x0800c970   0x0000002c   Code   RO         1467    i.USB_SetCurrentMode  stm32f4xx_ll_usb.o
-    0x0800c99c   0x0800c99c   0x00000022   Code   RO         1468    i.USB_SetDevAddress  stm32f4xx_ll_usb.o
-    0x0800c9be   0x0800c9be   0x00000002   PAD
-    0x0800c9c0   0x0800c9c0   0x0000006c   Code   RO         4853    i.USB_StartServoSequence  usbcomunication.o
-    0x0800ca2c   0x0800ca2c   0x0000010c   Code   RO         4854    i.USB_TransmitData  usbcomunication.o
-    0x0800cb38   0x0800cb38   0x000000c0   Code   RO         4855    i.USB_TryAssembleFrame  usbcomunication.o
-    0x0800cbf8   0x0800cbf8   0x00000028   Code   RO         1472    i.USB_WritePacket   stm32f4xx_ll_usb.o
-    0x0800cc20   0x0800cc20   0x00000026   Code   RO         4856    i.USB_WriteRaw      usbcomunication.o
-    0x0800cc46   0x0800cc46   0x00000002   PAD
-    0x0800cc48   0x0800cc48   0x00000210   Code   RO           84    i.UpdateDriverParameter  main.o
-    0x0800ce58   0x0800ce58   0x0000006c   Code   RO           85    i.UpdateIsrDebugPeriod  main.o
-    0x0800cec4   0x0800cec4   0x00000074   Code   RO           86    i.UpdateIsrMeasureOnlyFrequency  main.o
-    0x0800cf38   0x0800cf38   0x00000084   Code   RO           87    i.UpdateMeasuredCurrentsForTheta  main.o
-    0x0800cfbc   0x0800cfbc   0x000001b4   Code   RO           88    i.UpdateMeasuredSpeedAndTheta  main.o
-    0x0800d170   0x0800d170   0x0000021c   Code   RO           89    i.UpdateMotorParameter  main.o
-    0x0800d38c   0x0800d38c   0x000000e4   Code   RO           90    i.UpdatePositionSetpointVelocityRpm  main.o
-    0x0800d470   0x0800d470   0x00000098   Code   RO           91    i.UpdateTraceCapture  main.o
-    0x0800d508   0x0800d508   0x00000002   Code   RO         1005    i.UsageFault_Handler  stm32f4xx_it.o
-    0x0800d50a   0x0800d50a   0x00000002   PAD
-    0x0800d50c   0x0800d50c   0x0000002c   Code   RO           92    i.WrapAngle         main.o
-    0x0800d538   0x0800d538   0x0000004a   Code   RO           93    i.WrapPositionErrorCounts  main.o
-    0x0800d582   0x0800d582   0x00000002   Code   RO           94    i._Error_Handler    main.o
-    0x0800d584   0x0800d584   0x00000030   Code   RO         5700    i.__ARM_fpclassify  m_wm.l(fpclassify.o)
-    0x0800d5b4   0x0800d5b4   0x00000026   Code   RO         5549    i.__ARM_fpclassifyf  m_wm.l(fpclassifyf.o)
-    0x0800d5da   0x0800d5da   0x00000002   PAD
-    0x0800d5dc   0x0800d5dc   0x000002ac   Code   RO         5280    i.__hardfp_atan2f   m_wm.l(atan2f.o)
-    0x0800d888   0x0800d888   0x00000150   Code   RO         5292    i.__hardfp_cosf     m_wm.l(cosf.o)
-    0x0800d9d8   0x0800d9d8   0x00000070   Code   RO         5304    i.__hardfp_floorf   m_wm.l(floorf.o)
-    0x0800da48   0x0800da48   0x000000b0   Code   RO         5310    i.__hardfp_fmodf    m_wm.l(fmodf.o)
-    0x0800daf8   0x0800daf8   0x000000c2   Code   RO         5346    i.__hardfp_lroundf  m_wm.l(lroundf.o)
-    0x0800dbba   0x0800dbba   0x00000002   PAD
-    0x0800dbbc   0x0800dbbc   0x00000190   Code   RO         5322    i.__hardfp_sinf     m_wm.l(sinf.o)
-    0x0800dd4c   0x0800dd4c   0x0000003a   Code   RO         5334    i.__hardfp_sqrtf    m_wm.l(sqrtf.o)
-    0x0800dd86   0x0800dd86   0x00000006   Code   RO         5552    i.__mathlib_flt_infnan  m_wm.l(funder.o)
-    0x0800dd8c   0x0800dd8c   0x00000006   Code   RO         5553    i.__mathlib_flt_infnan2  m_wm.l(funder.o)
-    0x0800dd92   0x0800dd92   0x00000002   PAD
-    0x0800dd94   0x0800dd94   0x00000010   Code   RO         5554    i.__mathlib_flt_invalid  m_wm.l(funder.o)
-    0x0800dda4   0x0800dda4   0x00000010   Code   RO         5557    i.__mathlib_flt_underflow  m_wm.l(funder.o)
-    0x0800ddb4   0x0800ddb4   0x00000154   Code   RO         5565    i.__mathlib_rredf2  m_wm.l(rredf.o)
-    0x0800df08   0x0800df08   0x0000000e   Code   RO         5448    i._is_digit         c_w.l(__printf_wp.o)
-    0x0800df16   0x0800df16   0x00000002   PAD
-    0x0800df18   0x0800df18   0x0000016c   Code   RO           95    i.main              main.o
-    0x0800e084   0x0800e084   0x0000002a   Code   RO         5035    i.tFPark_albe2dq    vector_transfs.o
-    0x0800e0ae   0x0800e0ae   0x00000036   Code   RO         5036    i.tFRClarke_ab2albe  vector_transfs.o
-    0x0800e0e4   0x0800e0e4   0x0000004a   Code   RO         5037    i.tIFClarke_albe2abc  vector_transfs.o
-    0x0800e12e   0x0800e12e   0x0000002a   Code   RO         5038    i.tIPark_dq2albe    vector_transfs.o
-    0x0800e158   0x0800e158   0x00000076   Code   RO         4734    i.tPI_calc          pidcontrol.o
-    0x0800e1ce   0x0800e1ce   0x00000002   PAD
-    0x0800e1d0   0x0800e1d0   0x00000024   Code   RO         4735    i.tPI_rst           pidcontrol.o
-    0x0800e1f4   0x0800e1f4   0x0000002c   Code   RO         5676    locale$$code        c_w.l(lc_numeric_c.o)
-    0x0800e220   0x0800e220   0x0000002c   Code   RO         5711    locale$$code        c_w.l(lc_ctype_c.o)
-    0x0800e24c   0x0800e24c   0x0000000c   Code   RO         5528    x$fpl$dretinf       fz_wm.l(dretinf.o)
-    0x0800e258   0x0800e258   0x00000056   Code   RO         5278    x$fpl$f2d           fz_wm.l(f2d.o)
-    0x0800e2ae   0x0800e2ae   0x0000000e   Code   RO         5531    x$fpl$ffixr         fz_wm.l(ffix.o)
-    0x0800e2bc   0x0800e2bc   0x0000008c   Code   RO         5534    x$fpl$fnaninf       fz_wm.l(fnaninf.o)
-    0x0800e348   0x0800e348   0x0000000a   Code   RO         5630    x$fpl$fpinit        fz_wm.l(fpinit.o)
-    0x0800e352   0x0800e352   0x00000002   PAD
-    0x0800e354   0x0800e354   0x000000f4   Code   RO         5536    x$fpl$frem          fz_wm.l(frem_clz.o)
-    0x0800e448   0x0800e448   0x00000060   Code   RO         5538    x$fpl$frnd          fz_wm.l(frnd.o)
-    0x0800e4a8   0x0800e4a8   0x00000004   Code   RO         5540    x$fpl$printf1       fz_wm.l(printf1.o)
-    0x0800e4ac   0x0800e4ac   0x00000004   Code   RO         5542    x$fpl$printf2       fz_wm.l(printf2.o)
-    0x0800e4b0   0x0800e4b0   0x00000000   Code   RO         5548    x$fpl$usenofp       fz_wm.l(usenofp.o)
-    0x0800e4b0   0x0800e4b0   0x00000008   Data   RO           97    .constdata          main.o
-    0x0800e4b8   0x0800e4b8   0x00000010   Data   RO         4203    .constdata          system_stm32f4xx.o
-    0x0800e4c8   0x0800e4c8   0x00000008   Data   RO         5407    .constdata          c_w.l(_printf_wctomb.o)
-    0x0800e4d0   0x0800e4d0   0x00000028   Data   RO         5436    .constdata          c_w.l(_printf_hex_int_ll_ptr.o)
-    0x0800e4f8   0x0800e4f8   0x00000011   Data   RO         5456    .constdata          c_w.l(__printf_flags_ss_wp.o)
-    0x0800e509   0x0800e509   0x00000003   PAD
-    0x0800e50c   0x0800e50c   0x00000020   Data   RO         5566    .constdata          m_wm.l(rredf.o)
-    0x0800e52c   0x0800e52c   0x00000026   Data   RO         5610    .constdata          c_w.l(_printf_fp_hex.o)
-    0x0800e552   0x0800e552   0x00000002   PAD
-    0x0800e554   0x0800e554   0x00000094   Data   RO         5651    .constdata          c_w.l(bigflt0.o)
-    0x0800e5e8   0x0800e5e8   0x0000009e   Data   RO           98    .conststring        main.o
-    0x0800e686   0x0800e686   0x00000002   PAD
-    0x0800e688   0x0800e688   0x0000005d   Data   RO         4858    .conststring        usbcomunication.o
-    0x0800e6e5   0x0800e6e5   0x00000003   PAD
-    0x0800e6e8   0x0800e6e8   0x00000020   Data   RO         5767    Region$$Table       anon$$obj.o
-    0x0800e708   0x0800e708   0x0000001c   Data   RO         5675    locale$$data        c_w.l(lc_numeric_c.o)
-    0x0800e724   0x0800e724   0x00000110   Data   RO         5710    locale$$data        c_w.l(lc_ctype_c.o)
+    0x0800c104   0x0800c104   0x00000084   Code   RO         4845    i.USB_ResolveTraceChannelPointer  usbcomunication.o
+    0x0800c188   0x0800c188   0x00000062   Code   RO         4846    i.USB_SendAckPacket  usbcomunication.o
+    0x0800c1ea   0x0800c1ea   0x00000002   PAD
+    0x0800c1ec   0x0800c1ec   0x000000f4   Code   RO         4847    i.USB_SendAutoTuneChunk  usbcomunication.o
+    0x0800c2e0   0x0800c2e0   0x000000f4   Code   RO         4848    i.USB_SendErrorPacket  usbcomunication.o
+    0x0800c3d4   0x0800c3d4   0x00000348   Code   RO         4849    i.USB_SendMonitorPacket  usbcomunication.o
+    0x0800c71c   0x0800c71c   0x0000005c   Code   RO         4850    i.USB_SendParameterChunk  usbcomunication.o
+    0x0800c778   0x0800c778   0x000000b0   Code   RO         4851    i.USB_SendTraceChunk  usbcomunication.o
+    0x0800c828   0x0800c828   0x00000150   Code   RO         4852    i.USB_SendUerrorChunk  usbcomunication.o
+    0x0800c978   0x0800c978   0x0000002c   Code   RO         1467    i.USB_SetCurrentMode  stm32f4xx_ll_usb.o
+    0x0800c9a4   0x0800c9a4   0x00000022   Code   RO         1468    i.USB_SetDevAddress  stm32f4xx_ll_usb.o
+    0x0800c9c6   0x0800c9c6   0x00000002   PAD
+    0x0800c9c8   0x0800c9c8   0x0000006c   Code   RO         4853    i.USB_StartServoSequence  usbcomunication.o
+    0x0800ca34   0x0800ca34   0x0000010c   Code   RO         4854    i.USB_TransmitData  usbcomunication.o
+    0x0800cb40   0x0800cb40   0x000000c0   Code   RO         4855    i.USB_TryAssembleFrame  usbcomunication.o
+    0x0800cc00   0x0800cc00   0x00000028   Code   RO         1472    i.USB_WritePacket   stm32f4xx_ll_usb.o
+    0x0800cc28   0x0800cc28   0x00000026   Code   RO         4856    i.USB_WriteRaw      usbcomunication.o
+    0x0800cc4e   0x0800cc4e   0x00000002   PAD
+    0x0800cc50   0x0800cc50   0x00000210   Code   RO           84    i.UpdateDriverParameter  main.o
+    0x0800ce60   0x0800ce60   0x0000006c   Code   RO           85    i.UpdateIsrDebugPeriod  main.o
+    0x0800cecc   0x0800cecc   0x00000074   Code   RO           86    i.UpdateIsrMeasureOnlyFrequency  main.o
+    0x0800cf40   0x0800cf40   0x00000084   Code   RO           87    i.UpdateMeasuredCurrentsForTheta  main.o
+    0x0800cfc4   0x0800cfc4   0x000001b4   Code   RO           88    i.UpdateMeasuredSpeedAndTheta  main.o
+    0x0800d178   0x0800d178   0x0000021c   Code   RO           89    i.UpdateMotorParameter  main.o
+    0x0800d394   0x0800d394   0x000000e4   Code   RO           90    i.UpdatePositionSetpointVelocityRpm  main.o
+    0x0800d478   0x0800d478   0x00000098   Code   RO           91    i.UpdateTraceCapture  main.o
+    0x0800d510   0x0800d510   0x00000002   Code   RO         1005    i.UsageFault_Handler  stm32f4xx_it.o
+    0x0800d512   0x0800d512   0x00000002   PAD
+    0x0800d514   0x0800d514   0x0000002c   Code   RO           92    i.WrapAngle         main.o
+    0x0800d540   0x0800d540   0x0000004a   Code   RO           93    i.WrapPositionErrorCounts  main.o
+    0x0800d58a   0x0800d58a   0x00000002   Code   RO           94    i._Error_Handler    main.o
+    0x0800d58c   0x0800d58c   0x00000030   Code   RO         5700    i.__ARM_fpclassify  m_wm.l(fpclassify.o)
+    0x0800d5bc   0x0800d5bc   0x00000026   Code   RO         5549    i.__ARM_fpclassifyf  m_wm.l(fpclassifyf.o)
+    0x0800d5e2   0x0800d5e2   0x00000002   PAD
+    0x0800d5e4   0x0800d5e4   0x000002ac   Code   RO         5280    i.__hardfp_atan2f   m_wm.l(atan2f.o)
+    0x0800d890   0x0800d890   0x00000150   Code   RO         5292    i.__hardfp_cosf     m_wm.l(cosf.o)
+    0x0800d9e0   0x0800d9e0   0x00000070   Code   RO         5304    i.__hardfp_floorf   m_wm.l(floorf.o)
+    0x0800da50   0x0800da50   0x000000b0   Code   RO         5310    i.__hardfp_fmodf    m_wm.l(fmodf.o)
+    0x0800db00   0x0800db00   0x000000c2   Code   RO         5346    i.__hardfp_lroundf  m_wm.l(lroundf.o)
+    0x0800dbc2   0x0800dbc2   0x00000002   PAD
+    0x0800dbc4   0x0800dbc4   0x00000190   Code   RO         5322    i.__hardfp_sinf     m_wm.l(sinf.o)
+    0x0800dd54   0x0800dd54   0x0000003a   Code   RO         5334    i.__hardfp_sqrtf    m_wm.l(sqrtf.o)
+    0x0800dd8e   0x0800dd8e   0x00000006   Code   RO         5552    i.__mathlib_flt_infnan  m_wm.l(funder.o)
+    0x0800dd94   0x0800dd94   0x00000006   Code   RO         5553    i.__mathlib_flt_infnan2  m_wm.l(funder.o)
+    0x0800dd9a   0x0800dd9a   0x00000002   PAD
+    0x0800dd9c   0x0800dd9c   0x00000010   Code   RO         5554    i.__mathlib_flt_invalid  m_wm.l(funder.o)
+    0x0800ddac   0x0800ddac   0x00000010   Code   RO         5557    i.__mathlib_flt_underflow  m_wm.l(funder.o)
+    0x0800ddbc   0x0800ddbc   0x00000154   Code   RO         5565    i.__mathlib_rredf2  m_wm.l(rredf.o)
+    0x0800df10   0x0800df10   0x0000000e   Code   RO         5448    i._is_digit         c_w.l(__printf_wp.o)
+    0x0800df1e   0x0800df1e   0x00000002   PAD
+    0x0800df20   0x0800df20   0x0000016c   Code   RO           95    i.main              main.o
+    0x0800e08c   0x0800e08c   0x0000002a   Code   RO         5035    i.tFPark_albe2dq    vector_transfs.o
+    0x0800e0b6   0x0800e0b6   0x00000036   Code   RO         5036    i.tFRClarke_ab2albe  vector_transfs.o
+    0x0800e0ec   0x0800e0ec   0x0000004a   Code   RO         5037    i.tIFClarke_albe2abc  vector_transfs.o
+    0x0800e136   0x0800e136   0x0000002a   Code   RO         5038    i.tIPark_dq2albe    vector_transfs.o
+    0x0800e160   0x0800e160   0x00000076   Code   RO         4734    i.tPI_calc          pidcontrol.o
+    0x0800e1d6   0x0800e1d6   0x00000002   PAD
+    0x0800e1d8   0x0800e1d8   0x00000024   Code   RO         4735    i.tPI_rst           pidcontrol.o
+    0x0800e1fc   0x0800e1fc   0x0000002c   Code   RO         5676    locale$$code        c_w.l(lc_numeric_c.o)
+    0x0800e228   0x0800e228   0x0000002c   Code   RO         5711    locale$$code        c_w.l(lc_ctype_c.o)
+    0x0800e254   0x0800e254   0x0000000c   Code   RO         5528    x$fpl$dretinf       fz_wm.l(dretinf.o)
+    0x0800e260   0x0800e260   0x00000056   Code   RO         5278    x$fpl$f2d           fz_wm.l(f2d.o)
+    0x0800e2b6   0x0800e2b6   0x0000000e   Code   RO         5531    x$fpl$ffixr         fz_wm.l(ffix.o)
+    0x0800e2c4   0x0800e2c4   0x0000008c   Code   RO         5534    x$fpl$fnaninf       fz_wm.l(fnaninf.o)
+    0x0800e350   0x0800e350   0x0000000a   Code   RO         5630    x$fpl$fpinit        fz_wm.l(fpinit.o)
+    0x0800e35a   0x0800e35a   0x00000002   PAD
+    0x0800e35c   0x0800e35c   0x000000f4   Code   RO         5536    x$fpl$frem          fz_wm.l(frem_clz.o)
+    0x0800e450   0x0800e450   0x00000060   Code   RO         5538    x$fpl$frnd          fz_wm.l(frnd.o)
+    0x0800e4b0   0x0800e4b0   0x00000004   Code   RO         5540    x$fpl$printf1       fz_wm.l(printf1.o)
+    0x0800e4b4   0x0800e4b4   0x00000004   Code   RO         5542    x$fpl$printf2       fz_wm.l(printf2.o)
+    0x0800e4b8   0x0800e4b8   0x00000000   Code   RO         5548    x$fpl$usenofp       fz_wm.l(usenofp.o)
+    0x0800e4b8   0x0800e4b8   0x00000008   Data   RO           97    .constdata          main.o
+    0x0800e4c0   0x0800e4c0   0x00000010   Data   RO         4203    .constdata          system_stm32f4xx.o
+    0x0800e4d0   0x0800e4d0   0x00000008   Data   RO         5407    .constdata          c_w.l(_printf_wctomb.o)
+    0x0800e4d8   0x0800e4d8   0x00000028   Data   RO         5436    .constdata          c_w.l(_printf_hex_int_ll_ptr.o)
+    0x0800e500   0x0800e500   0x00000011   Data   RO         5456    .constdata          c_w.l(__printf_flags_ss_wp.o)
+    0x0800e511   0x0800e511   0x00000003   PAD
+    0x0800e514   0x0800e514   0x00000020   Data   RO         5566    .constdata          m_wm.l(rredf.o)
+    0x0800e534   0x0800e534   0x00000026   Data   RO         5610    .constdata          c_w.l(_printf_fp_hex.o)
+    0x0800e55a   0x0800e55a   0x00000002   PAD
+    0x0800e55c   0x0800e55c   0x00000094   Data   RO         5651    .constdata          c_w.l(bigflt0.o)
+    0x0800e5f0   0x0800e5f0   0x0000009e   Data   RO           98    .conststring        main.o
+    0x0800e68e   0x0800e68e   0x00000002   PAD
+    0x0800e690   0x0800e690   0x0000005d   Data   RO         4858    .conststring        usbcomunication.o
+    0x0800e6ed   0x0800e6ed   0x00000003   PAD
+    0x0800e6f0   0x0800e6f0   0x00000020   Data   RO         5767    Region$$Table       anon$$obj.o
+    0x0800e710   0x0800e710   0x0000001c   Data   RO         5675    locale$$data        c_w.l(lc_numeric_c.o)
+    0x0800e72c   0x0800e72c   0x00000110   Data   RO         5710    locale$$data        c_w.l(lc_ctype_c.o)
 
 
-    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800e834, Size: 0x00010c00, Max: 0x0001c000, ABSOLUTE, COMPRESSED[0x000000f0])
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0800e83c, Size: 0x00010c00, Max: 0x0001c000, ABSOLUTE, COMPRESSED[0x000000f0])
 
     Exec Addr    Load Addr    Size         Type   Attr      Idx    E Section Name        Object
 
@@ -4507,7 +4507,7 @@ Memory Map of the image
     0x2000dc00        -       0x00003000   Zero   RW            1    STACK               startup_stm32f407xx.o
 
 
-    Execution Region RW_IRAM2 (Exec base: 0x2001c000, Load base: 0x0800e924, Size: 0x00000000, Max: 0x00004000, ABSOLUTE)
+    Execution Region RW_IRAM2 (Exec base: 0x2001c000, Load base: 0x0800e92c, Size: 0x00000000, Max: 0x00004000, ABSOLUTE)
 
     **** No section assigned to this execution region ****
 
@@ -4544,7 +4544,7 @@ Image component sizes
       2420         56          0          0          0      22044   stm32f4xx_ll_usb.o
        208         38         16          4          0       2115   system_stm32f4xx.o
         56         18          0          0        548       2563   usb_device.o
-      7810       1324         93          6        938      49015   usbcomunication.o
+      7818       1328         93          6        938      49039   usbcomunication.o
        590         22          0        275          0      14142   usbd_cdc.o
        132         26          0         16       4096       3845   usbd_cdc_if.o
        706         38          0          0       1008      15894   usbd_conf.o
@@ -4555,7 +4555,7 @@ Image component sizes
        212          0          0          0          0       4611   vector_transfs.o
 
     ----------------------------------------------------------------------
-     47144       4736        704        992      67520    1121215   Object Totals
+     47152       4740        704        992      67520    1121239   Object Totals
          0          0         32          0          0          0   (incl. Generated)
         48          0          5         11          3          0   (incl. Padding)
 
@@ -4700,15 +4700,15 @@ Image component sizes
 
       Code (inc. data)   RO Data    RW Data    ZI Data      Debug   
 
-     58152       5340       1292        992      67616    1089311   Grand Totals
-     58152       5340       1292        240      67616    1089311   ELF Image Totals (compressed)
-     58152       5340       1292        240          0          0   ROM Totals
+     58160       5344       1292        992      67616    1089335   Grand Totals
+     58160       5344       1292        240      67616    1089335   ELF Image Totals (compressed)
+     58160       5344       1292        240          0          0   ROM Totals
 
 ==============================================================================
 
-    Total RO  Size (Code + RO Data)                59444 (  58.05kB)
+    Total RO  Size (Code + RO Data)                59452 (  58.06kB)
     Total RW  Size (RW Data + ZI Data)             68608 (  67.00kB)
-    Total ROM Size (Code + RO Data + RW Data)      59684 (  58.29kB)
+    Total ROM Size (Code + RO Data + RW Data)      59692 (  58.29kB)
 
 ==============================================================================
 

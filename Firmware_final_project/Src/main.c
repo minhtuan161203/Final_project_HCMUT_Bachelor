@@ -2719,6 +2719,8 @@ static float *ResolveTraceChannelPointer(uint8_t channel_code)
 			return &Parameter.fVdq[0];
 		case 14u:
 			return &Parameter.fVdq[1];
+		case 15u:
+			return (float *)&gDebugSpeedRawRpm;
 		default:
 			return 0;
 	}

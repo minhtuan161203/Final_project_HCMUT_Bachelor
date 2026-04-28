@@ -202,6 +202,7 @@ TRACE_CHANNEL_META = {
     12: {"label": "Id Ref", "unit": "A", "color": "#637939"},
     13: {"label": "Vd", "unit": "V", "color": "#843c39"},
     14: {"label": "Vq", "unit": "V", "color": "#7b4173"},
+    15: {"label": "Raw Speed", "unit": "rpm", "color": "#00bcd4"},
 }
 
 DRIVER_PARAM_CONTROL_MODE = 1
@@ -226,6 +227,7 @@ TRACE_PRESETS = {
     "Current Loop": [3, 4, 11, 14],
     "Phase Currents": [3, 5, 6, 7],
     "Speed Loop": [1, 2, 3, 4],
+    "Speed Debug": [1, 2, 15, 3],
     "Voltage Debug": [11, 12, 13, 14],
 }
 
@@ -2839,7 +2841,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._plot_rect = QtCore.QRectF()
         self._hover_index: int | None = None
         self._auto_scale = True
-        self._frozen_range = (-1.0, 1.0)
+        self._frozen_ranges: dict[str, tuple[float, float]] = {}
         self._status_text = "Waiting for capture..."
         self._report_mode = False
         self._report_font_point_size = 14
@@ -2850,13 +2852,14 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._series_defs = []
         self._series_data = []
         self._hover_index = None
+        self._frozen_ranges = {}
         self._status_text = "Waiting for capture..."
         self.update()
 
     def set_auto_scale(self, enabled: bool) -> None:
         self._auto_scale = enabled
         if not enabled:
-            self._frozen_range = self._calculate_y_range()
+            self._frozen_ranges = self._calculate_y_ranges()
         self.update()
 
     def set_report_mode(self, enabled: bool) -> None:
@@ -2919,21 +2922,97 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._series_data = [list(series) for series in series_data]
         self._sample_period_s = max(1e-6, float(sample_period_s))
         self._status_text = status_text
-        if self._auto_scale:
-            self._frozen_range = self._calculate_y_range()
+        if self._auto_scale or not self._frozen_ranges:
+            self._frozen_ranges = self._calculate_y_ranges()
         self.update()
 
-    def _calculate_y_range(self) -> tuple[float, float]:
-        all_values = [value for series in self._series_data for value in series]
-        if not all_values:
+    def _axis_key(self, series_def: dict[str, str]) -> str:
+        unit = series_def.get("unit", "").strip()
+        if unit:
+            return f"unit:{unit}"
+        return f"series:{series_def.get('label', 'Series')}"
+
+    def _axis_groups(self) -> list[dict[str, object]]:
+        groups: list[dict[str, object]] = []
+        lookup: dict[str, dict[str, object]] = {}
+        for series_index, series_def in enumerate(self._series_defs):
+            axis_key = self._axis_key(series_def)
+            group = lookup.get(axis_key)
+            if group is None:
+                group = {
+                    "key": axis_key,
+                    "label": series_def.get("unit", "").strip() or series_def.get("label", "Series"),
+                    "unit": series_def.get("unit", "").strip(),
+                    "color": series_def.get("color", "#4dabf7"),
+                    "indices": [],
+                }
+                groups.append(group)
+                lookup[axis_key] = group
+            group["indices"].append(series_index)
+        return groups
+
+    def _axis_layout_groups(self) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        axis_groups = self._axis_groups()
+        if len(axis_groups) <= 1:
+            return [], axis_groups
+
+        left_groups: list[dict[str, object]] = []
+        right_groups: list[dict[str, object]] = []
+        for group_index, group in enumerate(axis_groups):
+            if (group_index % 2) == 0:
+                left_groups.append(group)
+            else:
+                right_groups.append(group)
+        return left_groups, right_groups
+
+    def _calculate_value_range(self, values: list[float]) -> tuple[float, float]:
+        if not values:
             return (-1.0, 1.0)
-        y_min = min(all_values)
-        y_max = max(all_values)
+        y_min = min(values)
+        y_max = max(values)
         if abs(y_max - y_min) < 0.05:
             center = 0.5 * (y_max + y_min)
             return (center - 0.5, center + 0.5)
         margin = (y_max - y_min) * 0.12
         return (y_min - margin, y_max + margin)
+
+    def _calculate_y_ranges(self) -> dict[str, tuple[float, float]]:
+        ranges: dict[str, tuple[float, float]] = {}
+        for group in self._axis_groups():
+            values: list[float] = []
+            for series_index in group["indices"]:
+                if series_index < len(self._series_data):
+                    values.extend(self._series_data[series_index])
+            ranges[str(group["key"])] = self._calculate_value_range(values)
+        return ranges
+
+    def _axis_range_for_series(
+        self,
+        series_index: int,
+        axis_ranges: dict[str, tuple[float, float]],
+    ) -> tuple[float, float]:
+        if series_index >= len(self._series_defs):
+            return (-1.0, 1.0)
+        axis_key = self._axis_key(self._series_defs[series_index])
+        return axis_ranges.get(axis_key, (-1.0, 1.0))
+
+    def _series_y_position(
+        self,
+        series_index: int,
+        value: float,
+        plot_rect: QtCore.QRectF,
+        axis_ranges: dict[str, tuple[float, float]],
+    ) -> float:
+        y_min, y_max = self._axis_range_for_series(series_index, axis_ranges)
+        y_span = max(y_max - y_min, 0.1)
+        return plot_rect.bottom() - (((value - y_min) / y_span) * plot_rect.height())
+
+    def _axis_value_text(self, axis_group: dict[str, object], value: float) -> str:
+        unit = str(axis_group.get("unit", "") or "")
+        label = str(axis_group.get("label", "") or "")
+        if unit:
+            return _format_axis_value(value, unit=unit, decimals=3)
+        return f"{label}: {value:.3f}"
 
     def _render_scale(self) -> float:
         return _chart_scale_from_font_size(self._report_font_point_size) if self._report_mode else 1.0
@@ -2983,8 +3062,17 @@ class ScopeCaptureView(QtWidgets.QWidget):
         legend_height = max(QtGui.QFontMetrics(self._legend_font()).height(), int(10 * scale)) + int(8 * scale)
         bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(38 * scale)
         legend_y = rect.top() + title_height + int(8 * scale)
-        left_axis_space = int(8 * scale)
-        right_axis_space = int(62 * scale)
+        left_axis_groups, right_axis_groups = self._axis_layout_groups()
+        if left_axis_groups:
+            left_axis_space = int(92 * scale)
+        else:
+            left_axis_space = int(8 * scale)
+        if right_axis_groups:
+            right_axis_space = int(96 * scale)
+        elif not left_axis_groups:
+            right_axis_space = int(88 * scale)
+        else:
+            right_axis_space = int(18 * scale)
         plot_rect = QtCore.QRectF(
             rect.left() + left_axis_space,
             legend_y + legend_height + int(8 * scale),
@@ -3000,21 +3088,17 @@ class ScopeCaptureView(QtWidgets.QWidget):
         plot_rect, _, _ = self._plot_geometry(rect)
         if plot_rect.height() <= 0:
             return {}
-        y_min, y_max = self._frozen_range
-        y_span = max(y_max - y_min, 0.1)
+        axis_ranges = self._frozen_ranges or self._calculate_y_ranges()
         sample_count = len(self._series_data[0])
         endpoint_map: dict[str, QtCore.QPointF] = {}
-        for series_def, series in zip(self._series_defs, self._series_data):
+        for series_index, (series_def, series) in enumerate(zip(self._series_defs, self._series_data)):
             if not series:
                 continue
             ratio = (len(series) - 1) / max(sample_count - 1, 1)
             x = plot_rect.left() + plot_rect.width() * ratio
-            y = plot_rect.bottom() - (((series[-1] - y_min) / y_span) * plot_rect.height())
+            y = self._series_y_position(series_index, series[-1], plot_rect, axis_ranges)
             endpoint_map[series_def["label"]] = QtCore.QPointF(x * scale_factor, y * scale_factor)
         return endpoint_map
-
-    def _y_axis_unit(self) -> str:
-        return _common_unit([series_def.get("unit", "") for series_def in self._series_defs])
 
     def _series_point_map(
         self,
@@ -3028,11 +3112,10 @@ class ScopeCaptureView(QtWidgets.QWidget):
         plot_rect, _, _ = self._plot_geometry(rect)
         if plot_rect.height() <= 0:
             return {}
-        y_min, y_max = self._frozen_range
-        y_span = max(y_max - y_min, 0.1)
+        axis_ranges = self._frozen_ranges or self._calculate_y_ranges()
         sample_count = len(self._series_data[0])
         point_map: dict[str, list[QtCore.QPointF]] = {}
-        for series_def, series in zip(self._series_defs, self._series_data):
+        for series_index, (series_def, series) in enumerate(zip(self._series_defs, self._series_data)):
             if not series:
                 continue
             step = max(1, len(series) // point_limit)
@@ -3043,7 +3126,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
             for index in indices:
                 ratio = index / max(sample_count - 1, 1)
                 x = plot_rect.left() + plot_rect.width() * ratio
-                y = plot_rect.bottom() - (((series[index] - y_min) / y_span) * plot_rect.height())
+                y = self._series_y_position(series_index, series[index], plot_rect, axis_ranges)
                 points.append(QtCore.QPointF(x * scale_factor, y * scale_factor))
             point_map[series_def["label"]] = points
         return point_map
@@ -3113,8 +3196,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
             painter.drawText(plot_rect.toRect(), QtCore.Qt.AlignmentFlag.AlignCenter, self._status_text)
             return
 
-        y_min, y_max = self._frozen_range
-        y_span = max(y_max - y_min, 0.1)
+        axis_ranges = self._frozen_ranges or self._calculate_y_ranges()
         sample_count = len(self._series_data[0])
         total_ms = (sample_count - 1) * self._sample_period_s * 1000.0
 
@@ -3128,27 +3210,60 @@ class ScopeCaptureView(QtWidgets.QWidget):
         painter.setPen(colors["text"])
         painter.setFont(self._tick_font())
         scale = self._render_scale()
-        y_unit = self._y_axis_unit()
-        painter.drawText(
-            QtCore.QRectF(
-                plot_rect.right() - (88 * scale),
-                plot_rect.top() + (6 * scale),
-                84 * scale,
-                18 * scale,
-            ),
-            QtCore.Qt.AlignmentFlag.AlignRight,
-            _format_axis_value(y_max, unit=y_unit, decimals=3),
-        )
-        painter.drawText(
-            QtCore.QRectF(
-                plot_rect.right() - (88 * scale),
-                plot_rect.bottom() - (34 * scale),
-                84 * scale,
-                18 * scale,
-            ),
-            QtCore.Qt.AlignmentFlag.AlignRight,
-            _format_axis_value(y_min, unit=y_unit, decimals=3),
-        )
+        left_axis_groups, right_axis_groups = self._axis_layout_groups()
+        if not left_axis_groups and not right_axis_groups and self._axis_groups():
+            right_axis_groups = self._axis_groups()
+
+        for row, axis_group in enumerate(left_axis_groups):
+            axis_range = axis_ranges.get(str(axis_group["key"]), (-1.0, 1.0))
+            axis_pen = QtGui.QPen(QtGui.QColor(str(axis_group.get("color", "#4dabf7"))))
+            painter.setPen(axis_pen)
+            painter.drawText(
+                QtCore.QRectF(
+                    rect.left() + (4 * scale),
+                    plot_rect.top() + ((6 + (row * 18)) * scale),
+                    max(72.0, plot_rect.left() - rect.left() - (8 * scale)),
+                    18 * scale,
+                ),
+                QtCore.Qt.AlignmentFlag.AlignLeft,
+                self._axis_value_text(axis_group, axis_range[1]),
+            )
+            painter.drawText(
+                QtCore.QRectF(
+                    rect.left() + (4 * scale),
+                    plot_rect.bottom() - ((34 + (row * 18)) * scale),
+                    max(72.0, plot_rect.left() - rect.left() - (8 * scale)),
+                    18 * scale,
+                ),
+                QtCore.Qt.AlignmentFlag.AlignLeft,
+                self._axis_value_text(axis_group, axis_range[0]),
+            )
+
+        for row, axis_group in enumerate(right_axis_groups):
+            axis_range = axis_ranges.get(str(axis_group["key"]), (-1.0, 1.0))
+            axis_pen = QtGui.QPen(QtGui.QColor(str(axis_group.get("color", "#4dabf7"))))
+            painter.setPen(axis_pen)
+            painter.drawText(
+                QtCore.QRectF(
+                    plot_rect.right() + (6 * scale),
+                    plot_rect.top() + ((6 + (row * 18)) * scale),
+                    max(84.0, rect.right() - plot_rect.right() - (10 * scale)),
+                    18 * scale,
+                ),
+                QtCore.Qt.AlignmentFlag.AlignRight,
+                self._axis_value_text(axis_group, axis_range[1]),
+            )
+            painter.drawText(
+                QtCore.QRectF(
+                    plot_rect.right() + (6 * scale),
+                    plot_rect.bottom() - ((34 + (row * 18)) * scale),
+                    max(84.0, rect.right() - plot_rect.right() - (10 * scale)),
+                    18 * scale,
+                ),
+                QtCore.Qt.AlignmentFlag.AlignRight,
+                self._axis_value_text(axis_group, axis_range[0]),
+            )
+        painter.setPen(colors["text"])
 
         for marker_ratio in (0.0, 0.5, 1.0):
             x = plot_rect.left() + plot_rect.width() * marker_ratio
@@ -3177,7 +3292,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
             for index, value in enumerate(series):
                 ratio = index / max(sample_count - 1, 1)
                 x = plot_rect.left() + plot_rect.width() * ratio
-                y = plot_rect.bottom() - (((value - y_min) / y_span) * plot_rect.height())
+                y = self._series_y_position(series_index, value, plot_rect, axis_ranges)
                 point = QtCore.QPointF(x, y)
                 if index == 0:
                     path.moveTo(point)
@@ -3196,7 +3311,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
                 for marker_index in _report_marker_indices(len(series), 16):
                     ratio = marker_index / max(sample_count - 1, 1)
                     x = plot_rect.left() + plot_rect.width() * ratio
-                    y = plot_rect.bottom() - (((series[marker_index] - y_min) / y_span) * plot_rect.height())
+                    y = self._series_y_position(series_index, series[marker_index], plot_rect, axis_ranges)
                     _draw_series_marker(
                         painter,
                         QtCore.QPointF(x, y),
@@ -3900,13 +4015,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctuning_rate_combo.setCurrentIndex(2)
 
         self.ctuning_kp_spin = QtWidgets.QDoubleSpinBox()
-        self.ctuning_kp_spin.setRange(0.0, 10000.0)
+        self.ctuning_kp_spin.setRange(0.0, 1000000.0)
         self.ctuning_kp_spin.setDecimals(5)
         self.ctuning_kp_spin.setSingleStep(0.001)
         self.ctuning_kp_spin.setValue(DEFAULT_CTUNING_CURRENT_KP)
 
         self.ctuning_ki_spin = QtWidgets.QDoubleSpinBox()
-        self.ctuning_ki_spin.setRange(0.0, 10000.0)
+        self.ctuning_ki_spin.setRange(0.0, 1000000.0)
         self.ctuning_ki_spin.setDecimals(5)
         self.ctuning_ki_spin.setSingleStep(0.001)
         self.ctuning_ki_spin.setValue(DEFAULT_CTUNING_CURRENT_KI)
@@ -4584,16 +4699,16 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         self.foc_accel_spin = QtWidgets.QDoubleSpinBox()
-        self.foc_accel_spin.setRange(1.0, 100000.0)
-        self.foc_accel_spin.setDecimals(1)
-        self.foc_accel_spin.setSingleStep(25.0)
+        self.foc_accel_spin.setRange(0.001, 100000.0)
+        self.foc_accel_spin.setDecimals(3)
+        self.foc_accel_spin.setSingleStep(0.1)
         self.foc_accel_spin.setSuffix(" ms")
         self.foc_accel_spin.setValue(250.0)
 
         self.foc_decel_spin = QtWidgets.QDoubleSpinBox()
-        self.foc_decel_spin.setRange(1.0, 100000.0)
-        self.foc_decel_spin.setDecimals(1)
-        self.foc_decel_spin.setSingleStep(25.0)
+        self.foc_decel_spin.setRange(0.001, 100000.0)
+        self.foc_decel_spin.setDecimals(3)
+        self.foc_decel_spin.setSingleStep(0.1)
         self.foc_decel_spin.setSuffix(" ms")
         self.foc_decel_spin.setValue(250.0)
 
