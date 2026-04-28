@@ -2239,6 +2239,208 @@ Neu can uu tien cho product chay on:
 - uu tien current PI / low-speed runtime behavior
 - khong uu tien day `Uerror` thanh mot commissioning feature bat buoc o thoi diem hien tai
 
+---
 
+## 7. Debug note moi: `Go to Angle`, hunting, va deadband outer-loop
 
-Update cái Ld Lq decoupling error nữa --> bằng cách bù trừ sai số và bộ PI
+### 7.1 Hien tuong bench
+
+Khi test `Go to Angle`:
+
+- GUI set `90 deg`
+- truc co the dung quanh `89.572 deg`
+- nguoi dung co cam giac nhu setpoint bi doi thanh gia tri do duoc
+- he thong co xu huong "chap nhan sai so nho" thay vi bam den dich that
+
+Day la mot manh moi quan trong:
+
+- sai so co tinh lap lai
+- do lon sai so cung mot co
+- nen uu tien kiem tra `deadband`, `monitor semantics`, va logic outer-loop truoc khi quy het cho co khi
+
+### 7.2 Suy luan da chot
+
+1. Day khong chi la GUI rounding.
+   - GUI co the hien thi theo count quy doi ra do.
+   - Nhung monitor `cmd_position` con phu thuoc truc tiep vao `gTargetPositionCounts`.
+
+2. Firmware truoc do co nhieu cho chu dong gan:
+   - `gTargetPositionCounts = Parameter.fPosition`
+   - viec nay xay ra o cac tinh huong nhu `stop`, `servo on`, `fault`
+   - he qua la diagnostics/UI nhin nhu setpoint da bi keo ve actual
+
+3. Position loop truoc do dang dung kieu `hard deadband hold`.
+   - khi vao mot vung sai so nho quanh dich, code reset `Position PI`
+   - dong thoi reset ca `Speed PI`
+   - `speed_reference` bi keo ve `0`
+   - nen he co the dung o `89.x deg` va coi nhu "da xong"
+
+Ket luan:
+
+- neu muc tieu la giam hunting nhung van giu do cung hop ly
+- thi khong nen "tat han outer loop"
+- ma nen chi "cat khau I, giu khau P"
+
+### 7.3 Quyet dinh dieu khien da chot
+
+Cho runtime position/speed FOC:
+
+- khong dung `hard deadband hold` nua
+- doi sang `integrator deadband`
+
+Y tuong:
+
+- neu `|position error|` nho va `setpoint velocity` gan `0`
+  - giu `Kp` cua `Position PI`
+  - cat `Ki` cua `Position PI`
+  - tat `VFF` trong vung sat dich
+
+De tranh chat chat vao/ra deadband:
+
+- dung them `release deadband` lon hon `enter deadband`
+- tuc la co `hysteresis`
+
+### 7.4 Patch da lam trong firmware
+
+#### a. Giu nguyen setpoint cho diagnostics / UI
+
+Da bo viec keo `gTargetPositionCounts` ve `Parameter.fPosition` trong cac nhanh:
+
+- `stop`
+- `servo on`
+- `fault`
+
+Muc tieu:
+
+- monitor van nho "lenh cuoi cung nguoi dung da ra"
+- GUI khong con nhin nhu setpoint bi doi thanh actual chi vi dong co da dung o mot diem lech nho
+
+#### b. Position loop: doi sang `P-only inside deadband`
+
+Da them cac bien tune runtime:
+
+- `gPositionLoopIntegratorDeadbandDeg = 0.50f`
+- `gPositionLoopIntegratorReleaseDeadbandDeg = 0.80f`
+
+Da doi state cu:
+
+- bo `sPositionDeadbandHoldActive`
+- dung `sPositionIntegratorDeadbandActive`
+
+Da them clamp toi thieu theo count:
+
+- `POSITION_LOOP_INTEGRATOR_DEADBAND_MIN_COUNTS = 1`
+- `POSITION_LOOP_INTEGRATOR_RELEASE_DEADBAND_MIN_COUNTS = 2`
+
+Hanh vi moi:
+
+- ben ngoai deadband:
+  - `Position PI` chay day du `P + I`
+- ben trong deadband:
+  - xoa trang thai tich phan
+  - dat `Ki = 0`
+  - van giu `Kp`
+  - `VFF` ve `0`
+
+Nghia la:
+
+- truc van co "lo xo dien tu" nhe de giu vi tri
+- nhung khong tich luy sai so vo ich de roi giat hunting
+
+#### c. Speed loop deadband da thu va da revert
+
+Da tung thu y tuong `speed-loop integrator deadband` theo RPM.
+
+Ket qua bench:
+
+- phan ung khong on dinh nhu mong muon
+- tradeoff khong dep bang patch position deadband
+- nen quyet dinh cuoi cung la `revert` phan speed deadband
+
+Trang thai hien tai:
+
+- `Speed PI` runtime van giu logic binh thuong
+- neu can lam em low-speed, uu tien tune `Speed PI`, current PI, friction/cogging, va outer-loop position truoc
+
+#### d. Helper moi
+
+Da them helper:
+
+- `ClearPiIntegratorState()`
+
+Trong do:
+
+- `ClearPiIntegratorState()` chi xoa phan `I`
+- khong tat phan `P`
+
+Day la chi tiet quan trong vi no phan biet ro:
+
+- `reset controller`
+va
+- `freeze integrator but keep proportional stiffness`
+
+### 7.5 Y nghia control cua quyet dinh nay
+
+Sau patch nay, triet ly runtime la:
+
+- position loop khong duoc "bo tay" qua som
+
+He qua mong muon:
+
+- `Go to Angle = 90 deg` se van con luc keo toi dich boi `P`
+- he khong con reset het outer-loop roi dung som o sai so co tinh lap lai co `0.4-0.5 deg`
+- low-speed hunting duoc giam chu yeu o nhanh position sat setpoint, thay vi can thiep them vao speed deadband
+
+Tradeoff duoc chap nhan:
+
+- he co the mem hon mot chut so voi servo stiffness cuc cao
+- nhung doi lai runtime em hon va thuc dung hon cho do an / ung dung thong thuong
+
+### 7.6 Cach tune tiep theo
+
+Neu can tune tren bench:
+
+1. Neu van hunting o low speed:
+   - xem lai `Speed PI`
+   - sau do moi xem den `gPositionLoopIntegratorDeadbandDeg`
+
+2. Neu thay vi tri hoi "mem":
+   - giam `gPositionLoopIntegratorDeadbandDeg`
+
+3. Neu he ra vao deadband qua thuong xuyen:
+   - tang `gPositionLoopIntegratorReleaseDeadbandDeg`
+
+4. Neu muon tat hoan toan tinh nang nay de A/B test:
+   - dat deadband enter/release ve `0`
+
+### 7.7 Trang thai verify
+
+Ban patch goc:
+
+- da build lai bang Keil
+- ket qua: `0 Error(s), 5 Warning(s)`
+- 5 warning hien tai la warning cu ve cac helper chua dung, khong phai loi moi do patch nay tao ra
+
+Sau khi revert rieng phan `speed deadband`:
+
+- `main.c` da duoc syntax-check lai bang `Armcc.exe`
+- ket qua: `0 errors`
+
+Bench test hop ly nhat sau khi flash:
+
+1. test `Go to Angle = 90 deg`
+2. test low speed `5 / 10 / 15 rpm`
+3. dung tay tac dong nhe vao truc quanh setpoint de cam nhan:
+   - do cung
+   - hunting
+   - kha nang giu vi tri
+
+---
+
+## 8. Open item tiep theo
+
+Neu muon debug tiep theo huong mo rong:
+
+- xem lai `Ld/Lq decoupling error`
+- uu tien huong "bu tru sai so + PI"
+- khong nen mac dinh tin tuyet doi vao model ly tuong neu bench cho thay non-ideality ro rang

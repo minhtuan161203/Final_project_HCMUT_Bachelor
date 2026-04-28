@@ -120,6 +120,9 @@ volatile uint8_t gControlTimingMode = USER_DEFAULT_CONTROL_TIMING_MODE;
 volatile float gEffectiveCurrentLoopFrequencyHz = USER_SELECTED_ISR_FREQUENCY;
 volatile float gEffectiveSpeedLoopFrequencyHz = USER_EFFECTIVE_SPEED_LOOP_FREQUENCY;
 float gTracePosError = 0.0f;
+/* Runtime-tunable deadband for position-loop integrator freeze near setpoint. */
+volatile float gPositionLoopIntegratorDeadbandDeg = 0.50f;
+volatile float gPositionLoopIntegratorReleaseDeadbandDeg = 0.80f;
 volatile uint8_t gEncoderAlignmentPolicy = ENCODER_ALIGNMENT_POLICY_POWER_ON;
 volatile uint8_t gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
 volatile uint8_t gEncoderAlignmentNeedsFlashSave = 0u;
@@ -3341,7 +3344,8 @@ static void ReportFault(uint16_t fault)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
-	gTargetPositionCounts = Parameter.fPosition;
+	/* Keep the requested position target latched for diagnostics/UI even
+	 * if the fault happened before the axis fully reached the command. */
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = 0.0f;
 	RestoreIdSquareTuningOffsetGuard();
@@ -3606,15 +3610,15 @@ static void RunFocLoop(void)
 					(fabsf(setpoint_velocity_rpm) < POSITION_LOOP_FF_DEADBAND_RPM) ? 1u : 0u;
 
 				if ((sPositionDeadbandHoldActive != 0u) &&
-					((setpoint_velocity_is_quiet == 0u) ||
-					 (fabsf(position_raw_error_counts) > position_release_deadband_counts)))
-				{
+						((setpoint_velocity_is_quiet == 0u) ||
+						 (fabsf(position_raw_error_counts) > position_release_deadband_counts)))
+					{
 					sPositionDeadbandHoldActive = 0u;
-				}
+					}
 				if ((sPositionDeadbandHoldActive == 0u) &&
-					(setpoint_velocity_is_quiet != 0u) &&
-					(fabsf(position_raw_error_counts) <= position_deadband_counts))
-				{
+						(setpoint_velocity_is_quiet != 0u) &&
+						(fabsf(position_raw_error_counts) <= position_deadband_counts))
+					{
 					sPositionDeadbandHoldActive = 1u;
 				}
 				if (sPositionDeadbandHoldActive != 0u)
@@ -3631,25 +3635,25 @@ static void RunFocLoop(void)
 				}
 				else
 				{
-					gTracePosError = position_error_counts;
-					position_vff_rpm = ClampFloat(
-						position_vff_rpm,
-						-speed_limit_rpm,
-						speed_limit_rpm);
-					position_pi_limit_rpm = speed_limit_rpm - fabsf(position_vff_rpm);
-					if (position_pi_limit_rpm < 0.0f)
-					{
-						position_pi_limit_rpm = 0.0f;
-					}
-					gPositionPi.fDtSec = gSpeedPi.fDtSec;
-					gPositionPi.fKp = GetConfiguredPositionGain();
-					gPositionPi.fKi = GetConfiguredPositionIntegralGain();
-					gPositionPi.fUpOutLim = position_pi_limit_rpm;
-					gPositionPi.fLowOutLim = -position_pi_limit_rpm;
-					gPositionPi.fIn = position_error_counts;
-					gPositionPi.m_calc(&gPositionPi);
-					position_pi_output_rpm = -gPositionPi.fOut;
-					position_speed_target_rpm = position_pi_output_rpm + position_vff_rpm;
+				gTracePosError = position_error_counts;
+				position_vff_rpm = ClampFloat(
+					position_vff_rpm,
+					-speed_limit_rpm,
+					speed_limit_rpm);
+				position_pi_limit_rpm = speed_limit_rpm - fabsf(position_vff_rpm);
+				if (position_pi_limit_rpm < 0.0f)
+				{
+					position_pi_limit_rpm = 0.0f;
+				}
+				gPositionPi.fDtSec = gSpeedPi.fDtSec;
+				gPositionPi.fKp = GetConfiguredPositionGain();
+				gPositionPi.fKi = GetConfiguredPositionIntegralGain();
+				gPositionPi.fUpOutLim = position_pi_limit_rpm;
+				gPositionPi.fLowOutLim = -position_pi_limit_rpm;
+				gPositionPi.fIn = position_error_counts;
+				gPositionPi.m_calc(&gPositionPi);
+				position_pi_output_rpm = -gPositionPi.fOut;
+				position_speed_target_rpm = position_pi_output_rpm + position_vff_rpm;
 				}
 				position_speed_target_rpm = ClampFloat(
 					position_speed_target_rpm,
@@ -3657,11 +3661,11 @@ static void RunFocLoop(void)
 					speed_limit_rpm);
 				if (position_deadband_hold_active == 0u)
 				{
-					speed_reference_rpm = ApplySpeedRampLimit(
-						gCommandedSpeedRpm,
-						position_speed_target_rpm,
-						speed_limit_rpm,
-						gSpeedPi.fDtSec);
+				speed_reference_rpm = ApplySpeedRampLimit(
+					gCommandedSpeedRpm,
+					position_speed_target_rpm,
+					speed_limit_rpm,
+					gSpeedPi.fDtSec);
 				}
 			}
 			else
@@ -3728,17 +3732,14 @@ static void RunFocLoop(void)
 	// Q loop current control
 	else
 	{
-		if (ShouldHoldCurrentLoopAtZero(gIqRefA, gPark.fQ) != 0u)
-		{
-			gIqPi.m_rst(&gIqPi);
-			gIqPi.fIn = 0.0f;
-			gIqPi.fOut = 0.0f;
-		}
-		else
-		{
-			gIqPi.fIn = gIqRefA - gPark.fQ;
-			gIqPi.m_calc(&gIqPi);
-		}
+		/* Runtime speed/position FOC should regulate q-axis current continuously.
+		   Resetting the q-axis PI around tiny low-speed references can make the
+		   controller drop its integral state, then rebuild Vq in bursts, which
+		   looks like torque "kicks" near zero-speed operation. Keep zero-hold
+		   only in explicit tuning/test flows and let runtime FOC close Iq
+		   normally even when the reference is small. */
+		gIqPi.fIn = gIqRefA - gPark.fQ;
+		gIqPi.m_calc(&gIqPi);
 		ApplyCurrentLoopDecoupling(
 			&gIdPi.fOut,
 			&gIqPi.fOut,

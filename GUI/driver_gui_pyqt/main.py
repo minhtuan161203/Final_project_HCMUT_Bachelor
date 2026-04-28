@@ -2710,15 +2710,28 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
-        self.stats_label = QtWidgets.QLabel("")
-        self.stats_label.setWordWrap(False)
-        self.stats_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        self.stats_label.setSizePolicy(
+        self._stats_text = ""
+        self.stats_text_edit = QtWidgets.QPlainTextEdit()
+        self.stats_text_edit.setReadOnly(True)
+        self.stats_text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.stats_text_edit.setMinimumHeight(92)
+        self.stats_text_edit.setMaximumHeight(118)
+        self.stats_text_edit.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        self.stats_text_edit.setStyleSheet(
+            "color: #e2e8f0; background-color: #1f2937; border: 1px solid #334155; "
+            "border-radius: 6px; padding: 8px; font-size: 13px;"
+        )
+        self.copy_stats_button = QtWidgets.QPushButton("Copy Stats")
+        self.copy_stats_button.setEnabled(False)
+        self.copy_stats_button.setToolTip("Copy the current window statistics to the clipboard.")
+        stats_layout = QtWidgets.QHBoxLayout()
+        stats_layout.addWidget(self.stats_text_edit, 1)
+        stats_layout.addWidget(self.copy_stats_button, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         if stats_mode is not None:
-            layout.addWidget(self.stats_label)
+            layout.addLayout(stats_layout)
 
         self.plot_view = ScadaTrendView(title, trend_buffer, series_keys, self)
         layout.addWidget(self.plot_view, 1)
@@ -2728,6 +2741,7 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         self.time_window_combo.currentTextChanged.connect(self._handle_window_changed)
         self.report_mode_checkbox.toggled.connect(self.plot_view.set_report_mode)
         self.report_font_slider.valueChanged.connect(self._handle_report_font_changed)
+        self.copy_stats_button.clicked.connect(self._copy_stats_to_clipboard)
         if on_export_requested is not None:
             self.export_report_button.clicked.connect(lambda: on_export_requested(self.plot_view))
 
@@ -2753,6 +2767,16 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         self.plot_view.clear()
         self._refresh_stats()
 
+    def _set_stats_text(self, text: str) -> None:
+        self._stats_text = str(text)
+        self.stats_text_edit.setPlainText(self._stats_text)
+        self.copy_stats_button.setEnabled(bool(self._stats_text.strip()))
+
+    def _copy_stats_to_clipboard(self) -> None:
+        if not self._stats_text.strip():
+            return
+        QtWidgets.QApplication.clipboard().setText(self._stats_text)
+
     def _render_stat_text(
         self,
         summary: MetricSummary,
@@ -2771,10 +2795,11 @@ class ScadaTrendPanel(QtWidgets.QWidget):
             else "Not settled in window"
         )
         return (
-            f"Window stats | Settling: {settling_text} | "
-            f"Mean error: {format_value(summary.mean_error, unit)} | "
-            f"Mean |error|: {format_value(summary.mean_abs_error, unit)} | "
-            f"Std dev: {format_value(summary.std_dev, unit)} | "
+            "Window Stats\n"
+            f"Settling: {settling_text}\n"
+            f"Mean error: {format_value(summary.mean_error, unit)}\n"
+            f"Mean |error|: {format_value(summary.mean_abs_error, unit)}\n"
+            f"Std dev: {format_value(summary.std_dev, unit)}\n"
             f"Mean |error| %: {format_value(summary.mean_abs_percent, percent_suffix, 2)}"
         )
 
@@ -2784,7 +2809,7 @@ class ScadaTrendPanel(QtWidgets.QWidget):
 
         render_times = list(self.plot_view._render_times)
         if not render_times:
-            self.stats_label.setText("Window stats: waiting for monitor data...")
+            self._set_stats_text("Window Stats\nWaiting for monitor data...")
             return
 
         start_time_s = self.plot_view._render_anchor_s - self.plot_view._time_window_s
@@ -2806,7 +2831,7 @@ class ScadaTrendPanel(QtWidgets.QWidget):
                 settle_hold_s=DEFAULT_SPEED_METRIC_SETTLE_HOLD_S,
                 command_epsilon=1.0,
             )
-            self.stats_label.setText(self._render_stat_text(summary, unit="rpm"))
+            self._set_stats_text(self._render_stat_text(summary, unit="rpm"))
             return
 
         if self._stats_mode == "position_error":
@@ -2825,10 +2850,10 @@ class ScadaTrendPanel(QtWidgets.QWidget):
                 settle_hold_s=DEFAULT_POSITION_METRIC_SETTLE_HOLD_S,
                 command_epsilon=0.1,
             )
-            self.stats_label.setText(self._render_stat_text(summary, unit="deg"))
+            self._set_stats_text(self._render_stat_text(summary, unit="deg"))
             return
 
-        self.stats_label.setText("")
+        self._set_stats_text("")
 
 
 class ScopeCaptureView(QtWidgets.QWidget):

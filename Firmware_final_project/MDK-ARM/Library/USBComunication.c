@@ -1354,7 +1354,8 @@ static void USB_HandleFocControlStop(void)
 	IdSquareTuning.fPhase = 0.0f;
 	IdSquareTuning.fVoltageLimitApplied = 0.0f;
 	gTargetSpeedRpm = 0.0f;
-	gTargetPositionCounts = Parameter.fPosition;
+	/* Preserve the last requested position target so the GUI does not
+	 * relabel the setpoint as the measured position after a stop. */
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = 0.0f;
 	gIdRefA = 0.0f;
@@ -1453,7 +1454,6 @@ static void USB_HandleFaultAck(void)
 	gFocRotatingThetaVoltageTestRunning = 0u;
 	gFocCurrentFeedbackMapTestRunning = 0u;
 	gTargetSpeedRpm = 0.0f;
-	gTargetPositionCounts = Parameter.fPosition;
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = 0.0f;
 	gIdRefA = 0.0f;
@@ -1487,7 +1487,6 @@ static void USB_HandleServoOn(void)
 	gFocRotatingThetaVoltageTestRunning = 0u;
 	gFocCurrentFeedbackMapTestRunning = 0u;
 	gTargetSpeedRpm = 0.0f;
-	gTargetPositionCounts = Parameter.fPosition;
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = 0.0f;
 	gIdRefA = 0.0f;
