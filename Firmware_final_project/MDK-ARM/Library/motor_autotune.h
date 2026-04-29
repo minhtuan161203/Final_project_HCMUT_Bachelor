@@ -16,7 +16,9 @@ typedef enum
 	MOTOR_AUTOTUNE_STATE_LS = 2u,
 	MOTOR_AUTOTUNE_STATE_FLUX = 3u,
 	MOTOR_AUTOTUNE_STATE_DONE = 4u,
-	MOTOR_AUTOTUNE_STATE_ERROR = 5u
+	MOTOR_AUTOTUNE_STATE_ERROR = 5u,
+	MOTOR_AUTOTUNE_STATE_J = 6u,
+	MOTOR_AUTOTUNE_STATE_B = 7u
 } MotorAutoTuneState_e;
 
 typedef enum
@@ -54,6 +56,9 @@ typedef struct
 	float current_bandwidth_hz;
 	float speed_bandwidth_hz;
 	float position_bandwidth_hz;
+	float mechanical_iq_amplitude_a;
+	float mechanical_frequency_hz;
+	float mechanical_speed_lpf_hz;
 } MotorAutoTuneConfig_t;
 
 typedef struct
@@ -119,6 +124,9 @@ typedef struct
 	float measured_Ke;
 	float measured_Flux;
 	float measured_PolePairs;
+	float measured_J;
+	float measured_B;
+	float estimated_LoadTorque;
 
 	float tuned_current_kp;
 	float tuned_current_ki;
@@ -151,6 +159,27 @@ typedef struct
 	float mechanical_position_start_counts;
 	float commanded_electrical_turns;
 	float estimated_mechanical_turns;
+	float mechanical_speed_filtered_rad_s;
+	float mechanical_speed_prev_rad_s;
+	float mechanical_accel_filtered_rad_s2;
+	float mechanical_iq_amplitude_a;
+	float mechanical_torque_constant_nm_per_a;
+	float mechanical_torque_sign;
+	float mechanical_peak_speed_rpm;
+	float mechanical_window_numerator;
+	float mechanical_window_denominator;
+	float mechanical_window_estimate_sum;
+	float mechanical_regression_sw2;
+	float mechanical_regression_sw;
+	float mechanical_regression_s11;
+	float mechanical_regression_swy;
+	float mechanical_regression_sy;
+	uint32_t mechanical_timeout_ticks;
+	uint16_t mechanical_zero_cross_count;
+	uint16_t mechanical_window_count;
+	uint8_t mechanical_window_active;
+	uint8_t mechanical_zero_cross_armed;
+	int8_t mechanical_prev_speed_sign;
 
 	uint16_t chart_length;
 	uint16_t chart_send_index;

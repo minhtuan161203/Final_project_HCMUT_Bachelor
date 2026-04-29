@@ -46,7 +46,7 @@ extern CurrentSensor_t Current_Sensor;
 extern StateMachine_t StateMachine;
 extern USB_Comunication_t USB_Comm;
 extern float DriverParameter[DRIVER_PARAMETER_COUNT];
-extern float MotorParameter[32];
+extern float MotorParameter[MOTOR_PARAMETER_COUNT];
 extern float gIdRefA;
 extern float gIqRefA;
 extern volatile float gTargetSpeedRpm;
@@ -350,9 +350,6 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	uint8_t autotune_error = (uint8_t)gMotorAutoTune.error;
 	uint8_t autotune_progress = gMotorAutoTune.progress_percent;
 	uint8_t autotune_data_ready = gMotorAutoTune.tuning_data_ready;
-	uint8_t foc_direction_test_status = FOC_DIRECTION_TEST_IDLE;
-	int32_t foc_direction_test_open_loop_delta_pos = 0;
-	int32_t foc_direction_test_foc_delta_pos = 0;
 	uint16_t adc_offset_ia = Parameter.u16Offset_Ia;
 	uint16_t adc_offset_ib = Parameter.u16Offset_Ib;
 	uint8_t calibration_status = USB_GetCurrentCalibrationStatus();
@@ -498,12 +495,6 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	offset = (uint8_t)(offset + sizeof(float));
 	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_position_kp, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
-	memcpy(&USB_Comunicate->TransmitData[offset], &foc_direction_test_status, sizeof(uint8_t));
-	offset = (uint8_t)(offset + sizeof(uint8_t));
-	memcpy(&USB_Comunicate->TransmitData[offset], &foc_direction_test_open_loop_delta_pos, sizeof(int32_t));
-	offset = (uint8_t)(offset + sizeof(int32_t));
-	memcpy(&USB_Comunicate->TransmitData[offset], &foc_direction_test_foc_delta_pos, sizeof(int32_t));
-	offset = (uint8_t)(offset + sizeof(int32_t));
 	memcpy(&USB_Comunicate->TransmitData[offset], &adc_offset_ia, sizeof(uint16_t));
 	offset = (uint8_t)(offset + sizeof(uint16_t));
 	memcpy(&USB_Comunicate->TransmitData[offset], &adc_offset_ib, sizeof(uint16_t));
@@ -511,6 +502,10 @@ static void USB_SendMonitorPacket(USB_Comunication_t *USB_Comunicate)
 	memcpy(&USB_Comunicate->TransmitData[offset], &calibration_status, sizeof(uint8_t));
 	offset = (uint8_t)(offset + sizeof(uint8_t));
 	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.tuned_position_ki, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.measured_J, sizeof(float));
+	offset = (uint8_t)(offset + sizeof(float));
+	memcpy(&USB_Comunicate->TransmitData[offset], (const void *)&gMotorAutoTune.measured_B, sizeof(float));
 	offset = (uint8_t)(offset + sizeof(float));
 
 	SendData(CMD_MONITOR_DATA, offset, USB_Comunicate->TransmitData);
@@ -821,10 +816,10 @@ static void USB_HandleReadDriver(USB_Comunication_t *USB_Comunicate, const uint8
 
 static void USB_HandleReadMotor(USB_Comunication_t *USB_Comunicate, const uint8_t *payload, uint8_t payload_length)
 {
-	uint8_t total_length = (payload_length > 0u) ? payload[0] : 32u;
-	if (total_length > 32u)
+	uint8_t total_length = (payload_length > 0u) ? payload[0] : MOTOR_PARAMETER_COUNT;
+	if (total_length > MOTOR_PARAMETER_COUNT)
 	{
-		total_length = 32u;
+		total_length = MOTOR_PARAMETER_COUNT;
 	}
 
 	USB_Comunicate->ReadDriverParameter = 0u;
@@ -1561,6 +1556,18 @@ static uint8_t USB_HandleAutoTuneStart(USB_Comunication_t *USB_Comunicate, const
 		memcpy(&config.speed_bandwidth_hz, &payload[24], sizeof(float));
 		memcpy(&config.position_bandwidth_hz, &payload[28], sizeof(float));
 	}
+	if (payload_length >= 40u)
+	{
+		memcpy(&config.mechanical_iq_amplitude_a, &payload[36], sizeof(float));
+	}
+	if (payload_length >= 44u)
+	{
+		memcpy(&config.mechanical_frequency_hz, &payload[40], sizeof(float));
+	}
+	if (payload_length >= 48u)
+	{
+		memcpy(&config.mechanical_speed_lpf_hz, &payload[44], sizeof(float));
+	}
 
 	if (MotorAutoTune_Start(
 		&gMotorAutoTune,
@@ -1620,7 +1627,7 @@ static uint8_t USB_HandleAutoTuneApplyGains(void)
 		DriverParameter,
 		DRIVER_PARAMETER_COUNT,
 		MotorParameter,
-		32u) == 0u)
+		MOTOR_PARAMETER_COUNT) == 0u)
 	{
 		return USB_COMM_FAIL;
 	}
@@ -1994,7 +2001,7 @@ static void USB_DispatchCommand(USB_Comunication_t *USB_Comunicate, uint8_t comm
 
 		case CMD_WRITE_MOTOR:
 			USB_SendAckPacket(ACK, command, payload, payload_length);
-			USB_HandleWriteParameterPairs(MotorParameter, payload, payload_length, 32u);
+			USB_HandleWriteParameterPairs(MotorParameter, payload, payload_length, MOTOR_PARAMETER_COUNT);
 			UpdateMotorParameter(MotorParameter);
 			break;
 

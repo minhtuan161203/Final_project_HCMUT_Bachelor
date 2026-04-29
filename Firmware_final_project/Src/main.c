@@ -81,7 +81,7 @@ SRAM_HandleTypeDef hsram2;
 /* Private variables ---------------------------------------------------------*/
 
 float DriverParameter[DRIVER_PARAMETER_COUNT];
-float MotorParameter[32];
+float MotorParameter[MOTOR_PARAMETER_COUNT];
 uint16_t FaultCode = NO_ERROR;
 float globalcontrolthetatune = -0.05f;
 uint8_t system_on = 0;
@@ -369,8 +369,6 @@ uint8_t SaveUerrorLutToFlash(void);
 #define SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED 0.02f
 #define SPEED_ESTIMATE_LPF_BLEND_END_RPM 120.0f
 #define DEBUG_AVG_SAMPLES 256u
-#define MOTOR_PARAMETER_COUNT 32u
-
 static float sDebugDeltaPosAccum = 0.0f;
 static float sDebugSpeedRawAccum = 0.0f;
 static float sDebugObservedElecHzAccum = 0.0f;
@@ -630,10 +628,20 @@ static void LoadDiagnosticCurrentPiGains(void)
 
 static void LoadAutoTuneCurrentPiGains(uint8_t reset_state)
 {
-	gIdPi.fKp = AUTOTUNE_CURRENT_KP_DEFAULT;
-	gIqPi.fKp = AUTOTUNE_CURRENT_KP_DEFAULT;
-	gIdPi.fKi = AUTOTUNE_CURRENT_KI_DEFAULT;
-	gIqPi.fKi = AUTOTUNE_CURRENT_KI_DEFAULT;
+	float current_kp = AUTOTUNE_CURRENT_KP_DEFAULT;
+	float current_ki = AUTOTUNE_CURRENT_KI_DEFAULT;
+
+	if ((gMotorAutoTune.tuned_current_kp > 0.0f) &&
+		(gMotorAutoTune.tuned_current_ki >= 0.0f))
+	{
+		current_kp = gMotorAutoTune.tuned_current_kp;
+		current_ki = gMotorAutoTune.tuned_current_ki;
+	}
+
+	gIdPi.fKp = current_kp;
+	gIqPi.fKp = current_kp;
+	gIdPi.fKi = current_ki;
+	gIqPi.fKi = current_ki;
 
 	if (reset_state != 0u)
 	{
@@ -3875,6 +3883,7 @@ static void RunMotorAutoTuneLoop(void)
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	gTargetSpeedRpm = 0.0f;
+	gCommandedSpeedRpm = 0.0f;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
 

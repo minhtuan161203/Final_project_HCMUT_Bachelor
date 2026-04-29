@@ -54,6 +54,8 @@ MOTOR_AUTOTUNE_STATE_LS = 2
 MOTOR_AUTOTUNE_STATE_FLUX = 3
 MOTOR_AUTOTUNE_STATE_DONE = 4
 MOTOR_AUTOTUNE_STATE_ERROR = 5
+MOTOR_AUTOTUNE_STATE_J = 6
+MOTOR_AUTOTUNE_STATE_B = 7
 MOTOR_AUTOTUNE_ERROR_NONE = 0
 MOTOR_AUTOTUNE_ERROR_OVERCURRENT = 1
 MOTOR_AUTOTUNE_ERROR_STALL = 2
@@ -240,6 +242,7 @@ MOTOR_PARAMETER_NAMES = [
     "MOTOR_REVERSE_HALL_3",
     "MOTOR_REVERSE_HALL_4",
     "MOTOR_REVERSE_HALL_5",
+    "MOTOR_VISCOUS_FRICTION",
 ]
 
 
@@ -336,6 +339,8 @@ class MonitorSnapshot:
     autotune_speed_ki: float = 0.0
     autotune_position_kp: float = 0.0
     autotune_position_ki: float = 0.0
+    autotune_measured_j: float = 0.0
+    autotune_measured_b: float = 0.0
     foc_direction_test_status: int = FOC_DIRECTION_TEST_IDLE
     foc_direction_test_open_loop_delta_pos: int = 0
     foc_direction_test_foc_delta_pos: int = 0
@@ -592,14 +597,6 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
         ) = struct.unpack_from("<4B10f", payload, offset)
         offset += struct.calcsize("<4B10f")
 
-    if len(payload) >= offset + struct.calcsize("<B2i"):
-        (
-            snapshot.foc_direction_test_status,
-            snapshot.foc_direction_test_open_loop_delta_pos,
-            snapshot.foc_direction_test_foc_delta_pos,
-        ) = struct.unpack_from("<B2i", payload, offset)
-        offset += struct.calcsize("<B2i")
-
     if len(payload) >= offset + struct.calcsize("<2HB"):
         (
             snapshot.adc_offset_ia,
@@ -611,6 +608,13 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
     if len(payload) >= offset + struct.calcsize("<f"):
         (snapshot.autotune_position_ki,) = struct.unpack_from("<f", payload, offset)
         offset += struct.calcsize("<f")
+
+    if len(payload) >= offset + struct.calcsize("<2f"):
+        (
+            snapshot.autotune_measured_j,
+            snapshot.autotune_measured_b,
+        ) = struct.unpack_from("<2f", payload, offset)
+        offset += struct.calcsize("<2f")
 
     return snapshot
 

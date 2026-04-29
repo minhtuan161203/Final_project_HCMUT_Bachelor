@@ -123,6 +123,7 @@
  */
 #define DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG	90.05f //Alex tunning so f**king tierd!!!
 #define DRIVER_PARAMETER_COUNT					17u
+#define MOTOR_PARAMETER_COUNT					33u
 #define POSITION_TRACKING_MODE_SINGLE_TURN	0u
 #define POSITION_TRACKING_MODE_MULTI_TURN	1u
 typedef enum
@@ -182,7 +183,8 @@ typedef enum
 	MOTOR_REVERSE_HALL_2,					/*28:Pulses					32 bit*/
 	MOTOR_REVERSE_HALL_3,					/*29:Pulses					32 bit*/
 	MOTOR_REVERSE_HALL_4,					/*30:Pulses					32 bit*/
-	MOTOR_REVERSE_HALL_5					/*31:Pulses					32 bit*/
+	MOTOR_REVERSE_HALL_5,					/*31:Pulses					32 bit*/
+	MOTOR_VISCOUS_FRICTION				/*32:mN.m.s/rad		32 bit*/
 }MOTOR_PARAMETER_ID;
 
 #endif

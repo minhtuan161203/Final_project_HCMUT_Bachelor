@@ -44,10 +44,12 @@ from protocol import (
     MOTOR_AUTOTUNE_ERROR_OVERCURRENT,
     MOTOR_AUTOTUNE_ERROR_SIGNAL,
     MOTOR_AUTOTUNE_ERROR_STALL,
+    MOTOR_AUTOTUNE_STATE_B,
     MOTOR_AUTOTUNE_STATE_DONE,
     MOTOR_AUTOTUNE_STATE_ERROR,
     MOTOR_AUTOTUNE_STATE_FLUX,
     MOTOR_AUTOTUNE_STATE_IDLE,
+    MOTOR_AUTOTUNE_STATE_J,
     MOTOR_AUTOTUNE_STATE_LS,
     MOTOR_AUTOTUNE_STATE_RS,
     CURRENT_TUNING_TOTAL_SAMPLES,
@@ -186,6 +188,8 @@ PARAMETER_NAME_LABELS = {
     "MOTOR_RESISTANCE": "MOTOR_RESISTANCE [mOhm]",
     "MOTOR_INDUCTANCE": "MOTOR_INDUCTANCE [uH]",
     "MOTOR_BACK_EMF_CONSTANT": "MOTOR_BACK_EMF_CONSTANT [mV/(rad/s)]",
+    "MOTOR_ROTOR_INERTIA": "MOTOR_ROTOR_INERTIA [1e-3 kg*m^2]",
+    "MOTOR_VISCOUS_FRICTION": "MOTOR_VISCOUS_FRICTION [mN*m*s/rad]",
 }
 
 TRACE_CHANNEL_META = {
@@ -4597,7 +4601,7 @@ class MainWindow(QtWidgets.QMainWindow):
         init_hint = QtWidgets.QLabel(
             "Check the minimum motor data here before auto-tune. The GUI will write "
             "Rated Current RMS, Encoder Type, and Encoder Resolution to the drive automatically when "
-            "Auto-Tune starts. J and B stay out of this flow for now."
+            "Auto-Tune starts. J and B are estimated later in the same auto-tune flow after Flux."
         )
         init_hint.setWordWrap(True)
 
@@ -4653,7 +4657,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "Required. Used for speed/position scaling and pole-pair estimation."
         )
 
-        rotor_model_value = QtWidgets.QLabel("Auto-estimate later")
+        rotor_model_value = QtWidgets.QLabel("Auto-estimate in flow")
         rotor_model_value.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
@@ -4682,7 +4686,7 @@ class MainWindow(QtWidgets.QMainWindow):
             (
                 "Rotor Model (J / B)",
                 rotor_model_value,
-                "Not required now. J and B will be estimated in a later step.",
+                "Optional to pre-fill manually, but the auto-tune flow now estimates both after Flux.",
             ),
         ]
         for row, (label_text, value_widget, note_text) in enumerate(init_rows):
@@ -4794,6 +4798,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_flux_value_label = QtWidgets.QLabel("-")
         self.autotune_pp_value_label = QtWidgets.QLabel("-")
         self.autotune_kt_value_label = QtWidgets.QLabel("-")
+        self.autotune_j_value_label = QtWidgets.QLabel("-")
+        self.autotune_b_value_label = QtWidgets.QLabel("-")
         self.autotune_current_gain_value_label = QtWidgets.QLabel("-")
         self.autotune_speed_gain_value_label = QtWidgets.QLabel("-")
         self.autotune_position_gain_value_label = QtWidgets.QLabel("-")
@@ -4862,6 +4868,10 @@ class MainWindow(QtWidgets.QMainWindow):
         estimated_layout.addWidget(self.autotune_pp_value_label, 4, 1)
         estimated_layout.addWidget(QtWidgets.QLabel("Kt"), 5, 0)
         estimated_layout.addWidget(self.autotune_kt_value_label, 5, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("J"), 6, 0)
+        estimated_layout.addWidget(self.autotune_j_value_label, 6, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("B"), 7, 0)
+        estimated_layout.addWidget(self.autotune_b_value_label, 7, 1)
         estimated_layout.setColumnStretch(1, 1)
 
         gains_group = QtWidgets.QGroupBox("Loop Gains")
@@ -4885,10 +4895,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
             "<li>First review <b>Rated Current RMS</b>, <b>Encoder Type</b>, and <b>Encoder Resolution</b> in the initial input table.</li>"
             "<li>Lock the rotor mechanically for the <b>Rs</b> and <b>Ls</b> stages.</li>"
-            "<li>Run the <b>Flux</b> stage only with the motor unloaded and free to spin.</li>"
+            "<li>Run the <b>Flux</b>, <b>J</b>, and <b>B</b> stages only with the motor unloaded and free to spin.</li>"
             "<li>Before Flux estimation, try the same <b>Flux Voltage</b> and <b>Flux Frequency</b> in <b>Open Loop V/F</b> first.</li>"
             "<li>The motor should spin smoothly without strong jerks, buzz, or unstable vibration before you trust the Ke / flux estimate.</li>"
-            "<li><b>J</b> and <b>B</b> are intentionally left out here and will be estimated in a later flow.</li>"
+            "<li>The mechanical stages use a sinusoidal <b>Iq</b> excitation, filtered speed, and cycle-based integration between zero crossings.</li>"
             "</ul>"
             "<b>Rs Estimation Note</b>"
             "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
@@ -6349,7 +6359,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Encoder type: {encoder_type_text} [{encoder_id}]. {encoder_text}. "
             f"Rs current suggestions follow 0.6x / 0.8x rated current ({rated_current:.3f} A). "
             "Start Auto-Tune writes Rated Current RMS, Encoder Type, and Encoder Resolution to the drive first. "
-            "J/B stay reserved for later estimation."
+            "J/B are then estimated automatically after the electrical stages complete."
         )
 
     def _autotune_selected_encoder_id(self) -> int:
@@ -8766,6 +8776,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return "Ls Measurement"
         if int(state) == MOTOR_AUTOTUNE_STATE_FLUX:
             return "Flux / Pole Pairs"
+        if int(state) == MOTOR_AUTOTUNE_STATE_J:
+            return "Inertia J"
+        if int(state) == MOTOR_AUTOTUNE_STATE_B:
+            return "Viscous Friction B"
         if int(state) == MOTOR_AUTOTUNE_STATE_DONE:
             return "Done"
         if int(state) == MOTOR_AUTOTUNE_STATE_ERROR:
@@ -8926,6 +8940,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.autotune_flux_value_label.setText("-")
             self.autotune_pp_value_label.setText("-")
             self.autotune_kt_value_label.setText("-")
+            self.autotune_j_value_label.setText("-")
+            self.autotune_b_value_label.setText("-")
             self.autotune_current_gain_value_label.setText("-")
             self.autotune_speed_gain_value_label.setText("-")
             self.autotune_position_gain_value_label.setText("-")
@@ -8961,6 +8977,10 @@ class MainWindow(QtWidgets.QMainWindow):
             * float(snapshot.autotune_measured_flux)
         )
         self.autotune_kt_value_label.setText(f"{autotune_kt:.6f} Nm/A")
+        self.autotune_j_value_label.setText(f"{snapshot.autotune_measured_j:.6e} kg*m^2")
+        self.autotune_b_value_label.setText(
+            f"{snapshot.autotune_measured_b:.6e} N*m*s/rad"
+        )
         self.autotune_current_gain_value_label.setText(
             f"Kp={snapshot.autotune_current_kp:.4f}, Ki={snapshot.autotune_current_ki:.4f}"
         )
@@ -9038,7 +9058,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Auto-Tune Safety",
-                "Stop the drive before starting auto-tune. Rs/Ls assume a locked rotor, and the flux stage should only run after the electrical-zero setup is ready.",
+                "Stop the drive before starting auto-tune. Rs/Ls assume a locked rotor, and the Flux/J/B stages should only run after the electrical-zero setup is ready with the shaft free to move.",
             )
             return
 
@@ -9135,8 +9155,18 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self._set_table_float_value(
                 self.motor_table,
+                MOTOR_PARAMETER_NAMES.index("MOTOR_ROTOR_INERTIA"),
+                float(snapshot.autotune_measured_j) * 1000.0,
+            )
+            self._set_table_float_value(
+                self.motor_table,
                 MOTOR_PARAMETER_NAMES.index("MOTOR_NUMBER_POLE_PAIRS"),
                 float(snapshot.autotune_measured_pole_pairs),
+            )
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAMETER_NAMES.index("MOTOR_VISCOUS_FRICTION"),
+                float(snapshot.autotune_measured_b) * 1000.0,
             )
             self._set_table_float_value(
                 self.motor_table,
@@ -10555,6 +10585,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Ke / Flux: {snapshot.autotune_measured_ke:.6f} V/(rad/s) / {snapshot.autotune_measured_flux:.6f} Wb",
             f"Pole Pairs: {snapshot.autotune_measured_pole_pairs:.2f}",
             f"Kt: {1.5 * float(snapshot.autotune_measured_pole_pairs) * float(snapshot.autotune_measured_flux):.6f} Nm/A",
+            f"J / B: {snapshot.autotune_measured_j:.6e} kg*m^2 / {snapshot.autotune_measured_b:.6e} N*m*s/rad",
             f"Current PI: Kp={snapshot.autotune_current_kp:.4f}, Ki={snapshot.autotune_current_ki:.4f}",
             f"Speed PI: Kp={snapshot.autotune_speed_kp:.4f}, Ki={snapshot.autotune_speed_ki:.4f}",
             f"Position PI: Kp={snapshot.autotune_position_kp:.4f}, Ki={snapshot.autotune_position_ki:.4f}",
