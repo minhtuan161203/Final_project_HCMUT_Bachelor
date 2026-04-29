@@ -244,6 +244,7 @@ static float GetPositionControlErrorCounts(float target_position_counts, float a
 static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution);
 static float GetPositionLoopErrorReleaseDeadbandCounts(float encoder_resolution);
 static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec);
+static float GetSpeedEstimateLpfAlpha(float raw_speed_rpm);
 static uint8_t IsAbsoluteEncoderId(uint32_t encoder_id);
 static void RefreshEncoderAlignmentPolicy(void);
 static void ResetEncoderAlignmentAveraging(void);
@@ -365,6 +366,8 @@ uint8_t SaveUerrorLutToFlash(void);
 #define UERROR_MIN_VOLTAGE_LIMIT_V 1.0f
 #define UERROR_VOLTAGE_LIMIT_GAIN 1.8f
 #define SPEED_ESTIMATE_LPF_ALPHA 0.1f
+#define SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED 0.02f
+#define SPEED_ESTIMATE_LPF_BLEND_END_RPM 120.0f
 #define DEBUG_AVG_SAMPLES 256u
 #define MOTOR_PARAMETER_COUNT 32u
 
@@ -649,6 +652,22 @@ static uint8_t ShouldHoldCurrentLoopAtZero(float current_ref, float measured_cur
 {
 	return ((fabsf(current_ref) <= FOC_ZERO_CMD_REF_DEADBAND_A) &&
 		(fabsf(measured_current) <= FOC_ZERO_CMD_MEAS_DEADBAND_A)) ? 1u : 0u;
+}
+
+static float GetSpeedEstimateLpfAlpha(float raw_speed_rpm)
+{
+	float speed_context_rpm;
+	float blend;
+
+	speed_context_rpm = fmaxf(
+		fabsf(raw_speed_rpm),
+		fmaxf(fabsf(gCommandedSpeedRpm), fabsf(gTargetSpeedRpm)));
+	blend = ClampFloat(
+		speed_context_rpm / SPEED_ESTIMATE_LPF_BLEND_END_RPM,
+		0.0f,
+		1.0f);
+	return SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED +
+		blend * (SPEED_ESTIMATE_LPF_ALPHA - SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED);
 }
 
 static void ResetDebugAveraging(void)
@@ -2980,6 +2999,7 @@ static void UpdateMeasuredSpeedAndTheta(void)
 	float electrical_angle;
 	float mechanical_angle;
 	float raw_speed_rpm;
+	float speed_filter_alpha;
 	float position_single_turn;
 
 	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
@@ -2993,7 +3013,8 @@ static void UpdateMeasuredSpeedAndTheta(void)
 	}
 	
 	gDebugSpeedRawRpm = raw_speed_rpm;
-	Parameter.fActSpeedFilter += SPEED_ESTIMATE_LPF_ALPHA * (raw_speed_rpm - Parameter.fActSpeedFilter);
+	speed_filter_alpha = GetSpeedEstimateLpfAlpha(raw_speed_rpm);
+	Parameter.fActSpeedFilter += speed_filter_alpha * (raw_speed_rpm - Parameter.fActSpeedFilter);
 	Parameter.fActSpeed = Parameter.fActSpeedFilter;
 	gDebugObservedElectricalHz = fabsf(Parameter.fActSpeed) * ((float)Parameter.u8PolePair / 60.0f);
 	gDebugEncoderTurns = Parameter.fPosition / encoder_resolution;

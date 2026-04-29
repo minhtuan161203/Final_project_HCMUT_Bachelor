@@ -2287,12 +2287,14 @@ Cho runtime position/speed FOC:
 
 - `position loop` da thu `integrator deadband` nhung cuoi cung revert
 - quay lai `hard deadband hold`
-- chi giu lai mot bien deadband duy nhat de tune
+- chi giu lai mot bien deadband duy nhat de tune cho `position loop`
+- `speed loop` giu `Kp/Ki` cu, nhung speed feedback duoc loc em hon o low-speed
 
 Y tuong cuoi cung:
 
 - van cho phep deadband quanh setpoint de chan hunting
-- nhung khong can thiep kieu `P-only / I-off` nua
+- voi `position loop` thi khong can thiep kieu `P-only / I-off` nua
+- voi `speed loop` thi uu tien lam em feedback thay vi cat bot PI
 - release deadband duoc suy ra noi bo tu cung mot bien deadband
 
 ### 7.4 Patch da lam trong firmware
@@ -2314,7 +2316,7 @@ Muc tieu:
 
 Da them cac bien tune runtime:
 
-- `gPositionLoopDeadbandDeg = 0.50f`
+- `gPositionLoopDeadbandDeg = 0.3f`
 
 Release deadband:
 
@@ -2338,38 +2340,52 @@ Nghia la:
 - hanh vi da quay lai dung cam giac ban dau cua firmware
 - diem duy nhat de tune la do rong deadband
 
-#### c. Speed loop deadband da thu va da revert
+#### c. Speed loop: revert `integrator deadband`, doi sang lam em speed feedback o low-speed
 
-Da tung thu y tuong `speed-loop integrator deadband` theo RPM.
+Patch `integrator deadband` cho `Speed PI` da duoc bo ra.
 
-Ket qua bench:
+Firmware chi lam:
 
-- phan ung khong on dinh nhu mong muon
-- tradeoff khong dep bang patch position deadband
-- nen quyet dinh cuoi cung la `revert` phan speed deadband
+- giu nguyen `Speed PI` runtime
+- giu nguyen cach tinh `Speed PI`
+- tang muc low-pass cho `speed feedback` khi dang o vung toc do thap
+- khi toc do/command tang len, filter tu quay ve muc nhanh hon
 
-Trang thai hien tai:
+Mac dinh hien tai:
 
-- `Speed PI` runtime van giu logic binh thuong
-- neu can lam em low-speed, uu tien tune `Speed PI`, current PI, friction/cogging, va outer-loop position truoc
+- `SPEED_ESTIMATE_LPF_ALPHA = 0.1f`
+- `SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED = 0.02f`
+- `SPEED_ESTIMATE_LPF_BLEND_END_RPM = 120.0f`
 
-#### d. Bien duy nhat can tune
+Muc tieu:
+
+- bo qua ripple/nhiu toc do rat nho quanh setpoint
+- tranh canh phai giam `Speed Kp/Ki` roi lam yeu kha nang bam tai
+- tranh de `speed loop` chase qua manh vao speed ripple / cogging / quantization
+
+#### d. Bien can tune
 
 Neu chi muon tune deadband position, hay sua:
 
 - `gPositionLoopDeadbandDeg`
+
+Neu muon tune do em cua speed feedback o low-speed, hay sua trong source:
+
+- `SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED`
+- `SPEED_ESTIMATE_LPF_BLEND_END_RPM`
 
 ### 7.5 Y nghia control cua quyet dinh nay
 
 Sau patch nay, triet ly runtime la:
 
 - position loop tro lai logic deadband cu
-- khong them lop hanh vi moi vao speed loop
+- speed loop giu nguyen PI, nhung speed estimate duoc lam em hon khi o low-speed
 
 He qua mong muon:
 
 - `Go to Angle = 90 deg` quay ve dung hanh vi cu
-- neu muon tang/giam do nhay deadband, chi can sua mot bien
+- neu muon tang/giam do nhay position deadband, chi can sua mot bien
+- neu muon lam em hunting toc do nho, tune filter speed feedback low-speed
 
 Tradeoff duoc chap nhan:
 
@@ -2381,7 +2397,8 @@ Tradeoff duoc chap nhan:
 Neu can tune tren bench:
 
 1. Neu van hunting o low speed:
-   - xem lai `Speed PI`
+   - xem lai filter speed feedback low-speed
+   - sau do moi xem lai `Speed PI`
    - sau do moi xem den `gPositionLoopDeadbandDeg`
 
 2. Neu thay vi tri hoi "mem":
@@ -2398,10 +2415,9 @@ Ban patch goc:
 - ket qua: `0 Error(s), 5 Warning(s)`
 - 5 warning hien tai la warning cu ve cac helper chua dung, khong phai loi moi do patch nay tao ra
 
-Sau khi revert rieng phan `speed deadband`:
+Sau khi doi sang low-speed speed-filter smoothing:
 
-- `main.c` da duoc syntax-check lai bang `Armcc.exe`
-- ket qua: `0 errors`
+- can rebuild lai trong moi truong Keil truoc khi flash
 
 Bench test hop ly nhat sau khi flash:
 
