@@ -307,6 +307,7 @@ class MonitorSnapshot:
     debug_observed_electrical_hz_avg: float = 0.0
     debug_delta_pos: int = 0
     debug_enc_single_turn: int = 0
+    debug_enc_single_turn_valid: int = 0
     debug_isr_delta_cycles: int = 0
     debug_isr_period_us: float = 0.0
     debug_isr_frequency_hz: float = 0.0
@@ -536,6 +537,7 @@ def parse_monitor_payload(payload: bytes) -> MonitorSnapshot:
             snapshot.debug_delta_pos,
             snapshot.debug_enc_single_turn,
         ) = struct.unpack_from("<11f2i", payload, offset)
+        snapshot.debug_enc_single_turn_valid = 1
         offset += struct.calcsize("<11f2i")
 
     if len(payload) >= offset + struct.calcsize("<I2f"):

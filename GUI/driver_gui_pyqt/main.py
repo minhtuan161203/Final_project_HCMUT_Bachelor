@@ -6075,6 +6075,48 @@ class MainWindow(QtWidgets.QMainWindow):
             counts += encoder_resolution
         return counts
 
+    def _motor_current_ctrl_direction(self) -> int:
+        if not hasattr(self, "motor_table"):
+            return 0
+        direction = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_CTRL_DIRECTION"),
+                    0.0,
+                )
+            )
+        )
+        return 0 if direction == 0 else 1
+
+    def _snapshot_single_turn_counts(self, snapshot) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if snapshot is None:
+            return 0.0
+        if (
+            encoder_resolution > 1.0
+            and int(getattr(snapshot, "debug_enc_single_turn_valid", 0)) != 0
+        ):
+            single_turn_counts = float(getattr(snapshot, "debug_enc_single_turn", 0))
+            if self._motor_current_ctrl_direction() != 0:
+                single_turn_counts = encoder_resolution - single_turn_counts
+            return self._normalize_single_turn_counts(single_turn_counts)
+        return self._normalize_single_turn_counts(float(getattr(snapshot, "act_position", 0.0)))
+
+    def _snapshot_position_counts_for_display(
+        self,
+        snapshot,
+        tracking_mode: int | None = None,
+    ) -> tuple[float, float]:
+        mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
+        if snapshot is None:
+            return 0.0, 0.0
+        cmd_counts = float(getattr(snapshot, "cmd_position", 0.0))
+        if mode == POSITION_TRACKING_MODE_MULTI_TURN:
+            act_counts = float(getattr(snapshot, "act_position", 0.0))
+            return cmd_counts, act_counts
+        return self._normalize_single_turn_counts(cmd_counts), self._snapshot_single_turn_counts(snapshot)
+
     def _position_tracking_mode(self) -> int:
         if not hasattr(self, "foc_position_tracking_combo"):
             return POSITION_TRACKING_MODE_SINGLE_TURN
@@ -7605,17 +7647,21 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             if mode == POSITION_CONTROL_MODE:
                 tracking_mode = self._position_tracking_mode()
-                target_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position, tracking_mode)
-                act_deg = self._counts_to_position_mode_degrees(snapshot.act_position, tracking_mode)
+                cmd_position_counts, act_position_counts = self._snapshot_position_counts_for_display(
+                    snapshot,
+                    tracking_mode,
+                )
+                target_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
+                act_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
                 error_deg = self._display_position_error_degrees(
-                    snapshot.cmd_position,
-                    snapshot.act_position,
+                    cmd_position_counts,
+                    act_position_counts,
                     tracking_mode,
                 )
                 self.foc_status_value_label.setText("Fault / stopped")
                 self.foc_live_summary_label.setText(
-                    f"Last position target {target_deg:.2f} deg / {snapshot.cmd_position:.1f} cnt | "
-                    f"Act {act_deg:.2f} deg / {snapshot.act_position:.1f} cnt | "
+                    f"Last position target {target_deg:.2f} deg / {cmd_position_counts:.1f} cnt | "
+                    f"Act {act_deg:.2f} deg / {act_position_counts:.1f} cnt | "
                     f"Error {error_deg:.3f} deg | "
                     f"{self._position_tracking_mode_text(tracking_mode)}"
                 )
@@ -7648,17 +7694,21 @@ class MainWindow(QtWidgets.QMainWindow):
         mode = POSITION_CONTROL_MODE if runtime_mode == POSITION_CONTROL_MODE else SPEED_CONTROL_MODE
         if mode == POSITION_CONTROL_MODE:
             tracking_mode = self._position_tracking_mode()
-            target_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position, tracking_mode)
-            act_deg = self._counts_to_position_mode_degrees(snapshot.act_position, tracking_mode)
+            cmd_position_counts, act_position_counts = self._snapshot_position_counts_for_display(
+                snapshot,
+                tracking_mode,
+            )
+            target_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
+            act_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
             error_deg = self._display_position_error_degrees(
-                snapshot.cmd_position,
-                snapshot.act_position,
+                cmd_position_counts,
+                act_position_counts,
                 tracking_mode,
             )
             self.foc_status_value_label.setText("FOC Position Running")
             self.foc_live_summary_label.setText(
-                f"Target {target_deg:.2f} deg / {snapshot.cmd_position:.1f} cnt | "
-                f"Act {act_deg:.2f} deg / {snapshot.act_position:.1f} cnt | "
+                f"Target {target_deg:.2f} deg / {cmd_position_counts:.1f} cnt | "
+                f"Act {act_deg:.2f} deg / {act_position_counts:.1f} cnt | "
                 f"Error {error_deg:.3f} deg | "
                 f"Cmd Speed {snapshot.cmd_speed:.1f} rpm | "
                 f"{self._position_tracking_mode_text(tracking_mode)}"
@@ -7848,7 +7898,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 tracking_mode,
             )
             current_position = (
-                float(getattr(last_monitor, "act_position", position_target))
+                self._snapshot_position_counts_for_display(last_monitor, tracking_mode)[1]
                 if last_monitor is not None
                 else position_target
             )
@@ -9768,16 +9818,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _append_snapshot_to_trend_buffer(self, snapshot) -> None:
         tracking_mode = self._position_tracking_mode()
-        cmd_position_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position, tracking_mode)
-        act_position_deg = self._counts_to_position_mode_degrees(snapshot.act_position, tracking_mode)
+        cmd_position_counts, act_position_counts = self._snapshot_position_counts_for_display(
+            snapshot,
+            tracking_mode,
+        )
+        cmd_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
+        act_position_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
         position_error_deg = self._display_position_error_degrees(
-            snapshot.cmd_position,
-            snapshot.act_position,
+            cmd_position_counts,
+            act_position_counts,
             tracking_mode,
         )
         validation_error_deg = self._current_position_validation_error_degrees(
-            snapshot.cmd_position,
-            snapshot.act_position,
+            cmd_position_counts,
+            act_position_counts,
             tracking_mode,
         )
         self._trend_buffer.append_sample(
@@ -9804,9 +9858,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _append_error_snapshot_to_trend_buffer(self, snapshot) -> None:
         last_monitor = self._latest_monitor_snapshot
-        cmd_position_counts = float(last_monitor.cmd_position) if last_monitor is not None else 0.0
-        act_position_counts = float(snapshot.act_position)
         tracking_mode = self._position_tracking_mode()
+        if (
+            last_monitor is not None
+            and tracking_mode != POSITION_TRACKING_MODE_MULTI_TURN
+        ):
+            cmd_position_counts, act_position_counts = (
+                self._snapshot_position_counts_for_display(
+                    last_monitor,
+                    tracking_mode,
+                )
+            )
+        else:
+            cmd_position_counts = (
+                float(last_monitor.cmd_position)
+                if last_monitor is not None
+                else float(getattr(snapshot, "cmd_position", 0.0))
+            )
+            act_position_counts = float(snapshot.act_position)
         cmd_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
         act_position_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
         position_error_deg = self._display_position_error_degrees(
@@ -9873,6 +9942,9 @@ class MainWindow(QtWidgets.QMainWindow):
         electrical_deg = (
             float(snapshot.debug_electrical_angle_rad) * 180.0 / 3.141592653589793
         )
+        cmd_position_counts, act_position_counts = self._snapshot_position_counts_for_display(
+            snapshot
+        )
 
         lines = [
             f"Snapshot: {timestamp}",
@@ -9909,9 +9981,9 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Cmd Speed: {snapshot.cmd_speed:.3f}",
             f"Act Speed: {snapshot.act_speed:.3f}",
             f"Speed Error: {snapshot.speed_error:.3f}",
-            f"Setting Position: {self._counts_to_position_mode_degrees(snapshot.cmd_position):.3f} deg",
-            f"Tracking Error: {self._display_position_error_degrees(snapshot.cmd_position, snapshot.act_position):.3f} deg",
-            f"Mechanical Angle (Single-turn): {self._counts_to_single_turn_degrees(snapshot.act_position):.3f} deg",
+            f"Setting Position: {self._counts_to_position_mode_degrees(cmd_position_counts):.3f} deg",
+            f"Tracking Error: {self._display_position_error_degrees(cmd_position_counts, act_position_counts):.3f} deg",
+            f"Mechanical Angle (Single-turn): {self._counts_to_single_turn_degrees(act_position_counts):.3f} deg",
             f"Mechanical Angle (Multi-turn): {self._counts_to_accumulated_degrees(snapshot.act_position):.3f} deg",
             f"Total Distance: {self._counts_to_turns(snapshot.act_position):.3f} turns",
             "",
@@ -10210,12 +10282,13 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setStyleSheet("color: #d9534f; font-weight: 600;")
 
     def _update_monitor(self, snapshot) -> None:
+        cmd_position_counts, act_position_counts = self._snapshot_position_counts_for_display(snapshot)
         position_error_deg = self._display_position_error_degrees(
-            snapshot.cmd_position,
-            snapshot.act_position,
+            cmd_position_counts,
+            act_position_counts,
         )
-        setting_position_deg = self._counts_to_position_mode_degrees(snapshot.cmd_position)
-        mechanical_angle_single_deg = self._counts_to_single_turn_degrees(snapshot.act_position)
+        setting_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts)
+        mechanical_angle_single_deg = self._counts_to_single_turn_degrees(act_position_counts)
         mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(snapshot.act_position)
         total_distance_turns = self._counts_to_turns(snapshot.act_position)
         self._set_monitor_value("enable_run", "ON" if snapshot.enable_run else "OFF")
@@ -10262,13 +10335,29 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_error_snapshot(self, snapshot) -> None:
         self._append_error_snapshot_to_trend_buffer(snapshot)
+        tracking_mode = self._position_tracking_mode()
+        if (
+            self._latest_monitor_snapshot is not None
+            and tracking_mode != POSITION_TRACKING_MODE_MULTI_TURN
+        ):
+            cmd_position_counts, act_position_counts = (
+                self._snapshot_position_counts_for_display(
+                    self._latest_monitor_snapshot,
+                    tracking_mode,
+                )
+            )
+        else:
+            cmd_position_counts = (
+                float(getattr(self._latest_monitor_snapshot, "cmd_position", 0.0))
+            )
+            act_position_counts = float(snapshot.act_position)
         position_error_deg = self._display_position_error_degrees(
-            getattr(self._latest_monitor_snapshot, "cmd_position", 0.0),
-            snapshot.act_position,
+            cmd_position_counts,
+            act_position_counts,
+            tracking_mode,
         )
-        cmd_position_counts = getattr(self._latest_monitor_snapshot, "cmd_position", 0.0)
         setting_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts)
-        mechanical_angle_single_deg = self._counts_to_single_turn_degrees(snapshot.act_position)
+        mechanical_angle_single_deg = self._counts_to_single_turn_degrees(act_position_counts)
         mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(snapshot.act_position)
         total_distance_turns = self._counts_to_turns(snapshot.act_position)
         self._set_monitor_value("enable_run", "OFF")
