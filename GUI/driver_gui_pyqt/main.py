@@ -2864,21 +2864,30 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._series_defs: list[dict[str, str]] = []
         self._series_data: list[list[float]] = []
         self._plot_rect = QtCore.QRectF()
+        self._plot_rects: list[QtCore.QRectF] = []
         self._hover_index: int | None = None
         self._auto_scale = True
         self._frozen_ranges: dict[str, tuple[float, float]] = {}
         self._status_text = "Waiting for capture..."
         self._report_mode = False
         self._report_font_point_size = 14
+        self._stack_units = False
         self.setMinimumHeight(340)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self.setMouseTracking(True)
 
     def clear(self) -> None:
         self._series_defs = []
         self._series_data = []
+        self._plot_rect = QtCore.QRectF()
+        self._plot_rects = []
         self._hover_index = None
         self._frozen_ranges = {}
         self._status_text = "Waiting for capture..."
+        self._update_preferred_height()
         self.update()
 
     def set_auto_scale(self, enabled: bool) -> None:
@@ -2889,10 +2898,17 @@ class ScopeCaptureView(QtWidgets.QWidget):
 
     def set_report_mode(self, enabled: bool) -> None:
         self._report_mode = bool(enabled)
+        self._update_preferred_height()
         self.update()
 
     def set_report_font_point_size(self, value: int) -> None:
         self._report_font_point_size = int(max(12, min(24, value)))
+        self._update_preferred_height()
+        self.update()
+
+    def set_stack_units(self, enabled: bool) -> None:
+        self._stack_units = bool(enabled)
+        self._update_preferred_height()
         self.update()
 
     def prepare_for_report(self, dpi: int = 300) -> ChartReportCapture:
@@ -2917,6 +2933,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
             self.render(painter)
         finally:
             self._report_mode = previous_report_mode
+            self._update_preferred_height()
         painter.end()
         self._hover_index = previous_hover
 
@@ -2949,7 +2966,13 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._status_text = status_text
         if self._auto_scale or not self._frozen_ranges:
             self._frozen_ranges = self._calculate_y_ranges()
+        self._update_preferred_height()
         self.update()
+
+    def sizeHint(self) -> QtCore.QSize:  # noqa: N802
+        hint = super().sizeHint()
+        hint.setHeight(max(hint.height(), self.minimumHeight()))
+        return hint
 
     def _axis_key(self, series_def: dict[str, str]) -> str:
         unit = series_def.get("unit", "").strip()
@@ -3042,6 +3065,107 @@ class ScopeCaptureView(QtWidgets.QWidget):
     def _render_scale(self) -> float:
         return _chart_scale_from_font_size(self._report_font_point_size) if self._report_mode else 1.0
 
+    def _update_preferred_height(self) -> None:
+        if not self._stack_units:
+            self.setMinimumHeight(340)
+            self.updateGeometry()
+            return
+
+        scale = self._render_scale()
+        panel_count = max(1, len(self._axis_groups()))
+        title_height = QtGui.QFontMetrics(self._title_font()).height() + int(4 * scale)
+        legend_height = (
+            max(QtGui.QFontMetrics(self._legend_font()).height(), int(10 * scale))
+            + int(8 * scale)
+        )
+        panel_gap = int(18 * scale)
+        total_height = (
+            int(24 * scale)
+            + title_height
+            + legend_height
+            + panel_count * self._stacked_panel_outer_height()
+            + max(0, panel_count - 1) * panel_gap
+        )
+        self.setMinimumHeight(max(340, total_height))
+        self.updateGeometry()
+
+    def _stacked_panel_outer_height(self) -> int:
+        scale = self._render_scale()
+        return int((240 if self._report_mode else 220) * scale)
+
+    def _stacked_panel_title(self, axis_group: dict[str, object]) -> str:
+        unit = str(axis_group.get("unit", "") or "").strip()
+        if unit:
+            return unit
+        return str(axis_group.get("label", "Series") or "Series")
+
+    def _stacked_layout(
+        self,
+        rect: QtCore.QRectF,
+    ) -> tuple[int, int, list[dict[str, object]]]:
+        scale = self._render_scale()
+        title_height = QtGui.QFontMetrics(self._title_font()).height() + int(4 * scale)
+        legend_height = (
+            max(QtGui.QFontMetrics(self._legend_font()).height(), int(10 * scale))
+            + int(8 * scale)
+        )
+        panel_title_height = QtGui.QFontMetrics(self._tick_font()).height() + int(4 * scale)
+        panel_bottom_space = QtGui.QFontMetrics(self._tick_font()).height() + int(38 * scale)
+        left_axis_space = int(96 * scale)
+        right_axis_space = int(16 * scale)
+        panel_gap = int(18 * scale)
+        panel_outer_height = self._stacked_panel_outer_height()
+        panel_top = rect.top() + title_height + legend_height + int(20 * scale)
+        panel_groups = self._axis_groups()
+        if not panel_groups:
+            panel_groups = [
+                {
+                    "key": "status",
+                    "label": "Signals",
+                    "unit": "",
+                    "color": "#4dabf7",
+                    "indices": [],
+                }
+            ]
+
+        layouts: list[dict[str, object]] = []
+        for panel_index, axis_group in enumerate(panel_groups):
+            outer_top = panel_top + panel_index * (panel_outer_height + panel_gap)
+            outer_rect = QtCore.QRectF(
+                rect.left(),
+                outer_top,
+                rect.width(),
+                panel_outer_height,
+            )
+            plot_rect = QtCore.QRectF(
+                outer_rect.left() + left_axis_space,
+                outer_rect.top() + panel_title_height + int(8 * scale),
+                max(80.0, outer_rect.width() - left_axis_space - right_axis_space),
+                max(
+                    80.0,
+                    outer_rect.height() - panel_title_height - panel_bottom_space - int(14 * scale),
+                ),
+            )
+            layouts.append(
+                {
+                    "group": axis_group,
+                    "outer_rect": outer_rect,
+                    "plot_rect": plot_rect,
+                    "panel_title_height": panel_title_height,
+                }
+            )
+        return title_height, legend_height, layouts
+
+    def _stacked_plot_rect_for_series(
+        self,
+        series_index: int,
+        panel_layouts: list[dict[str, object]],
+    ) -> QtCore.QRectF:
+        for panel in panel_layouts:
+            if series_index in panel["group"].get("indices", []):
+                return QtCore.QRectF(panel["plot_rect"])
+        return QtCore.QRectF()
+
     def _title_font(self) -> QtGui.QFont:
         font = QtGui.QFont(self.font())
         if self._report_mode:
@@ -3110,12 +3234,27 @@ class ScopeCaptureView(QtWidgets.QWidget):
         if not self._series_data or not self._series_data[0]:
             return {}
         rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
-        plot_rect, _, _ = self._plot_geometry(rect)
-        if plot_rect.height() <= 0:
-            return {}
         axis_ranges = self._frozen_ranges or self._calculate_y_ranges()
         sample_count = len(self._series_data[0])
         endpoint_map: dict[str, QtCore.QPointF] = {}
+
+        if self._stack_units:
+            _, _, panel_layouts = self._stacked_layout(rect)
+            for series_index, (series_def, series) in enumerate(zip(self._series_defs, self._series_data)):
+                if not series:
+                    continue
+                plot_rect = self._stacked_plot_rect_for_series(series_index, panel_layouts)
+                if plot_rect.height() <= 0:
+                    continue
+                ratio = (len(series) - 1) / max(sample_count - 1, 1)
+                x = plot_rect.left() + plot_rect.width() * ratio
+                y = self._series_y_position(series_index, series[-1], plot_rect, axis_ranges)
+                endpoint_map[series_def["label"]] = QtCore.QPointF(x * scale_factor, y * scale_factor)
+            return endpoint_map
+
+        plot_rect, _, _ = self._plot_geometry(rect)
+        if plot_rect.height() <= 0:
+            return {}
         for series_index, (series_def, series) in enumerate(zip(self._series_defs, self._series_data)):
             if not series:
                 continue
@@ -3134,12 +3273,34 @@ class ScopeCaptureView(QtWidgets.QWidget):
         if not self._series_data or not self._series_data[0]:
             return {}
         rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
-        plot_rect, _, _ = self._plot_geometry(rect)
-        if plot_rect.height() <= 0:
-            return {}
         axis_ranges = self._frozen_ranges or self._calculate_y_ranges()
         sample_count = len(self._series_data[0])
         point_map: dict[str, list[QtCore.QPointF]] = {}
+
+        if self._stack_units:
+            _, _, panel_layouts = self._stacked_layout(rect)
+            for series_index, (series_def, series) in enumerate(zip(self._series_defs, self._series_data)):
+                if not series:
+                    continue
+                plot_rect = self._stacked_plot_rect_for_series(series_index, panel_layouts)
+                if plot_rect.height() <= 0:
+                    continue
+                step = max(1, len(series) // point_limit)
+                indices = list(range(0, len(series), step))
+                if indices[-1] != len(series) - 1:
+                    indices.append(len(series) - 1)
+                points: list[QtCore.QPointF] = []
+                for index in indices:
+                    ratio = index / max(sample_count - 1, 1)
+                    x = plot_rect.left() + plot_rect.width() * ratio
+                    y = self._series_y_position(series_index, series[index], plot_rect, axis_ranges)
+                    points.append(QtCore.QPointF(x * scale_factor, y * scale_factor))
+                point_map[series_def["label"]] = points
+            return point_map
+
+        plot_rect, _, _ = self._plot_geometry(rect)
+        if plot_rect.height() <= 0:
+            return {}
         for series_index, (series_def, series) in enumerate(zip(self._series_defs, self._series_data)):
             if not series:
                 continue
@@ -3156,23 +3317,14 @@ class ScopeCaptureView(QtWidgets.QWidget):
             point_map[series_def["label"]] = points
         return point_map
 
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
-        super().paintEvent(event)
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-
-        rect = self.rect().adjusted(8, 8, -8, -8)
-        colors = self._chart_colors()
-        painter.fillRect(rect, colors["background"])
-        painter.setPen(colors["text"])
-        painter.setFont(self._title_font())
-        painter.drawText(
-            QtCore.QRect(rect.left(), rect.top(), rect.width(), QtGui.QFontMetrics(self._title_font()).height() + int(4 * self._render_scale())),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            self._title,
-        )
-
-        plot_rect, title_height, legend_height = self._plot_geometry(QtCore.QRectF(rect))
+    def _draw_legend(
+        self,
+        painter: QtGui.QPainter,
+        rect: QtCore.QRect,
+        colors: dict[str, QtGui.QColor],
+        title_height: int,
+        legend_height: int,
+    ) -> None:
         legend_y = rect.top() + title_height + int(8 * self._render_scale())
         legend_x = rect.left()
         painter.setFont(self._legend_font())
@@ -3212,7 +3364,17 @@ class ScopeCaptureView(QtWidgets.QWidget):
             )
             legend_x += max(text_width + int((70 if self._report_mode else 42) * legend_scale), 124)
 
+    def _paint_single_chart(
+        self,
+        painter: QtGui.QPainter,
+        rect: QtCore.QRect,
+        colors: dict[str, QtGui.QColor],
+    ) -> None:
+        plot_rect, title_height, legend_height = self._plot_geometry(QtCore.QRectF(rect))
+        self._draw_legend(painter, rect, colors, title_height, legend_height)
+
         self._plot_rect = plot_rect
+        self._plot_rects = [QtCore.QRectF(plot_rect)]
         painter.setPen(QtGui.QPen(colors["border"], 1.2 if self._report_mode else 1.0))
         painter.drawRect(plot_rect)
 
@@ -3353,15 +3515,202 @@ class ScopeCaptureView(QtWidgets.QWidget):
             painter.setPen(cursor_pen)
             painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
 
+    def _paint_stacked_charts(
+        self,
+        painter: QtGui.QPainter,
+        rect: QtCore.QRect,
+        colors: dict[str, QtGui.QColor],
+    ) -> None:
+        title_height, legend_height, panel_layouts = self._stacked_layout(QtCore.QRectF(rect))
+        self._draw_legend(painter, rect, colors, title_height, legend_height)
+
+        self._plot_rects = [QtCore.QRectF(panel["plot_rect"]) for panel in panel_layouts]
+        self._plot_rect = QtCore.QRectF()
+        for plot_rect in self._plot_rects:
+            self._plot_rect = self._plot_rect.united(plot_rect) if not self._plot_rect.isNull() else QtCore.QRectF(plot_rect)
+
+        if not panel_layouts:
+            return
+
+        border_pen = QtGui.QPen(colors["border"], 1.2 if self._report_mode else 1.0)
+        if not self._series_data or not self._series_data[0]:
+            first_plot_rect = QtCore.QRectF(panel_layouts[0]["plot_rect"])
+            painter.setPen(border_pen)
+            painter.drawRect(first_plot_rect)
+            painter.setFont(self._legend_font())
+            painter.drawText(first_plot_rect.toRect(), QtCore.Qt.AlignmentFlag.AlignCenter, self._status_text)
+            return
+
+        axis_ranges = self._frozen_ranges or self._calculate_y_ranges()
+        sample_count = len(self._series_data[0])
+        total_ms = (sample_count - 1) * self._sample_period_s * 1000.0
+        scale = self._render_scale()
+
+        grid_pen = QtGui.QPen(colors["grid"], 1.0)
+        grid_pen.setStyle(QtCore.Qt.PenStyle.DotLine if self._report_mode else QtCore.Qt.PenStyle.DashLine)
+
+        for panel in panel_layouts:
+            axis_group = panel["group"]
+            plot_rect = QtCore.QRectF(panel["plot_rect"])
+            outer_rect = QtCore.QRectF(panel["outer_rect"])
+            axis_range = axis_ranges.get(str(axis_group.get("key", "")), (-1.0, 1.0))
+            axis_pen = QtGui.QPen(QtGui.QColor(str(axis_group.get("color", "#4dabf7"))))
+
+            painter.setPen(colors["text"])
+            painter.setFont(self._tick_font())
+            painter.drawText(
+                QtCore.QRectF(
+                    outer_rect.left(),
+                    outer_rect.top(),
+                    outer_rect.width(),
+                    float(panel["panel_title_height"]),
+                ),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                self._stacked_panel_title(axis_group),
+            )
+
+            painter.setPen(border_pen)
+            painter.drawRect(plot_rect)
+            painter.setPen(grid_pen)
+            for grid_index in range(1, 5):
+                y = plot_rect.top() + (plot_rect.height() * grid_index / 5.0)
+                painter.drawLine(QtCore.QPointF(plot_rect.left(), y), QtCore.QPointF(plot_rect.right(), y))
+
+            painter.setPen(axis_pen)
+            painter.drawText(
+                QtCore.QRectF(
+                    outer_rect.left() + (4 * scale),
+                    plot_rect.top() + (6 * scale),
+                    max(72.0, plot_rect.left() - outer_rect.left() - (8 * scale)),
+                    18 * scale,
+                ),
+                QtCore.Qt.AlignmentFlag.AlignLeft,
+                self._axis_value_text(axis_group, axis_range[1]),
+            )
+            painter.drawText(
+                QtCore.QRectF(
+                    outer_rect.left() + (4 * scale),
+                    plot_rect.bottom() - (34 * scale),
+                    max(72.0, plot_rect.left() - outer_rect.left() - (8 * scale)),
+                    18 * scale,
+                ),
+                QtCore.Qt.AlignmentFlag.AlignLeft,
+                self._axis_value_text(axis_group, axis_range[0]),
+            )
+            painter.setPen(colors["text"])
+
+            for marker_ratio in (0.0, 0.5, 1.0):
+                x = plot_rect.left() + plot_rect.width() * marker_ratio
+                marker_ms = total_ms * marker_ratio
+                painter.drawLine(QtCore.QPointF(x, plot_rect.bottom()), QtCore.QPointF(x, plot_rect.bottom() + 4))
+                label_rect = QtCore.QRectF(
+                    x - (38 * scale),
+                    plot_rect.bottom() + (14 * scale),
+                    76 * scale,
+                    16 * scale,
+                )
+                if marker_ratio <= 0.0:
+                    label_rect.moveLeft(plot_rect.left() + (2 * scale))
+                elif marker_ratio >= 1.0:
+                    label_rect.moveRight(plot_rect.right() - (14 * scale))
+                painter.drawText(
+                    label_rect,
+                    QtCore.Qt.AlignmentFlag.AlignCenter,
+                    f"{marker_ms:.1f} ms",
+                )
+
+            for series_index in axis_group.get("indices", []):
+                if series_index >= len(self._series_data):
+                    continue
+                series = self._series_data[series_index]
+                if len(series) < 2:
+                    continue
+                path = QtGui.QPainterPath()
+                for index, value in enumerate(series):
+                    ratio = index / max(sample_count - 1, 1)
+                    x = plot_rect.left() + plot_rect.width() * ratio
+                    y = self._series_y_position(series_index, value, plot_rect, axis_ranges)
+                    point = QtCore.QPointF(x, y)
+                    if index == 0:
+                        path.moveTo(point)
+                    else:
+                        path.lineTo(point)
+                series_pen, marker_shape = _series_pen_spec(
+                    None,
+                    self._series_defs[series_index]["label"],
+                    series_index,
+                    report_mode=self._report_mode,
+                    fallback_color=self._series_defs[series_index]["color"],
+                )
+                painter.setPen(series_pen)
+                painter.drawPath(path)
+                if self._report_mode:
+                    for marker_index in _report_marker_indices(len(series), 16):
+                        ratio = marker_index / max(sample_count - 1, 1)
+                        x = plot_rect.left() + plot_rect.width() * ratio
+                        y = self._series_y_position(series_index, series[marker_index], plot_rect, axis_ranges)
+                        _draw_series_marker(
+                            painter,
+                            QtCore.QPointF(x, y),
+                            marker_shape,
+                            7.0 * self._render_scale(),
+                            QtGui.QColor("#000000"),
+                        )
+
+        if self._hover_index is not None and 0 <= self._hover_index < sample_count:
+            ratio = self._hover_index / max(sample_count - 1, 1)
+            cursor_pen = QtGui.QPen(colors["cursor"])
+            cursor_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            painter.setPen(cursor_pen)
+            for plot_rect in self._plot_rects:
+                x = plot_rect.left() + plot_rect.width() * ratio
+                painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(8, 8, -8, -8)
+        colors = self._chart_colors()
+        painter.fillRect(rect, colors["background"])
+        painter.setPen(colors["text"])
+        painter.setFont(self._title_font())
+        painter.drawText(
+            QtCore.QRect(rect.left(), rect.top(), rect.width(), QtGui.QFontMetrics(self._title_font()).height() + int(4 * self._render_scale())),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            self._title,
+        )
+
+        if self._stack_units:
+            self._paint_stacked_charts(painter, rect, colors)
+        else:
+            self._paint_single_chart(painter, rect, colors)
+
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
-        if not self._series_data or not self._series_data[0] or not self._plot_rect.contains(event.position()):
+        if not self._series_data or not self._series_data[0]:
+            self._hover_index = None
+            QtWidgets.QToolTip.hideText()
+            self.update()
+            return
+
+        active_plot_rect = QtCore.QRectF()
+        if self._stack_units:
+            for plot_rect in self._plot_rects:
+                if plot_rect.contains(event.position()):
+                    active_plot_rect = QtCore.QRectF(plot_rect)
+                    break
+        elif self._plot_rect.contains(event.position()):
+            active_plot_rect = QtCore.QRectF(self._plot_rect)
+
+        if active_plot_rect.isNull():
             self._hover_index = None
             QtWidgets.QToolTip.hideText()
             self.update()
             return
 
         sample_count = len(self._series_data[0])
-        ratio = (event.position().x() - self._plot_rect.left()) / max(self._plot_rect.width(), 1.0)
+        ratio = (event.position().x() - active_plot_rect.left()) / max(active_plot_rect.width(), 1.0)
         ratio = min(max(ratio, 0.0), 1.0)
         self._hover_index = min(int(round(ratio * max(sample_count - 1, 0))), sample_count - 1)
         time_ms = self._hover_index * self._sample_period_s * 1000.0
@@ -4383,6 +4732,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_auto_scale_checkbox.setChecked(True)
         self.trace_status_label = QtWidgets.QLabel("Idle")
         self.trace_scope_view = ScopeCaptureView()
+        self.trace_scope_view.set_stack_units(True)
+        self.trace_scope_scroll = QtWidgets.QScrollArea()
+        self.trace_scope_scroll.setWidgetResizable(True)
+        self.trace_scope_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.trace_scope_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.trace_scope_scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.trace_scope_scroll.setWidget(self.trace_scope_view)
 
         control_layout.addWidget(QtWidgets.QLabel("Preset"), 0, 0)
         control_layout.addWidget(self.trace_preset_combo, 0, 1)
@@ -4409,7 +4769,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         layout.addWidget(control_group)
         layout.addLayout(report_toolbar)
-        layout.addWidget(self.trace_scope_view, 1)
+        layout.addWidget(self.trace_scope_scroll, 1)
 
         self._apply_trace_preset(self.trace_preset_combo.currentText())
         return widget
@@ -4813,11 +5173,8 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(QtWidgets.QLabel("Diag"), 9, 2)
         summary_layout.addWidget(self.foc_direction_test_status_label, 9, 3)
         summary_layout.addWidget(self.foc_live_summary_label, 10, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_rotating_theta_test_button, 11, 0, 1, 2)
-        summary_layout.addWidget(self.start_foc_rotating_theta_voltage_test_button, 11, 2, 1, 2)
-        summary_layout.addWidget(self.start_foc_current_feedback_map_test_button, 12, 0, 1, 4)
-        summary_layout.addWidget(self.start_foc_button, 13, 0, 1, 2)
-        summary_layout.addWidget(self.stop_foc_button, 13, 2, 1, 2)
+        summary_layout.addWidget(self.start_foc_button, 11, 0, 1, 2)
+        summary_layout.addWidget(self.stop_foc_button, 11, 2, 1, 2)
 
         self.foc_jog_minus_90_button.clicked.connect(lambda: self._apply_relative_angle_delta(-90.0))
         self.foc_jog_minus_10_button.clicked.connect(lambda: self._apply_relative_angle_delta(-10.0))

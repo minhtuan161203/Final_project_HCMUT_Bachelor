@@ -121,7 +121,7 @@ volatile float gEffectiveCurrentLoopFrequencyHz = USER_SELECTED_ISR_FREQUENCY;
 volatile float gEffectiveSpeedLoopFrequencyHz = USER_EFFECTIVE_SPEED_LOOP_FREQUENCY;
 float gTracePosError = 0.0f;
 /* Single user-tunable position deadband. Release hysteresis is derived internally. */
-volatile float gPositionLoopDeadbandDeg = 0.50f;
+volatile float gPositionLoopDeadbandDeg = 0.3f;
 volatile uint8_t gEncoderAlignmentPolicy = ENCODER_ALIGNMENT_POLICY_POWER_ON;
 volatile uint8_t gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
 volatile uint8_t gEncoderAlignmentNeedsFlashSave = 0u;
