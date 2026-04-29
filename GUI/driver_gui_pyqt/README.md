@@ -116,6 +116,33 @@ The code supports both bindings.
 python main.py
 ```
 
+## Build Windows EXE
+
+Recommended long-term workflow:
+
+1. first build once from the command line and confirm the GUI runs correctly
+2. keep using `build_gui.ps1` for repeatable local builds
+3. keep `ASD04_GUI.spec` under version control
+4. later rebuild with either the PowerShell wrapper or plain PyInstaller
+
+PowerShell wrapper:
+
+```powershell
+.\build_gui.ps1
+```
+
+Direct PyInstaller:
+
+```powershell
+python -m PyInstaller --noconfirm --clean ASD04_GUI.spec
+```
+
+Output:
+
+```text
+dist\ASD04_GUI\ASD04_GUI.exe
+```
+
 ## Notes
 
 - the main monitor intentionally shows only the most useful commissioning signals

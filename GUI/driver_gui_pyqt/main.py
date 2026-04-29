@@ -94,6 +94,8 @@ from protocol import (
 )
 from transport import PortDescriptor, SerialWorker, list_serial_ports
 
+APP_ICON_PATH = Path(__file__).with_name("app.ico")
+
 
 KNOWN_DEVICE_VID = 1100
 KNOWN_DEVICE_PID = 22336
@@ -11025,7 +11027,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
+    if APP_ICON_PATH.exists():
+        app_icon = QtGui.QIcon(str(APP_ICON_PATH))
+        if not app_icon.isNull():
+            app.setWindowIcon(app_icon)
     window = MainWindow()
+    if APP_ICON_PATH.exists():
+        window_icon = QtGui.QIcon(str(APP_ICON_PATH))
+        if not window_icon.isNull():
+            window.setWindowIcon(window_icon)
     window.show()
     return app.exec()
 
