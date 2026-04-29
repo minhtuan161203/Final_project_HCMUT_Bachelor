@@ -3,7 +3,7 @@
 <title>Static Call Graph - [Firmware_final_project\Firmware_final_project.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image Firmware_final_project\Firmware_final_project.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Wed Apr 29 01:54:30 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Wed Apr 29 09:42:15 2026
 <BR><P>
 <H3>Maximum Stack Usage =        832 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -1233,8 +1233,8 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[bd]"></a>_sys_exit</STRONG> (Thumb, 8 bytes, Stack size 0 bytes, sys_exit.o(.text))
-<BR><BR>[Called By]<UL><LI><a href="#[e9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__sig_exit
-<LI><a href="#[bc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__rt_exit_exit
+<BR><BR>[Called By]<UL><LI><a href="#[bc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__rt_exit_exit
+<LI><a href="#[e9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__sig_exit
 </UL>
 
 <P><STRONG><a name="[ed]"></a>__default_signal_display</STRONG> (Thumb, 50 bytes, Stack size 16 bytes, defsig_general.o(.text))
@@ -2204,14 +2204,14 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[11b]"></a>STM_NextState</STRONG> (Thumb, 26 bytes, Stack size 0 bytes, statemachine.o(i.STM_NextState))
-<BR><BR>[Called By]<UL><LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
+<BR><BR>[Called By]<UL><LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
+<LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
 <LI><a href="#[1f2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocCurrentFeedbackMapTest
 <LI><a href="#[131]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 <LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
 <LI><a href="#[11c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FinishUerrorCharacterization
 <LI><a href="#[118]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FinalizeEncoderAlignment
 <LI><a href="#[1d3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;STM_FaultProcessing
-<LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
 <LI><a href="#[223]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_StartServoSequence
 <LI><a href="#[229]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandleIdSquareTuningStop
 <LI><a href="#[224]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandleFocControlStop
@@ -2905,13 +2905,13 @@ Global Symbols
 </UL>
 <BR>[Calls]<UL><LI><a href="#[c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;vsnprintf
 </UL>
-<BR>[Called By]<UL><LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
+<BR>[Called By]<UL><LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
+<LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
 <LI><a href="#[1f2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocCurrentFeedbackMapTest
 <LI><a href="#[1dc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocRotatingThetaVoltageTestLoop
 <LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocRotatingThetaTestLoop
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocCurrentFeedbackMapTestLoop
 <LI><a href="#[13c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
-<LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
 <LI><a href="#[221]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandleSpeedCommand
 <LI><a href="#[222]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandlePositionCommand
 </UL>
@@ -3322,8 +3322,8 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[1e5]"></a>AdvanceUerrorSweepPoint</STRONG> (Thumb, 56 bytes, Stack size 0 bytes, main.o(i.AdvanceUerrorSweepPoint))
-<BR><BR>[Called By]<UL><LI><a href="#[141]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunUerrorCharacterizationLoop
-<LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<BR><BR>[Called By]<UL><LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<LI><a href="#[141]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunUerrorCharacterizationLoop
 </UL>
 
 <P><STRONG><a name="[107]"></a>AppendUerrorTargetPoint</STRONG> (Thumb, 50 bytes, Stack size 0 bytes, main.o(i.AppendUerrorTargetPoint))
@@ -3436,7 +3436,8 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[ff]"></a>ClampFloat</STRONG> (Thumb, 32 bytes, Stack size 0 bytes, main.o(i.ClampFloat))
-<BR><BR>[Called By]<UL><LI><a href="#[1e1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdatePositionSetpointVelocityRpm
+<BR><BR>[Called By]<UL><LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<LI><a href="#[1e1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdatePositionSetpointVelocityRpm
 <LI><a href="#[141]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunUerrorCharacterizationLoop
 <LI><a href="#[1dc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocRotatingThetaVoltageTestLoop
 <LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocRotatingThetaTestLoop
@@ -3448,7 +3449,6 @@ Local Symbols
 <LI><a href="#[fd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ApplyOpenLoopVfCommand
 <LI><a href="#[1a9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMotorParameter
 <LI><a href="#[1aa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateDriverParameter
-<LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
 </UL>
 
 <P><STRONG><a name="[118]"></a>FinalizeEncoderAlignment</STRONG> (Thumb, 120 bytes, Stack size 24 bytes, main.o(i.FinalizeEncoderAlignment))
@@ -3535,8 +3535,8 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[fe]"></a>GetOpenLoopVoltageLimit</STRONG> (Thumb, 76 bytes, Stack size 0 bytes, main.o(i.GetOpenLoopVoltageLimit))
-<BR><BR>[Called By]<UL><LI><a href="#[fd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ApplyOpenLoopVfCommand
-<LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<BR><BR>[Called By]<UL><LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<LI><a href="#[fd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ApplyOpenLoopVfCommand
 </UL>
 
 <P><STRONG><a name="[122]"></a>GetRuntimeFocControlTheta</STRONG> (Thumb, 18 bytes, Stack size 0 bytes, main.o(i.GetRuntimeFocControlTheta))
@@ -3544,9 +3544,9 @@ Local Symbols
 </UL>
 <BR>[Calls]<UL><LI><a href="#[123]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 </UL>
-<BR>[Called By]<UL><LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
+<BR>[Called By]<UL><LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
 <LI><a href="#[13d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
-<LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
 </UL>
 
 <P><STRONG><a name="[1a6]"></a>LimitDqVoltageVector</STRONG> (Thumb, 102 bytes, Stack size 24 bytes, main.o(i.LimitDqVoltageVector))
@@ -3672,21 +3672,21 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[131]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[11a]"></a>ResetControlLoops</STRONG> (Thumb, 140 bytes, Stack size 8 bytes, main.o(i.ResetControlLoops))
+<P><STRONG><a name="[11a]"></a>ResetControlLoops</STRONG> (Thumb, 142 bytes, Stack size 8 bytes, main.o(i.ResetControlLoops))
 <BR><BR>[Stack]<UL><LI>Max Depth = 8<LI>Call Chain = ResetControlLoops
 </UL>
 <BR>[Calls]<UL><LI><a href="#[fb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetDebugAveraging
 <LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
 <LI><a href="#[105]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GeneratePWM
 </UL>
-<BR>[Called By]<UL><LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
+<BR>[Called By]<UL><LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
+<LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
 <LI><a href="#[1f2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocCurrentFeedbackMapTest
 <LI><a href="#[131]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 <LI><a href="#[13d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocCurrentFeedbackMapTestLoop
 <LI><a href="#[13c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ReportFault
 <LI><a href="#[118]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FinalizeEncoderAlignment
-<LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
 </UL>
 
 <P><STRONG><a name="[fb]"></a>ResetDebugAveraging</STRONG> (Thumb, 38 bytes, Stack size 0 bytes, main.o(i.ResetDebugAveraging))
@@ -3705,8 +3705,8 @@ Local Symbols
 </UL>
 <BR>[Calls]<UL><LI><a href="#[11e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_memclr4
 </UL>
-<BR>[Called By]<UL><LI><a href="#[b8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
-<LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<BR>[Called By]<UL><LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<LI><a href="#[b8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
 </UL>
 
 <P><STRONG><a name="[13f]"></a>RestoreIdSquareTuningOffsetGuard</STRONG> (Thumb, 40 bytes, Stack size 0 bytes, main.o(i.RestoreIdSquareTuningOffsetGuard))
@@ -3748,7 +3748,7 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[13d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 </UL>
 
-<P><STRONG><a name="[13d]"></a>RunFocLoop</STRONG> (Thumb, 1732 bytes, Stack size 88 bytes, main.o(i.RunFocLoop))
+<P><STRONG><a name="[13d]"></a>RunFocLoop</STRONG> (Thumb, 1758 bytes, Stack size 88 bytes, main.o(i.RunFocLoop))
 <BR><BR>[Stack]<UL><LI>Max Depth = 352 + Unknown Stack Size
 <LI>Call Chain = RunFocLoop &rArr; RunFocRotatingThetaVoltageTestLoop &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
@@ -3911,8 +3911,8 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[131]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[1e1]"></a>UpdatePositionSetpointVelocityRpm</STRONG> (Thumb, 204 bytes, Stack size 32 bytes, main.o(i.UpdatePositionSetpointVelocityRpm))
-<BR><BR>[Stack]<UL><LI>Max Depth = 88<LI>Call Chain = UpdatePositionSetpointVelocityRpm &rArr; WrapPositionErrorCounts &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
+<P><STRONG><a name="[1e1]"></a>UpdatePositionSetpointVelocityRpm</STRONG> (Thumb, 200 bytes, Stack size 24 bytes, main.o(i.UpdatePositionSetpointVelocityRpm))
+<BR><BR>[Stack]<UL><LI>Max Depth = 80<LI>Call Chain = UpdatePositionSetpointVelocityRpm &rArr; WrapPositionErrorCounts &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1e0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapPositionErrorCounts
 <LI><a href="#[1df]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetConfiguredPositionTrackingMode
@@ -4162,7 +4162,8 @@ Local Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 544 + Unknown Stack Size
 <LI>Call Chain = USB_DispatchCommand &rArr; USB_SendAckPacket &rArr; USB_WriteRaw &rArr; CDC_Transmit_FS &rArr; USBD_CDC_TransmitPacket &rArr; USBD_LL_Transmit &rArr; HAL_PCD_EP_Transmit &rArr; USB_EPStartXfer &rArr; USB_WritePacket
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
+<BR>[Calls]<UL><LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
+<LI><a href="#[1f3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaTest
 <LI><a href="#[1f2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocCurrentFeedbackMapTest
 <LI><a href="#[1e9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SaveUerrorLutToFlash
 <LI><a href="#[1e6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SaveParametersToFlash
@@ -4172,7 +4173,6 @@ Local Symbols
 <LI><a href="#[1a9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMotorParameter
 <LI><a href="#[1aa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateDriverParameter
 <LI><a href="#[1f6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopUerrorCharacterization
-<LI><a href="#[1f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartFocRotatingThetaVoltageTest
 <LI><a href="#[1bc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ClearDataReady
 <LI><a href="#[22c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ApplyEstimatedParameters
 <LI><a href="#[223]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_StartServoSequence
@@ -4199,8 +4199,8 @@ Local Symbols
 <P><STRONG><a name="[22a]"></a>USB_HandleAutoTuneStart</STRONG> (Thumb, 268 bytes, Stack size 56 bytes, usbcomunication.o(i.USB_HandleAutoTuneStart))
 <BR><BR>[Stack]<UL><LI>Max Depth = 144<LI>Call Chain = USB_HandleAutoTuneStart &rArr; MotorAutoTune_Start &rArr; __aeabi_memcpy4
 </UL>
-<BR>[Calls]<UL><LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
-<LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
+<BR>[Calls]<UL><LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
+<LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
 <LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Start
 <LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetDefaultConfig
 <LI><a href="#[223]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_StartServoSequence
@@ -4270,10 +4270,10 @@ Local Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 264 + Unknown Stack Size
 <LI>Call Chain = USB_HandlePositionCommand &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1d2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_QueueFocDebugText
+<BR>[Calls]<UL><LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
+<LI><a href="#[1d2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_QueueFocDebugText
 <LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
 <LI><a href="#[1aa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateDriverParameter
-<LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
 <LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_f2d
 </UL>
 <BR>[Called By]<UL><LI><a href="#[21e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
@@ -4293,10 +4293,10 @@ Local Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 224 + Unknown Stack Size
 <LI>Call Chain = USB_HandleSpeedCommand &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1d2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_QueueFocDebugText
+<BR>[Calls]<UL><LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
+<LI><a href="#[1d2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_QueueFocDebugText
 <LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
 <LI><a href="#[1aa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateDriverParameter
-<LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
 <LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_f2d
 </UL>
 <BR>[Called By]<UL><LI><a href="#[21e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
@@ -4314,9 +4314,9 @@ Local Symbols
 <P><STRONG><a name="[22e]"></a>USB_HandleUerrorCharacterizationStart</STRONG> (Thumb, 266 bytes, Stack size 40 bytes, usbcomunication.o(i.USB_HandleUerrorCharacterizationStart))
 <BR><BR>[Stack]<UL><LI>Max Depth = 136<LI>Call Chain = USB_HandleUerrorCharacterizationStart &rArr; StartUerrorCharacterization &rArr; GetRuntimeFocControlTheta &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
-<LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
+<BR>[Calls]<UL><LI><a href="#[232]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StopFocDiagnosticModes
 <LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;StartUerrorCharacterization
+<LI><a href="#[fc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControl_V_over_F
 <LI><a href="#[233]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Stop
 <LI><a href="#[223]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_StartServoSequence
 <LI><a href="#[22d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_ResetTraceCaptureState

@@ -2285,20 +2285,15 @@ Ket luan:
 
 Cho runtime position/speed FOC:
 
-- khong dung `hard deadband hold` nua
-- doi sang `integrator deadband`
+- `position loop` da thu `integrator deadband` nhung cuoi cung revert
+- quay lai `hard deadband hold`
+- chi giu lai mot bien deadband duy nhat de tune
 
-Y tuong:
+Y tuong cuoi cung:
 
-- neu `|position error|` nho va `setpoint velocity` gan `0`
-  - giu `Kp` cua `Position PI`
-  - cat `Ki` cua `Position PI`
-  - tat `VFF` trong vung sat dich
-
-De tranh chat chat vao/ra deadband:
-
-- dung them `release deadband` lon hon `enter deadband`
-- tuc la co `hysteresis`
+- van cho phep deadband quanh setpoint de chan hunting
+- nhung khong can thiep kieu `P-only / I-off` nua
+- release deadband duoc suy ra noi bo tu cung mot bien deadband
 
 ### 7.4 Patch da lam trong firmware
 
@@ -2315,37 +2310,33 @@ Muc tieu:
 - monitor van nho "lenh cuoi cung nguoi dung da ra"
 - GUI khong con nhin nhu setpoint bi doi thanh actual chi vi dong co da dung o mot diem lech nho
 
-#### b. Position loop: doi sang `P-only inside deadband`
+#### b. Position loop: revert ve deadband kieu cu, chi con 1 bien tune
 
 Da them cac bien tune runtime:
 
-- `gPositionLoopIntegratorDeadbandDeg = 0.50f`
-- `gPositionLoopIntegratorReleaseDeadbandDeg = 0.80f`
+- `gPositionLoopDeadbandDeg = 0.50f`
 
-Da doi state cu:
+Release deadband:
 
-- bo `sPositionDeadbandHoldActive`
-- dung `sPositionIntegratorDeadbandActive`
-
-Da them clamp toi thieu theo count:
-
-- `POSITION_LOOP_INTEGRATOR_DEADBAND_MIN_COUNTS = 1`
-- `POSITION_LOOP_INTEGRATOR_RELEASE_DEADBAND_MIN_COUNTS = 2`
+- khong tune truc tiep bang bien rieng nua
+- firmware suy ra noi bo theo:
+  - `release = deadband * 1.6`
 
 Hanh vi moi:
 
 - ben ngoai deadband:
-  - `Position PI` chay day du `P + I`
+  - `Position PI` chay binh thuong
 - ben trong deadband:
-  - xoa trang thai tich phan
-  - dat `Ki = 0`
-  - van giu `Kp`
-  - `VFF` ve `0`
+  - quay lai logic hold cu
+  - reset `Position PI`
+  - reset `Speed PI`
+  - `speed_reference = 0`
+  - `VFF = 0`
 
 Nghia la:
 
-- truc van co "lo xo dien tu" nhe de giu vi tri
-- nhung khong tich luy sai so vo ich de roi giat hunting
+- hanh vi da quay lai dung cam giac ban dau cua firmware
+- diem duy nhat de tune la do rong deadband
 
 #### c. Speed loop deadband da thu va da revert
 
@@ -2362,34 +2353,23 @@ Trang thai hien tai:
 - `Speed PI` runtime van giu logic binh thuong
 - neu can lam em low-speed, uu tien tune `Speed PI`, current PI, friction/cogging, va outer-loop position truoc
 
-#### d. Helper moi
+#### d. Bien duy nhat can tune
 
-Da them helper:
+Neu chi muon tune deadband position, hay sua:
 
-- `ClearPiIntegratorState()`
-
-Trong do:
-
-- `ClearPiIntegratorState()` chi xoa phan `I`
-- khong tat phan `P`
-
-Day la chi tiet quan trong vi no phan biet ro:
-
-- `reset controller`
-va
-- `freeze integrator but keep proportional stiffness`
+- `gPositionLoopDeadbandDeg`
 
 ### 7.5 Y nghia control cua quyet dinh nay
 
 Sau patch nay, triet ly runtime la:
 
-- position loop khong duoc "bo tay" qua som
+- position loop tro lai logic deadband cu
+- khong them lop hanh vi moi vao speed loop
 
 He qua mong muon:
 
-- `Go to Angle = 90 deg` se van con luc keo toi dich boi `P`
-- he khong con reset het outer-loop roi dung som o sai so co tinh lap lai co `0.4-0.5 deg`
-- low-speed hunting duoc giam chu yeu o nhanh position sat setpoint, thay vi can thiep them vao speed deadband
+- `Go to Angle = 90 deg` quay ve dung hanh vi cu
+- neu muon tang/giam do nhay deadband, chi can sua mot bien
 
 Tradeoff duoc chap nhan:
 
@@ -2402,15 +2382,12 @@ Neu can tune tren bench:
 
 1. Neu van hunting o low speed:
    - xem lai `Speed PI`
-   - sau do moi xem den `gPositionLoopIntegratorDeadbandDeg`
+   - sau do moi xem den `gPositionLoopDeadbandDeg`
 
 2. Neu thay vi tri hoi "mem":
-   - giam `gPositionLoopIntegratorDeadbandDeg`
+   - giam `gPositionLoopDeadbandDeg`
 
-3. Neu he ra vao deadband qua thuong xuyen:
-   - tang `gPositionLoopIntegratorReleaseDeadbandDeg`
-
-4. Neu muon tat hoan toan tinh nang nay de A/B test:
+3. Neu muon tat hoan toan tinh nang nay de A/B test:
    - dat deadband enter/release ve `0`
 
 ### 7.7 Trang thai verify

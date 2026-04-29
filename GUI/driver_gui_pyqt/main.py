@@ -4999,9 +4999,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.speed_test_trapezoid_lower_spin.setSuffix(" rpm")
         self.speed_test_trapezoid_lower_spin.setValue(0.0)
         self.speed_test_trapezoid_accel_spin = QtWidgets.QDoubleSpinBox()
-        self.speed_test_trapezoid_accel_spin.setRange(0.1, 60.0)
-        self.speed_test_trapezoid_accel_spin.setDecimals(2)
-        self.speed_test_trapezoid_accel_spin.setSingleStep(0.1)
+        self.speed_test_trapezoid_accel_spin.setRange(0.001, 60.0)
+        self.speed_test_trapezoid_accel_spin.setDecimals(3)
+        self.speed_test_trapezoid_accel_spin.setSingleStep(0.01)
         self.speed_test_trapezoid_accel_spin.setSuffix(" s")
         self.speed_test_trapezoid_accel_spin.setValue(1.0)
         self.speed_test_trapezoid_hold_spin = QtWidgets.QDoubleSpinBox()
@@ -6227,7 +6227,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Profile: Trapezoidal Profile",
                 f"Upper Speed: {self.speed_test_trapezoid_target_spin.value():.1f} rpm",
                 f"Lower Speed: {self.speed_test_trapezoid_lower_spin.value():.1f} rpm",
-                f"Accel / Decel: {self.speed_test_trapezoid_accel_spin.value():.2f} s",
+                f"Accel / Decel: {self.speed_test_trapezoid_accel_spin.value():.3f} s",
                 f"Hold: {self.speed_test_trapezoid_hold_spin.value():.2f} s",
                 "Behavior: Repeats until Cancel",
             ]

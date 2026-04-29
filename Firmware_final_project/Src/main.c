@@ -120,9 +120,8 @@ volatile uint8_t gControlTimingMode = USER_DEFAULT_CONTROL_TIMING_MODE;
 volatile float gEffectiveCurrentLoopFrequencyHz = USER_SELECTED_ISR_FREQUENCY;
 volatile float gEffectiveSpeedLoopFrequencyHz = USER_EFFECTIVE_SPEED_LOOP_FREQUENCY;
 float gTracePosError = 0.0f;
-/* Runtime-tunable deadband for position-loop integrator freeze near setpoint. */
-volatile float gPositionLoopIntegratorDeadbandDeg = 0.50f;
-volatile float gPositionLoopIntegratorReleaseDeadbandDeg = 0.80f;
+/* Single user-tunable position deadband. Release hysteresis is derived internally. */
+volatile float gPositionLoopDeadbandDeg = 0.50f;
 volatile uint8_t gEncoderAlignmentPolicy = ENCODER_ALIGNMENT_POLICY_POWER_ON;
 volatile uint8_t gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_IDLE;
 volatile uint8_t gEncoderAlignmentNeedsFlashSave = 0u;
@@ -316,8 +315,7 @@ uint8_t SaveUerrorLutToFlash(void);
 #define FOC_SPEED_LOOP_MIN_IQ_LIMIT_A 0.20f
 #define FOC_ZERO_CMD_REF_DEADBAND_A 0.01f
 #define FOC_ZERO_CMD_MEAS_DEADBAND_A 0.08f
-#define POSITION_LOOP_ERROR_DEADBAND_DEG 0.50f
-#define POSITION_LOOP_ERROR_RELEASE_DEADBAND_DEG 0.80f
+#define POSITION_LOOP_ERROR_RELEASE_RATIO 1.6f
 #define POSITION_LOOP_FF_DEADBAND_RPM 0.05f
 #define POSITION_VFF_FILTER_DEFAULT_HZ 50.0f
 #define FORCE_DRIVER_CURRENT_POLARITY_INVERT 0u
@@ -1826,22 +1824,28 @@ static float GetPositionControlErrorCounts(float target_position_counts, float a
 
 static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution)
 {
+	float deadband_deg;
+
 	if (encoder_resolution <= 0.0f)
 	{
 		return 0.0f;
 	}
 
-	return (POSITION_LOOP_ERROR_DEADBAND_DEG / 360.0f) * encoder_resolution;
+	deadband_deg = fabsf(gPositionLoopDeadbandDeg);
+	return (deadband_deg / 360.0f) * encoder_resolution;
 }
 
 static float GetPositionLoopErrorReleaseDeadbandCounts(float encoder_resolution)
 {
+	float release_deadband_deg;
+
 	if (encoder_resolution <= 0.0f)
 	{
 		return 0.0f;
 	}
 
-	return (POSITION_LOOP_ERROR_RELEASE_DEADBAND_DEG / 360.0f) * encoder_resolution;
+	release_deadband_deg = fabsf(gPositionLoopDeadbandDeg) * POSITION_LOOP_ERROR_RELEASE_RATIO;
+	return (release_deadband_deg / 360.0f) * encoder_resolution;
 }
 
 static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec)
@@ -3601,7 +3605,8 @@ static void RunFocLoop(void)
 					gTargetPositionCounts,
 					encoder_resolution,
 					gSpeedPi.fDtSec);
-				float position_vff_rpm = -GetConfiguredPositionVffGain() * setpoint_velocity_rpm;
+				// float position_vff_rpm = -GetConfiguredPositionVffGain() * setpoint_velocity_rpm;
+				float position_vff_rpm = GetConfiguredPositionVffGain() * setpoint_velocity_rpm;
 				float position_pi_limit_rpm;
 				float position_pi_output_rpm;
 				float position_speed_target_rpm;
