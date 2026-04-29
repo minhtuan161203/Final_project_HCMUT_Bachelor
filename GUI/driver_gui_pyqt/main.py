@@ -94,7 +94,22 @@ from protocol import (
 )
 from transport import PortDescriptor, SerialWorker, list_serial_ports
 
-APP_ICON_PATH = Path(__file__).with_name("app.ico")
+APP_ICON_PATH = Path(__file__).with_name("robotic-arm.ico")
+WINDOWS_APP_USER_MODEL_ID = "HCMUT.ASD04ServoCommissioning"
+
+
+def _configure_windows_app_identity() -> None:
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            WINDOWS_APP_USER_MODEL_ID
+        )
+    except Exception:
+        # Icon fallback still works even if Windows identity registration fails.
+        pass
 
 
 KNOWN_DEVICE_VID = 1100
@@ -11026,6 +11041,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 def main() -> int:
+    _configure_windows_app_identity()
     app = QtWidgets.QApplication(sys.argv)
     if APP_ICON_PATH.exists():
         app_icon = QtGui.QIcon(str(APP_ICON_PATH))

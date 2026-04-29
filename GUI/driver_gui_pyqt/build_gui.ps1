@@ -10,6 +10,12 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
+$runningGuiProcess = Get-Process ASD04_GUI -ErrorAction SilentlyContinue
+if ($null -ne $runningGuiProcess)
+{
+    throw "ASD04_GUI.exe is still running. Close the GUI from dist\\ASD04_GUI\\ASD04_GUI.exe, then run build_gui.ps1 again."
+}
+
 $venvPython = Join-Path $scriptDir ".venv\\Scripts\\python.exe"
 if ((-not $UseSystemPython) -and (Test-Path $venvPython))
 {

@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import copy_metadata
 
 project_dir = Path(SPECPATH)
 main_script = project_dir / "main.py"
-icon_file = project_dir / "app.ico"
+icon_file = project_dir / "robotic-arm.ico"
 
 hiddenimports = [
     "PyQt6.QtCore",
@@ -21,6 +21,8 @@ hiddenimports = [
 
 datas = []
 datas += copy_metadata("pyserial")
+if icon_file.exists():
+    datas.append((str(icon_file), "."))
 
 a = Analysis(
     [str(main_script)],
