@@ -484,6 +484,58 @@ Ve mat bao ve luan van, co the tom tat:
 
 > Do tin cay cua autotune khong chi phu thuoc cong thuc do, ma con phu thuoc viec he thong co duoc dua ve mot trang thai khoi dong sach va hop le hay khong.
 
+#### 3.1 Bo sung bang `Initial Input Review` truoc khi `Start Auto-Tune`
+
+De lam ro hon "input toi thieu nao phai dung truoc khi tune", GUI da duoc bo sung mot bang init rieng o tab `Motor Auto-Tune`, ten la `Initial Input Review`.
+
+Bang nay khong chi de hien thong tin. No dong vai tro nhu mot lop `priming` nho truoc khi GUI gui lenh autotune that su, de tranh truong hop nguoi dung bam `Start` trong khi cac gia tri co ban cua motor van dang cu, thieu, hoac sai don vi.
+
+Hien tai bang init co 4 dong:
+
+1. `Rated Current RMS`
+2. `Encoder Bits`
+3. `Encoder Resolution`
+4. `Rotor Model (J / B)`
+
+Y nghia tung dong:
+
+- `Rated Current RMS` la input bat buoc. GUI dung gia tri nay de goi y dong test `Rs Low` va `Rs High` theo ty le an toan xap xi `0.6x` va `0.8x` rated current.
+- `Encoder Bits` la mot shortcut UX. Neu encoder co dang luy thua cua 2, vi du `20-bit`, GUI se tu map thanh `1,048,576 counts/rev`.
+- `Encoder Resolution` moi la gia tri cuoi cung co y nghia commissioning, va la gia tri duoc ghi vao `MOTOR_ENCODER_RESOLUTION`.
+- `Rotor Model (J / B)` hien duoc danh dau `Auto-estimate later`, nghia la GUI co chu y thiet ke ro rang rang phan nhan dang co hoc chua nam trong flow auto-tune hien tai.
+
+Ngoai bang init nay, GUI con bo sung nut `Reload From Motor Parameters`.
+
+Y nghia cua nut nay la:
+
+- doc lai `Rated Current RMS` va `Encoder Resolution` tu bang `Motor Parameters`
+- dong bo nguon "su that hien tai" truoc khi nguoi dung tune
+- tranh tinh trang bang init va bang motor parameter noi 2 cau chuyen khac nhau
+
+Flow dong bo hien tai duoc thiet ke theo 2 chieu:
+
+- neu nguoi dung sua `Rated Current RMS` hoac `Encoder Resolution` trong bang init, GUI cap nhat nguoc ve `Motor Parameters`
+- neu bang `Motor Parameters` vua duoc doc lai tu drive hoac user bam `Reload`, bang init lai refresh theo gia tri moi
+
+Noi cach khac, bang init nay khong tao ra mot "ban sao parameter" song song. No chi la lop review + edit co chu dich cho auto-tune, nhung van rang buoc truc tiep voi `Motor Parameters`.
+
+Thu tu khi bam `Start Auto-Tune` hien tai la:
+
+1. kiem tra `Rated Current RMS > 0`
+2. kiem tra `Encoder Resolution > 0`
+3. GUI queue write 2 tham so `MOTOR_RATED_CURRENT_RMS` va `MOTOR_ENCODER_RESOLUTION` xuong drive truoc
+4. sau do GUI moi gui `CMD_START_AUTOTUNING_T`
+
+Y nghia kien truc cua cach tach bang init nay la:
+
+- tach ro "du lieu nen cua motor" voi "tham so kich thich cua tung stage autotune"
+- giam nguy co tune tren mot bang parameter da cu
+- giup hoi dong thay ro rang firmware/GUI dang yeu cau du lieu toi thieu nao la bat buoc, va du lieu nao (`J/B`) thi chu dong de lai cho phase mo rong
+
+Day la cach dien dat rat hop khi bao ve:
+
+> Chung toi tao rieng bang `Initial Input Review` khong phai de lam dep GUI, ma de bien 2 tham so dau vao quan trong nhat cua auto-tune thanh mot buoc review co y thuc. GUI se ghi truoc cac gia tri nay xuong drive roi moi cho phep autotune chay, de dam bao qua trinh commissioning dung tren dung bo du lieu nen.
+
 ### 4. Flow auto-tune hien tai thuc su dang do nhung gi
 
 State machine auto-tune hien tai co 4 stage chinh:

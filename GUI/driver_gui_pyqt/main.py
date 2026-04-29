@@ -8,6 +8,8 @@ from collections import deque
 from dataclasses import dataclass, field
 import html
 import math
+from pathlib import Path
+import re
 import struct
 import sys
 import time
@@ -216,10 +218,16 @@ DRIVER_PARAM_ACCEL_TIME_MS = 10
 DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
 DRIVER_PARAM_POSITION_TRACKING_MODE = 16
+MOTOR_PARAM_RATED_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_RATED_CURRENT_RMS")
+MOTOR_PARAM_ENCODER_ID = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_ID")
 MOTOR_PARAM_MAXIMUM_SPEED = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_SPEED")
 MOTOR_PARAM_CURRENT_P_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_P_GAIN")
 MOTOR_PARAM_CURRENT_I_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_I_GAIN")
 MOTOR_PARAM_ENCODER_RESOLUTION = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_RESOLUTION")
+AUTOTUNE_ENCODER_BITS_CUSTOM = 0
+AUTOTUNE_ENCODER_BITS_MAX = 24
+AUTOTUNE_RS_LOW_RATIO = 0.9
+AUTOTUNE_RS_HIGH_RATIO = 1.0
 
 TRACE_PRESETS = {
     "Encoder Alignment": [12, 11, 4, 14],
@@ -264,6 +272,95 @@ def _empty_scope_state(title: str) -> ScopeCaptureState:
         active=False,
         received_samples=0,
     )
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_FIRMWARE_DEFINE_HEADER = (
+    _REPO_ROOT / "Firmware_final_project" / "MDK-ARM" / "Library" / "define.h"
+)
+
+
+def _fallback_encoder_id_aliases() -> list[tuple[int, list[str]]]:
+    return [
+        (1, ["TAMAGAWA_SERIAL_ABS_SINGLE_TURN"]),
+        (2, ["TAMAGAWA_SERIAL_ABS_MULTI_TURN"]),
+        (3, ["PANASONIC_MINAS_A5_SERIAL_INC", "PANASONIC_MINAS_A4_A5_SERIAL_ENC"]),
+        (4, ["PANASONIC_MINAS_A6_SERIAL_ABS"]),
+        (5, ["QUADRATURE_ABZ_HALL"]),
+        (6, ["YASKAWA_SIGMA_5_SERIAL_INC_HALL", "YASKAWA_SIGMA_SERIAL_ENCODER"]),
+        (7, ["YASKAWA_SIGMA_5_ABS_SINGLE_TURN"]),
+        (8, ["YASKAWA_SIGMA_7_SERIAL_INC"]),
+        (9, ["YASKAWA_SIGMA_5_SGMAV_ROBOT"]),
+        (10, ["YASKAWA_SIGMA_SGMAS_06A2A2C"]),
+        (11, ["PANASONIC_MINAS_A5_SERIAL_ABS"]),
+        (12, ["TAMAGAWA_SERIAL_ABS_MULTI_TURN_23BIT"]),
+        (13, ["PANASONIC_MINAS_A4_SERIAL_INC"]),
+    ]
+
+
+def _load_firmware_encoder_id_aliases() -> list[tuple[int, list[str]]]:
+    define_pattern = re.compile(r"^\s*#define\s+([A-Z0-9_]+)\s+([0-9]+)\s*$")
+    grouped_names: dict[int, list[str]] = {}
+    ordered_values: list[int] = []
+    try:
+        lines = _FIRMWARE_DEFINE_HEADER.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        ).splitlines()
+    except OSError:
+        return _fallback_encoder_id_aliases()
+
+    inside_encoder_block = False
+    for line in lines:
+        if not inside_encoder_block:
+            if "Define Motor encoder ID" in line:
+                inside_encoder_block = True
+            continue
+
+        stripped = line.strip()
+        if not stripped:
+            break
+
+        match = define_pattern.match(stripped)
+        if match is None:
+            break
+
+        encoder_name, encoder_value_text = match.groups()
+        encoder_value = int(encoder_value_text)
+        if encoder_value not in grouped_names:
+            grouped_names[encoder_value] = []
+            ordered_values.append(encoder_value)
+        grouped_names[encoder_value].append(encoder_name)
+
+    if not ordered_values:
+        return _fallback_encoder_id_aliases()
+
+    return [
+        (encoder_value, grouped_names[encoder_value])
+        for encoder_value in ordered_values
+    ]
+
+
+def _format_encoder_id_option_label(
+    encoder_value: int,
+    encoder_names: list[str],
+) -> str:
+    primary_name = encoder_names[0] if encoder_names else f"ENCODER_{encoder_value}"
+    if len(encoder_names) <= 1:
+        return f"{encoder_value} - {primary_name}"
+    alias_text = ", ".join(encoder_names[1:])
+    return f"{encoder_value} - {primary_name} (alias: {alias_text})"
+
+
+AUTOTUNE_ENCODER_ID_ALIASES = _load_firmware_encoder_id_aliases()
+AUTOTUNE_DEFAULT_ENCODER_ID = next(
+    (
+        encoder_value
+        for encoder_value, encoder_names in AUTOTUNE_ENCODER_ID_ALIASES
+        if "PANASONIC_MINAS_A5_SERIAL_INC" in encoder_names
+    ),
+    3,
+)
 
 
 @dataclass(slots=True)
@@ -4299,6 +4396,8 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_autotune_tab()), "Motor Auto-Tune")
         tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_id_tuning_tab()), "Id Tuning")
         tabs.addTab(self._wrap_tuning_tab_scroll_area(self._build_trace_scope_tab()), "Trace Scope")
+        self.tuning_tabs = tabs
+        self._tuning_autotune_tab_index = 1
         layout.addWidget(tabs)
         return dialog
 
@@ -4493,6 +4592,129 @@ class MainWindow(QtWidgets.QMainWindow):
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
 
+        init_group = QtWidgets.QGroupBox("Initial Input Review")
+        init_layout = QtWidgets.QVBoxLayout(init_group)
+        init_hint = QtWidgets.QLabel(
+            "Check the minimum motor data here before auto-tune. The GUI will write "
+            "Rated Current RMS, Encoder Type, and Encoder Resolution to the drive automatically when "
+            "Auto-Tune starts. J and B stay out of this flow for now."
+        )
+        init_hint.setWordWrap(True)
+
+        self.autotune_init_table = QtWidgets.QTableWidget(5, 3)
+        self.autotune_init_table.setHorizontalHeaderLabels(["Parameter", "Value", "Notes"])
+        self.autotune_init_table.verticalHeader().setVisible(False)
+        self.autotune_init_table.setAlternatingRowColors(True)
+        self.autotune_init_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection
+        )
+        self.autotune_init_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.autotune_init_table.setWordWrap(True)
+
+        self.autotune_init_rated_current_spin = QtWidgets.QDoubleSpinBox()
+        self.autotune_init_rated_current_spin.setRange(0.05, 100.0)
+        self.autotune_init_rated_current_spin.setDecimals(3)
+        self.autotune_init_rated_current_spin.setSuffix(" A")
+        self.autotune_init_rated_current_spin.setToolTip(
+            "Required. Used for the firmware over-current guard and for safe Rs current suggestions."
+        )
+
+        self.autotune_init_encoder_type_combo = QtWidgets.QComboBox()
+        self.autotune_init_encoder_type_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.autotune_init_encoder_type_combo.setToolTip(
+            "Sourced from firmware define.h and written into MOTOR_ENCODER_ID."
+        )
+        for encoder_value, encoder_names in AUTOTUNE_ENCODER_ID_ALIASES:
+            option_label = _format_encoder_id_option_label(encoder_value, encoder_names)
+            self.autotune_init_encoder_type_combo.addItem(option_label, int(encoder_value))
+            self.autotune_init_encoder_type_combo.setItemData(
+                self.autotune_init_encoder_type_combo.count() - 1,
+                "\n".join(encoder_names),
+                QtCore.Qt.ItemDataRole.ToolTipRole,
+            )
+
+        self.autotune_init_encoder_bits_spin = QtWidgets.QSpinBox()
+        self.autotune_init_encoder_bits_spin.setRange(
+            AUTOTUNE_ENCODER_BITS_CUSTOM,
+            AUTOTUNE_ENCODER_BITS_MAX,
+        )
+        self.autotune_init_encoder_bits_spin.setSpecialValueText("Custom")
+        self.autotune_init_encoder_bits_spin.setToolTip(
+            "Optional shortcut. Example: 20-bit automatically maps to 1,048,576 counts/rev."
+        )
+
+        self.autotune_init_encoder_resolution_spin = QtWidgets.QSpinBox()
+        self.autotune_init_encoder_resolution_spin.setRange(1, 2147483647)
+        self.autotune_init_encoder_resolution_spin.setToolTip(
+            "Required. Used for speed/position scaling and pole-pair estimation."
+        )
+
+        rotor_model_value = QtWidgets.QLabel("Auto-estimate later")
+        rotor_model_value.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+
+        init_rows: list[tuple[str, QtWidgets.QWidget, str]] = [
+            (
+                "Rated Current RMS",
+                self.autotune_init_rated_current_spin,
+                "Required. User-entered safety limit for this flow.",
+            ),
+            (
+                "Encoder Type",
+                self.autotune_init_encoder_type_combo,
+                "Required. Dropdown is built from the firmware encoder-ID defines.",
+            ),
+            (
+                "Encoder Bits",
+                self.autotune_init_encoder_bits_spin,
+                "Optional shortcut. Leave at Custom to type counts/rev directly.",
+            ),
+            (
+                "Encoder Resolution",
+                self.autotune_init_encoder_resolution_spin,
+                "Required. Final value written into MOTOR_ENCODER_RESOLUTION.",
+            ),
+            (
+                "Rotor Model (J / B)",
+                rotor_model_value,
+                "Not required now. J and B will be estimated in a later step.",
+            ),
+        ]
+        for row, (label_text, value_widget, note_text) in enumerate(init_rows):
+            label_item = QtWidgets.QTableWidgetItem(label_text)
+            label_item.setFlags(label_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+            note_item = QtWidgets.QTableWidgetItem(note_text)
+            note_item.setFlags(note_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+            self.autotune_init_table.setItem(row, 0, label_item)
+            self.autotune_init_table.setCellWidget(row, 1, value_widget)
+            self.autotune_init_table.setItem(row, 2, note_item)
+
+        init_header = self.autotune_init_table.horizontalHeader()
+        init_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        init_header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        init_header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.autotune_init_table.setRowHeight(0, 34)
+        self.autotune_init_table.setRowHeight(1, 34)
+        self.autotune_init_table.setRowHeight(2, 34)
+        self.autotune_init_table.setRowHeight(3, 34)
+        self.autotune_init_table.setRowHeight(4, 42)
+
+        init_toolbar = QtWidgets.QHBoxLayout()
+        self.autotune_reload_init_button = QtWidgets.QPushButton("Reload From Motor Parameters")
+        self.autotune_init_status_label = QtWidgets.QLabel("-")
+        self.autotune_init_status_label.setWordWrap(True)
+        init_toolbar.addWidget(self.autotune_reload_init_button)
+        init_toolbar.addWidget(self.autotune_init_status_label, 1)
+
+        init_layout.addWidget(init_hint)
+        init_layout.addWidget(self.autotune_init_table)
+        init_layout.addLayout(init_toolbar)
+
         config_group = QtWidgets.QGroupBox("PMSM Auto-Tuning")
         config_layout = QtWidgets.QGridLayout(config_group)
 
@@ -4502,7 +4724,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_rs_low_spin.setValue(1.00)
         self.autotune_rs_low_spin.setSuffix(" A")
         self.autotune_rs_low_spin.setToolTip(
-            "Recommended starting point: roughly 70-80% of motor rated current for Rs estimation."
+            "Auto-suggested from rated current at about 60%, then clamped inside the safe test range."
         )
 
         self.autotune_rs_high_spin = QtWidgets.QDoubleSpinBox()
@@ -4511,7 +4733,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_rs_high_spin.setValue(1.50)
         self.autotune_rs_high_spin.setSuffix(" A")
         self.autotune_rs_high_spin.setToolTip(
-            "Recommended starting point: roughly 70-80% of motor rated current for Rs estimation."
+            "Auto-suggested from rated current at about 80%, then clamped inside the safe test range."
         )
 
         self.autotune_ls_voltage_spin = QtWidgets.QDoubleSpinBox()
@@ -4575,6 +4797,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_current_gain_value_label = QtWidgets.QLabel("-")
         self.autotune_speed_gain_value_label = QtWidgets.QLabel("-")
         self.autotune_position_gain_value_label = QtWidgets.QLabel("-")
+        self.autotune_result_lamp = QtWidgets.QFrame()
+        self.autotune_result_lamp.setFixedSize(14, 14)
+        self.autotune_result_lamp.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.autotune_result_status_label = QtWidgets.QLabel("Idle")
+        self.autotune_result_status_label.setStyleSheet("font-weight: 600;")
 
         config_layout.addWidget(QtWidgets.QLabel("Rs Low Current"), 0, 0)
         config_layout.addWidget(self.autotune_rs_low_spin, 0, 1)
@@ -4601,46 +4828,72 @@ class MainWindow(QtWidgets.QMainWindow):
         config_layout.addWidget(self.autotune_progress_bar, 6, 1, 1, 3)
 
         results_group = QtWidgets.QGroupBox("Measured Results")
-        results_layout = QtWidgets.QGridLayout(results_group)
-        results_layout.addWidget(QtWidgets.QLabel("State"), 0, 0)
-        results_layout.addWidget(self.autotune_state_value_label, 0, 1)
-        results_layout.addWidget(QtWidgets.QLabel("Error"), 0, 2)
-        results_layout.addWidget(self.autotune_error_value_label, 0, 3)
-        results_layout.addWidget(QtWidgets.QLabel("Chart"), 1, 0)
-        results_layout.addWidget(self.autotune_chart_state_label, 1, 1, 1, 3)
-        results_layout.addWidget(QtWidgets.QLabel("Rs"), 2, 0)
-        results_layout.addWidget(self.autotune_rs_value_label, 2, 1)
-        results_layout.addWidget(QtWidgets.QLabel("Ls"), 2, 2)
-        results_layout.addWidget(self.autotune_ls_value_label, 2, 3)
-        results_layout.addWidget(QtWidgets.QLabel("Ke"), 3, 0)
-        results_layout.addWidget(self.autotune_ke_value_label, 3, 1)
-        results_layout.addWidget(QtWidgets.QLabel("Flux"), 3, 2)
-        results_layout.addWidget(self.autotune_flux_value_label, 3, 3)
-        results_layout.addWidget(QtWidgets.QLabel("Pole Pairs"), 4, 0)
-        results_layout.addWidget(self.autotune_pp_value_label, 4, 1)
-        results_layout.addWidget(QtWidgets.QLabel("Current PI"), 4, 2)
-        results_layout.addWidget(self.autotune_current_gain_value_label, 4, 3)
-        results_layout.addWidget(QtWidgets.QLabel("Speed PI"), 5, 0)
-        results_layout.addWidget(self.autotune_speed_gain_value_label, 5, 1)
-        results_layout.addWidget(QtWidgets.QLabel("Position PI"), 5, 2)
-        results_layout.addWidget(self.autotune_position_gain_value_label, 5, 3)
-        results_layout.addWidget(QtWidgets.QLabel("Kt"), 6, 0)
-        results_layout.addWidget(self.autotune_kt_value_label, 6, 1)
+        results_layout = QtWidgets.QVBoxLayout(results_group)
+        results_summary_layout = QtWidgets.QGridLayout()
+        results_summary_layout.addWidget(QtWidgets.QLabel("State"), 0, 0)
+        results_summary_layout.addWidget(self.autotune_state_value_label, 0, 1)
+        results_summary_layout.addWidget(QtWidgets.QLabel("Error"), 0, 2)
+        results_summary_layout.addWidget(self.autotune_error_value_label, 0, 3)
+        results_summary_layout.addWidget(QtWidgets.QLabel("Result"), 0, 4)
+        result_status_widget = QtWidgets.QWidget()
+        result_status_layout = QtWidgets.QHBoxLayout(result_status_widget)
+        result_status_layout.setContentsMargins(0, 0, 0, 0)
+        result_status_layout.setSpacing(8)
+        result_status_layout.addWidget(self.autotune_result_lamp, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        result_status_layout.addWidget(self.autotune_result_status_label, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        result_status_layout.addStretch(1)
+        results_summary_layout.addWidget(result_status_widget, 0, 5)
+        results_summary_layout.addWidget(QtWidgets.QLabel("Chart"), 1, 0)
+        results_summary_layout.addWidget(self.autotune_chart_state_label, 1, 1, 1, 5)
+        results_layout.addLayout(results_summary_layout)
+
+        results_split_layout = QtWidgets.QHBoxLayout()
+        estimated_group = QtWidgets.QGroupBox("Estimated Parameters")
+        estimated_layout = QtWidgets.QGridLayout(estimated_group)
+        estimated_layout.addWidget(QtWidgets.QLabel("Rs"), 0, 0)
+        estimated_layout.addWidget(self.autotune_rs_value_label, 0, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("Ls"), 1, 0)
+        estimated_layout.addWidget(self.autotune_ls_value_label, 1, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("Ke"), 2, 0)
+        estimated_layout.addWidget(self.autotune_ke_value_label, 2, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("Flux"), 3, 0)
+        estimated_layout.addWidget(self.autotune_flux_value_label, 3, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("Pole Pairs"), 4, 0)
+        estimated_layout.addWidget(self.autotune_pp_value_label, 4, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("Kt"), 5, 0)
+        estimated_layout.addWidget(self.autotune_kt_value_label, 5, 1)
+        estimated_layout.setColumnStretch(1, 1)
+
+        gains_group = QtWidgets.QGroupBox("Loop Gains")
+        gains_layout = QtWidgets.QGridLayout(gains_group)
+        gains_layout.addWidget(QtWidgets.QLabel("Current PI"), 0, 0)
+        gains_layout.addWidget(self.autotune_current_gain_value_label, 0, 1)
+        gains_layout.addWidget(QtWidgets.QLabel("Speed PI"), 1, 0)
+        gains_layout.addWidget(self.autotune_speed_gain_value_label, 1, 1)
+        gains_layout.addWidget(QtWidgets.QLabel("Position PI"), 2, 0)
+        gains_layout.addWidget(self.autotune_position_gain_value_label, 2, 1)
+        gains_layout.setColumnStretch(1, 1)
+
+        results_split_layout.addWidget(estimated_group, 1)
+        results_split_layout.addWidget(gains_group, 1)
+        results_layout.addLayout(results_split_layout)
 
         help_group = QtWidgets.QGroupBox("Help / Workflow")
         help_layout = QtWidgets.QVBoxLayout(help_group)
         autotune_help = QtWidgets.QLabel(
             "<b>Recommended Workflow</b>"
             "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
+            "<li>First review <b>Rated Current RMS</b>, <b>Encoder Type</b>, and <b>Encoder Resolution</b> in the initial input table.</li>"
             "<li>Lock the rotor mechanically for the <b>Rs</b> and <b>Ls</b> stages.</li>"
             "<li>Run the <b>Flux</b> stage only with the motor unloaded and free to spin.</li>"
             "<li>Before Flux estimation, try the same <b>Flux Voltage</b> and <b>Flux Frequency</b> in <b>Open Loop V/F</b> first.</li>"
             "<li>The motor should spin smoothly without strong jerks, buzz, or unstable vibration before you trust the Ke / flux estimate.</li>"
+            "<li><b>J</b> and <b>B</b> are intentionally left out here and will be estimated in a later flow.</li>"
             "</ul>"
             "<b>Rs Estimation Note</b>"
             "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
-            "<li>Use the d-axis test current around <b>1.0 to 1.5 A</b> as a practical starting point here.</li>"
-            "<li>That is roughly <b>70-80% of the motor rated current</b> for this setup, which usually gives a cleaner Rs estimate than very small current.</li>"
+            "<li>The GUI auto-suggests <b>Rs Low</b> at about <b>60%</b> and <b>Rs High</b> at about <b>80%</b> of the rated current.</li>"
+            "<li>Those suggestions are still clamped inside the existing safe limits of the test controls.</li>"
             "</ul>"
             "<b>Chart Reading Guide</b>"
             "<ul style='margin-top:6px; margin-bottom:0px; margin-left:18px;'>"
@@ -4689,6 +4942,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         scope_toolbar.addWidget(scope_note, 1)
 
+        self._refresh_autotune_input_review_from_motor_table()
+        layout.addWidget(init_group)
         layout.addWidget(config_group)
         layout.addWidget(results_group)
         layout.addWidget(help_group)
@@ -5821,6 +6076,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_clear_button.clicked.connect(self._clear_autotune_capture)
         self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_rs_scope_view.set_auto_scale)
         self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_ls_scope_view.set_auto_scale)
+        self.autotune_reload_init_button.clicked.connect(
+            self._refresh_autotune_input_review_from_motor_table
+        )
+        self.autotune_init_rated_current_spin.valueChanged.connect(
+            self._on_autotune_rated_current_changed
+        )
+        self.autotune_init_encoder_type_combo.currentIndexChanged.connect(
+            self._on_autotune_encoder_type_changed
+        )
+        self.autotune_init_encoder_bits_spin.valueChanged.connect(
+            self._on_autotune_encoder_bits_changed
+        )
+        self.autotune_init_encoder_resolution_spin.valueChanged.connect(
+            self._on_autotune_encoder_resolution_changed
+        )
+        self.tuning_tabs.currentChanged.connect(self._handle_tuning_tab_changed)
         self.read_all_params_button.clicked.connect(self._read_all_parameters)
         self.write_driver_button.clicked.connect(self._write_driver_parameters)
         self.write_motor_button.clicked.connect(self._write_motor_parameters)
@@ -5862,9 +6133,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _show_auxiliary_window(self, window: QtWidgets.QDialog) -> None:
         if window.isMinimized():
             window.showNormal()
+        if window is getattr(self, "_tuning_window", None) and hasattr(self, "tuning_tabs"):
+            self._handle_tuning_tab_changed(self.tuning_tabs.currentIndex())
         window.show()
         window.raise_()
         window.activateWindow()
+
+    def _handle_tuning_tab_changed(self, index: int) -> None:
+        if int(index) == int(getattr(self, "_tuning_autotune_tab_index", -1)):
+            self._refresh_autotune_input_review_from_motor_table()
 
     def _open_report_editor_for_chart(self, chart_widget) -> None:
         if not hasattr(chart_widget, "build_report_capture"):
@@ -6016,6 +6293,217 @@ class MainWindow(QtWidgets.QMainWindow):
             item = QtWidgets.QTableWidgetItem()
             table.setItem(row, 2, item)
         item.setText(f"{float(value):.6f}")
+
+    @staticmethod
+    def _autotune_encoder_bits_from_resolution(resolution: int) -> int:
+        if resolution <= 0 or (resolution & (resolution - 1)) != 0:
+            return AUTOTUNE_ENCODER_BITS_CUSTOM
+        bits = resolution.bit_length() - 1
+        if bits < 1 or bits > AUTOTUNE_ENCODER_BITS_MAX:
+            return AUTOTUNE_ENCODER_BITS_CUSTOM
+        return bits
+
+    def _apply_autotune_safe_current_suggestions(
+        self,
+        rated_current_a: float | None = None,
+    ) -> None:
+        if (
+            not hasattr(self, "autotune_rs_low_spin")
+            or not hasattr(self, "autotune_rs_high_spin")
+        ):
+            return
+        if rated_current_a is None:
+            rated_current = (
+                float(self.autotune_init_rated_current_spin.value())
+                if hasattr(self, "autotune_init_rated_current_spin")
+                else DEFAULT_MOTOR_RATED_CURRENT_RMS
+            )
+        else:
+            rated_current = float(rated_current_a)
+        low_current = rated_current * AUTOTUNE_RS_LOW_RATIO
+        high_current = rated_current * AUTOTUNE_RS_HIGH_RATIO
+        low_current = max(
+            self.autotune_rs_low_spin.minimum(),
+            min(self.autotune_rs_low_spin.maximum(), low_current),
+        )
+        high_current = max(
+            max(low_current, self.autotune_rs_high_spin.minimum()),
+            min(self.autotune_rs_high_spin.maximum(), high_current),
+        )
+        self.autotune_rs_low_spin.setValue(low_current)
+        self.autotune_rs_high_spin.setValue(high_current)
+
+    def _refresh_autotune_input_review_status(self) -> None:
+        if not hasattr(self, "autotune_init_status_label"):
+            return
+        rated_current = float(self.autotune_init_rated_current_spin.value())
+        encoder_id = self._autotune_selected_encoder_id()
+        encoder_type_text = self._autotune_selected_encoder_type_text()
+        encoder_resolution = int(self.autotune_init_encoder_resolution_spin.value())
+        encoder_bits = int(self.autotune_init_encoder_bits_spin.value())
+        if encoder_bits > AUTOTUNE_ENCODER_BITS_CUSTOM:
+            encoder_text = f"{encoder_bits}-bit -> {encoder_resolution:,} counts/rev"
+        else:
+            encoder_text = f"Custom encoder resolution = {encoder_resolution:,} counts/rev"
+        self.autotune_init_status_label.setText(
+            f"Encoder type: {encoder_type_text} [{encoder_id}]. {encoder_text}. "
+            f"Rs current suggestions follow 0.6x / 0.8x rated current ({rated_current:.3f} A). "
+            "Start Auto-Tune writes Rated Current RMS, Encoder Type, and Encoder Resolution to the drive first. "
+            "J/B stay reserved for later estimation."
+        )
+
+    def _autotune_selected_encoder_id(self) -> int:
+        if not hasattr(self, "autotune_init_encoder_type_combo"):
+            return int(AUTOTUNE_DEFAULT_ENCODER_ID)
+        encoder_id = int(self.autotune_init_encoder_type_combo.currentData() or 0)
+        return encoder_id if encoder_id > 0 else int(AUTOTUNE_DEFAULT_ENCODER_ID)
+
+    def _autotune_selected_encoder_type_text(self) -> str:
+        if not hasattr(self, "autotune_init_encoder_type_combo"):
+            return "Unknown"
+        return self.autotune_init_encoder_type_combo.currentText().strip() or "Unknown"
+
+    def _set_autotune_encoder_type_value(self, encoder_id: int) -> None:
+        if not hasattr(self, "autotune_init_encoder_type_combo"):
+            return
+        combo = self.autotune_init_encoder_type_combo
+        index = combo.findData(int(encoder_id))
+        if index < 0:
+            combo.addItem(f"{int(encoder_id)} - UNKNOWN_ENCODER_ID", int(encoder_id))
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+
+    def _sync_autotune_input_review_to_motor_table(
+        self,
+        update_current_suggestions: bool = False,
+    ) -> None:
+        if (
+            not hasattr(self, "motor_table")
+            or not hasattr(self, "autotune_init_rated_current_spin")
+            or not hasattr(self, "autotune_init_encoder_resolution_spin")
+        ):
+            return
+        rated_current = max(0.05, float(self.autotune_init_rated_current_spin.value()))
+        encoder_id = self._autotune_selected_encoder_id()
+        encoder_resolution = max(1, int(self.autotune_init_encoder_resolution_spin.value()))
+        self._set_table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_RATED_CURRENT_RMS,
+            rated_current,
+        )
+        self._set_table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_ENCODER_ID,
+            float(encoder_id),
+        )
+        self._set_table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_ENCODER_RESOLUTION,
+            float(encoder_resolution),
+        )
+        if update_current_suggestions:
+            self._apply_autotune_safe_current_suggestions(rated_current)
+        self._refresh_autotune_input_review_status()
+
+    def _refresh_autotune_input_review_from_motor_table(self) -> None:
+        if (
+            not hasattr(self, "motor_table")
+            or not hasattr(self, "autotune_init_rated_current_spin")
+            or not hasattr(self, "autotune_init_encoder_bits_spin")
+            or not hasattr(self, "autotune_init_encoder_resolution_spin")
+        ):
+            return
+        rated_current = self._table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_RATED_CURRENT_RMS,
+            DEFAULT_MOTOR_RATED_CURRENT_RMS,
+        )
+        encoder_id = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_ENCODER_ID,
+                    float(AUTOTUNE_DEFAULT_ENCODER_ID),
+                )
+            )
+        )
+        encoder_resolution = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_ENCODER_RESOLUTION,
+                    float(1 << 20),
+                )
+            )
+        )
+        if rated_current <= 0.0:
+            rated_current = DEFAULT_MOTOR_RATED_CURRENT_RMS
+        if encoder_id <= 0:
+            encoder_id = AUTOTUNE_DEFAULT_ENCODER_ID
+        if encoder_resolution <= 0:
+            encoder_resolution = 1 << 20
+        encoder_bits = self._autotune_encoder_bits_from_resolution(encoder_resolution)
+        blockers = [
+            QtCore.QSignalBlocker(self.autotune_init_rated_current_spin),
+            QtCore.QSignalBlocker(self.autotune_init_encoder_type_combo),
+            QtCore.QSignalBlocker(self.autotune_init_encoder_bits_spin),
+            QtCore.QSignalBlocker(self.autotune_init_encoder_resolution_spin),
+        ]
+        self.autotune_init_rated_current_spin.setValue(float(rated_current))
+        self._set_autotune_encoder_type_value(int(encoder_id))
+        self.autotune_init_encoder_bits_spin.setValue(int(encoder_bits))
+        self.autotune_init_encoder_resolution_spin.setValue(int(encoder_resolution))
+        del blockers
+        self._apply_autotune_safe_current_suggestions(float(rated_current))
+        self._refresh_autotune_input_review_status()
+
+    def _on_autotune_rated_current_changed(self, _value: float) -> None:
+        self._sync_autotune_input_review_to_motor_table(update_current_suggestions=True)
+
+    def _on_autotune_encoder_type_changed(self, _index: int) -> None:
+        self._sync_autotune_input_review_to_motor_table(update_current_suggestions=False)
+
+    def _on_autotune_encoder_bits_changed(self, bits: int) -> None:
+        if not hasattr(self, "autotune_init_encoder_resolution_spin"):
+            return
+        if int(bits) > AUTOTUNE_ENCODER_BITS_CUSTOM:
+            resolution = 1 << int(bits)
+            blocker = QtCore.QSignalBlocker(self.autotune_init_encoder_resolution_spin)
+            self.autotune_init_encoder_resolution_spin.setValue(int(resolution))
+            del blocker
+        self._sync_autotune_input_review_to_motor_table(update_current_suggestions=False)
+
+    def _on_autotune_encoder_resolution_changed(self, resolution: int) -> None:
+        if not hasattr(self, "autotune_init_encoder_bits_spin"):
+            return
+        encoder_bits = self._autotune_encoder_bits_from_resolution(int(resolution))
+        blocker = QtCore.QSignalBlocker(self.autotune_init_encoder_bits_spin)
+        self.autotune_init_encoder_bits_spin.setValue(int(encoder_bits))
+        del blocker
+        self._sync_autotune_input_review_to_motor_table(update_current_suggestions=False)
+
+    def _enqueue_motor_parameter_updates(
+        self,
+        entries: list[tuple[int, float]],
+        description_prefix: str,
+    ) -> None:
+        if not entries:
+            return
+        chunk_size = 20
+        chunk_total = (len(entries) + chunk_size - 1) // chunk_size
+        for chunk_index, start in enumerate(range(0, len(entries), chunk_size), start=1):
+            chunk_entries = list(entries[start : start + chunk_size])
+            while len(chunk_entries) < chunk_size:
+                chunk_entries.append(chunk_entries[-1])
+            payload = bytearray()
+            for parameter_index, parameter_value in chunk_entries:
+                payload.append(int(parameter_index) & 0xFF)
+                payload.extend(struct.pack("<f", float(parameter_value)))
+            self._enqueue_command(
+                Command.CMD_WRITE_MOTOR,
+                bytes(payload),
+                f"{description_prefix} chunk {chunk_index}/{chunk_total}",
+            )
 
     def _current_foc_mode(self) -> int:
         return int(self.foc_mode_combo.currentData() or SPEED_CONTROL_MODE)
@@ -8304,6 +8792,51 @@ class MainWindow(QtWidgets.QMainWindow):
             return "Ls Sine Injection Response"
         return "Motor Auto-Tune Charts"
 
+    def _set_autotune_result_lamp(
+        self,
+        color: str,
+        border_color: str,
+        text: str,
+        tooltip: str,
+    ) -> None:
+        if not hasattr(self, "autotune_result_lamp"):
+            return
+        self.autotune_result_lamp.setStyleSheet(
+            "QFrame { "
+            f"background-color: {color}; border: 1px solid {border_color}; border-radius: 7px; "
+            "}"
+        )
+        self.autotune_result_lamp.setToolTip(tooltip)
+        self.autotune_result_status_label.setText(text)
+        self.autotune_result_status_label.setToolTip(tooltip)
+        self.autotune_result_status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    def _refresh_autotune_result_lamp(self, state: int, error: int) -> None:
+        state_value = int(state)
+        error_value = int(error)
+        if state_value == MOTOR_AUTOTUNE_STATE_DONE and error_value == MOTOR_AUTOTUNE_ERROR_NONE:
+            self._set_autotune_result_lamp(
+                "#2e7d32",
+                "#81c784",
+                "Done",
+                "Auto-Tune finished without error.",
+            )
+            return
+        if state_value == MOTOR_AUTOTUNE_STATE_ERROR or error_value != MOTOR_AUTOTUNE_ERROR_NONE:
+            self._set_autotune_result_lamp(
+                "#c62828",
+                "#ef9a9a",
+                "Error",
+                self._autotune_error_text(error_value),
+            )
+            return
+        self._set_autotune_result_lamp(
+            "#6c757d",
+            "#adb5bd",
+            "Pending",
+            "Auto-Tune has not completed yet.",
+        )
+
     def _autotune_chart_series_defs(self, stage: int) -> list[dict[str, str]]:
         if int(stage) == MOTOR_AUTOTUNE_CHART_RS:
             return [
@@ -8381,6 +8914,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if snapshot is None:
             self.autotune_state_value_label.setText("Idle")
             self.autotune_error_value_label.setText("No error")
+            self._refresh_autotune_result_lamp(
+                MOTOR_AUTOTUNE_STATE_IDLE,
+                MOTOR_AUTOTUNE_ERROR_NONE,
+            )
             self.autotune_chart_state_label.setText("Waiting for capture")
             self.autotune_progress_bar.setValue(0)
             self.autotune_rs_value_label.setText("-")
@@ -8400,6 +8937,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.autotune_error_value_label.setText(
             self._autotune_error_text(snapshot.autotune_error)
+        )
+        self._refresh_autotune_result_lamp(
+            snapshot.autotune_state,
+            snapshot.autotune_error,
         )
         self.autotune_progress_bar.setValue(int(snapshot.autotune_progress_percent))
         self.autotune_chart_state_label.setText(
@@ -8431,6 +8972,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.autotune_apply_button.setEnabled(
             int(snapshot.autotune_state) == MOTOR_AUTOTUNE_STATE_DONE
+            and int(snapshot.autotune_error) == MOTOR_AUTOTUNE_ERROR_NONE
         )
         self._maybe_continue_autotune_stage(snapshot)
 
@@ -8500,9 +9042,47 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
 
+        self._sync_autotune_input_review_to_motor_table(update_current_suggestions=False)
+        rated_current = float(self.autotune_init_rated_current_spin.value())
+        encoder_id = self._autotune_selected_encoder_id()
+        encoder_resolution = int(self.autotune_init_encoder_resolution_spin.value())
+        if rated_current <= 0.0:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid Auto-Tune Input",
+                "Rated Current RMS must be greater than zero before starting auto-tune.",
+            )
+            return
+        if encoder_id <= 0:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid Auto-Tune Input",
+                "Encoder Type must map to a valid MOTOR_ENCODER_ID before starting auto-tune.",
+            )
+            return
+        if encoder_resolution <= 0:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid Auto-Tune Input",
+                "Encoder Resolution must be greater than zero before starting auto-tune.",
+            )
+            return
+
         self.auto_poll_checkbox.setChecked(True)
         self._clear_autotune_capture()
         self.autotune_chart_state_label.setText("Starting auto-tune...")
+        self._set_parameter_status(
+            f"Priming auto-tune inputs: encoder id {encoder_id}, rated current {rated_current:.3f} A, encoder resolution {encoder_resolution:,} counts/rev.",
+            "info",
+        )
+        self._enqueue_motor_parameter_updates(
+            [
+                (MOTOR_PARAM_RATED_CURRENT_RMS, rated_current),
+                (MOTOR_PARAM_ENCODER_ID, float(encoder_id)),
+                (MOTOR_PARAM_ENCODER_RESOLUTION, float(encoder_resolution)),
+            ],
+            "Prime Auto-Tune Motor Inputs",
+        )
         self._enqueue_command(
             Command.CMD_START_AUTOTUNING_T,
             self._build_autotune_payload(),
@@ -9627,6 +10207,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     item = QtWidgets.QTableWidgetItem()
                     table.setItem(index, 2, item)
                 item.setText(f"{value:.6f}")
+        if table is getattr(self, "motor_table", None):
+            self._refresh_autotune_input_review_from_motor_table()
 
     def _clear_trend_history(self) -> None:
         self._trend_buffer.clear()
