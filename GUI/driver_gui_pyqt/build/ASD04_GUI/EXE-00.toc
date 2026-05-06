@@ -67,7 +67,7 @@
  [],
  False,
  False,
- 1777483099,
+ 1778057019,
  [('runw.exe',
    'C:\\Users\\Admin\\Desktop\\FINAL_PROJECT\\repo\\Final_project_HCMUT_Bachelor\\GUI\\driver_gui_pyqt\\.venv\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
    'EXECUTABLE')],

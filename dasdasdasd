@@ -1,0 +1,49 @@
+[33mb6d1be4[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m [Alex] update file thesis report
+[33m8b89ffe[m [Alex] update Thesis Defense Markdown, build GUI exe
+[33m5db9498[m [Alex] update build exe file GUI
+[33mf8e3c09[m [Alex] update J/B estimation, update file markdown
+[33m77898e7[m [Alex] update GUI UI/UX, table init parameter AutoTune (At least)
+[33m784a477[m [Alex] fix bug GUI parser position data
+[33mc8ac915[m [Alex] try debuging low speed--> conclude use LPF
+[33m75caea3[m [Alex] update tracescope --> edit deadband position loop
+[33m118d3eb[m [Alex] update VFF sign
+[33m16e5f0d[m [Alex] update UI/UX Tracescope, finalize lowspeed
+[33m1694d80[m [Alex] update UI/UX Tracescope --> on going debuging low speed
+[33m13e1dcb[m [Alex] update GUI UI/UX
+[33m64f7c2f[m [Alex] update Uerror characterization, change logic reset gIdPi --> improve performance at low speed
+[33m1b44834[m [Alex] fix bug Ld Lq decouling Id miss align, update characterize Uerror V1
+[33mfe8f30b[m [Alex] fix bug Ld Lq decouling Id miss align, update characterize Uerror V1
+[33m2021a91[m [Alex] fix bug UI Autotuning mode --> know a rootcause about Rs estimate
+[33m616391d[m [Alex] feat(autotune): align D-axis flow and expose full tuning results in GUI
+[33m6387add[m [Alex] feat(autotune): align D-axis flow and expose full tuning results in GUI
+[33m41013e2[m [Alex] update speed loop mode test with 4 mode heheh, optimize UI/UX, still need fix bug run back and forth
+[33mb6b8b93[m [Alex] update speed loop mode test with 4 mode heheh, optimize UI/UX, still need fix bug run back and forth
+[33m9d62067[m [Alex] update speed loop mode test with 4 mode heheh
+[33m239e0a1[m [Alex] update mode multi turn position, update hythersis for stable zero point position control, optimize GUI UX and add .gitignore
+[33m7f83aa4[m [Alex] update mode multi turn position, update hythersis for stable zero point position control, optimize GUI UX and add .gitignore
+[33me70e075[m [Alex] add PI position loop, add Feedforward algorithm, optimize UX position loop --> on going test more --> to Autotuning
+[33m93fa73a[m [Alex] add PI position loop, add Feedforward algorithm, optimize UX position loop --> on going test more --> to Autotuning
+[33m5a94ccc[m [Alex] fix bug GUI, optimize report mode
+[33m1905c50[m [Alex] update report generator mode, fix bug tunning Id (button apply PI gain wrong logic, remove and cleanup unused mode
+[33m2adda2f[m [Alex] fix bug convention frame DQ --> now can control speed loop! ---> finish position loop
+[33m1bafabe[m [Alex] fix bug convention frame DQ --> now can control speed loop!
+[33mcb68e56[m [Alex] fix bug convention frame DQ --> now can control speed loop!
+[33m4e70746[m [Alex] fine tune offset driver -90.05 degree
+[33m68b1204[m [Alex] update debug manual, edit theta same directions with encoder single turn, edit Id to generate DC not square wave, add global control theta
+[33m334e3a7[m [Alex] update debug manual, edit theta same directions with encoder single turn, edit Id to generate DC not square wave, add global control theta
+[33m090813b[m [Alex] update position control loop, fine tune GUI, enhance UI/UX --> on going AutoTuning
+[33m8b7db3f[m [Alex] clean up after finish speed loop FOC control
+[33m6f1f5a1[m [Alex] update speed control --> decoupling offset --> leakage PI after calib offset ADC
+[33m73d2ad8[m [Alex] update optimize tunning Id, add deadbench for OC bugs, handle apply tunning ID current, apply change for speed loop
+[33m9f1f15f[m [Alex] update optimize tunning Id, add deadbench for OC bugs, handle apply tunning ID current, apply change for speed loop
+[33m97b81a5[m [ALex] update comment code for clarification
+[33maf18758[m [Alex] update state allignment encoder offset, optimize GUI display
+[33mf7e144a[m [Alex] update fix bug pole pairs, fix bug wrong ISR frequency
+[33mf195d1c[m [Alex] update handle fail calib, edit GUI function and optimize visualization
+[33m2e33585[m [Alex] update handle fail calib, edit GUI function and optimize visualization
+[33mb9777a7[m [Alex] udpdate tunning Id function, fix bug PI controller, fix bug Parke Clarke --> wait for encoder attach, update GUI function
+[33me5fb2e1[m [Alex] update GUI, control V/F, state machine basic
+[33m02b5e0e[m [Alex] update GUI folder and parameter read FPGA
+[33m4b0f4c6[m [Alex] update control V/f
+[33m2e91ce9[m [Alex] update simulink file FOC control and Autotuning
+[33ma747c87[m [Alex] update read Vdc, temp Iabc from FPGA

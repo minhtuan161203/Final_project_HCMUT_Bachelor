@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Chuong 6 - Firmware va phan mem</title>
+<style>
+  @page {
+    size: A4;
+    margin: 2.5cm 2.2cm 2.2cm 3.0cm;
+  }
+  body {
+    font-family: "Times New Roman", serif;
+    font-size: 13.5pt;
+    line-height: 1.45;
+    color: #111;
+  }
+  .title {
+    text-align: center;
+    font-size: 20pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin: 10pt 0 12pt 0;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 12pt;
+    color: #555;
+    margin: 0 0 18pt 0;
+  }
+  h1 {
+    font-size: 16pt;
+    margin: 18pt 0 8pt 0;
+    color: #15395b;
+  }
+  h2 {
+    font-size: 14pt;
+    margin: 14pt 0 6pt 0;
+    color: #204d74;
+  }
+  h3 {
+    font-size: 13pt;
+    margin: 12pt 0 6pt 0;
+    color: #2b2b2b;
+  }
+  p {
+    margin: 0 0 8pt 0;
+    text-align: justify;
+  }
+  ul, ol {
+    margin: 0 0 10pt 24pt;
+  }
+  li {
+    margin: 0 0 4pt 0;
+  }
+  .lead {
+    border-left: 4px solid #244e78;
+    background: #f3f7fb;
+    padding: 10pt 12pt;
+    margin: 12pt 0 14pt 0;
+  }
+  .figure-note {
+    font-style: italic;
+    text-align: center;
+    color: #666;
+    border: 1px dashed #9aa9b5;
+    background: #fbfcfd;
+    padding: 8pt 10pt;
+    margin: 10pt 0 14pt 0;
+  }
+  .equation {
+    text-align: center;
+    font-style: italic;
+    margin: 8pt 0 10pt 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10pt 0 14pt 0;
+    font-size: 12pt;
+  }
+  th, td {
+    border: 1px solid #657786;
+    padding: 6pt 7pt;
+    vertical-align: top;
+  }
+  th {
+    background: #e9f0f6;
+    text-align: center;
+    font-weight: 700;
+  }
+  .small {
+    font-size: 11pt;
+    color: #555;
+  }
+  .caption {
+    text-align: center;
+    font-style: italic;
+    margin-top: -4pt;
+    margin-bottom: 10pt;
+  }
+</style>
+</head>
+<body>
+  <div class="title">Chương 6: Lập Trình Firmware Và Thiết Kế Phần Mềm Cho Bộ Điều Khiển</div>
+  <div class="subtitle">Bản nội dung dựa trên firmware và GUI hiện đang có trong repo triển khai</div>
+
+  <div class="lead">
+    <p>Chương này trình bày cấu trúc phần mềm của bộ điều khiển servo ASD04 trên cả hai phía: firmware chạy trên vi điều khiển STM32 và phần mềm commissioning chạy trên máy tính. Khác với bố cục mẫu của các phiên bản luận văn trước, nội dung trong chương này được xây dựng trực tiếp từ implementation hiện tại của repo, trong đó luồng thời gian thực 16 kHz, lớp giao tiếp FPGA, state machine <b>ENCODER_ALIGN</b>, các bài commissioning nâng cao và GUI Python mới là những điểm trung tâm cần được mô tả đúng với hiện trạng hệ thống.</p>
+  </div>
+
+  <h1>6.1. Chương trình firmware điều khiển động cơ</h1>
+  <p>Firmware hiện tại được tổ chức theo hướng tách biệt giữa phần xử lý thời gian thực và phần dịch vụ nền. Các tác vụ đòi hỏi tính xác định cao như đọc phản hồi dòng điện, cập nhật vị trí encoder, kiểm tra lỗi nhanh, chạy FOC và auto-tune được thực hiện trong ngắt 16 kHz. Ngược lại, các tác vụ giao tiếp như nhận lệnh từ PC, xử lý frame USB và phát gói monitor được đặt trong vòng lặp <i>while(1)</i>. Cách tổ chức này giúp giữ cho vòng điều khiển dòng có chu kỳ ổn định, đồng thời vẫn duy trì được các chức năng cấu hình và giám sát ở mức ứng dụng.</p>
+  <p>Xét theo mặt chức năng, các mô-đun quan trọng nhất của firmware gồm có:</p>
+  <ul>
+    <li><b>main.c</b>: khởi tạo ngoại vi, quản lý vòng đời hệ thống, xử lý ngắt 16 kHz và gọi các khối điều khiển chính.</li>
+    <li><b>StateMachine.c / StateMachine.h</b>: quản lý máy trạng thái vận hành của bộ điều khiển và luật chuyển trạng thái khi có lệnh hoặc có lỗi.</li>
+    <li><b>Parameter.c</b>: giải mã dữ liệu encoder, tính toán vị trí, tốc độ, góc điện và cập nhật các đại lượng đo cho thuật toán điều khiển.</li>
+    <li><b>USBComunication.c</b>: xử lý giao thức truyền thông USB CDC, bộ đệm vòng, CRC, phân rã frame và dispatch command.</li>
+    <li><b>motor_autotune.c</b>: thực hiện state machine ước lượng tham số động cơ và tính toán các hệ số tuning.</li>
+  </ul>
+
+  <div class="figure-note">Gợi ý chèn Hình 6.1: Kiến trúc tổng quát firmware hiện tại gồm FPGA front-end, vi điều khiển STM32, nghịch lưu công suất, encoder và GUI commissioning trên PC.</div>
+
+  <h2>6.1.1. Cấu hình ngoại vi và tổ chức nền tảng phần cứng</h2>
+  <p>Trong hàm <i>main</i>, firmware lần lượt khởi tạo các ngoại vi <b>GPIO</b>, <b>TIM8</b>, <b>TIM1</b>, <b>FSMC</b>, <b>USB Device</b> và <b>ADC1</b>. Tuy nhiên, điểm cần nhấn mạnh là kiến trúc đọc đo của phiên bản hiện tại không còn thuần túy dựa trên việc MCU tự lấy mẫu trực tiếp toàn bộ dòng điện và điện áp như ở một số mô hình mẫu cũ. Thay vào đó, hệ thống sử dụng một lớp <b>FPGA front-end</b> để gom dữ liệu dòng, điện áp DC bus, nhiệt độ và chuỗi word từ encoder vào các thanh ghi memory-mapped, sau đó STM32 truy cập các thanh ghi này thông qua bus FSMC.</p>
+  <p>Cụ thể, các thanh ghi như <i>REG_CURRENT_PHASE_U</i>, <i>REG_CURRENT_PHASE_V</i>, <i>REG_DC_BUS_VOLTAGE</i>, <i>REG_TEMPARATURE_SENSOR</i> và dãy <i>REG_ENCODER_RX_WORD0..6</i> được sử dụng liên tục trong đường điều khiển nhanh. Cách làm này mang lại hai lợi ích chính. Thứ nhất, vi điều khiển không phải tự giải quyết toàn bộ gánh nặng lấy mẫu và giải mã encoder nối tiếp ở mức thời gian rất ngắn. Thứ hai, việc đồng bộ hóa dữ liệu đo với xung thời gian điều khiển được gom về một biên kích từ FPGA, nhờ đó chu kỳ điều khiển của firmware trở nên ổn định hơn.</p>
+  <p>TIM8 vẫn là ngoại vi trung tâm để tạo PWM cho bộ nghịch lưu. Firmware vận hành với chu kỳ điều khiển dòng cố định <b>16 kHz</b>, trong khi vòng tốc độ và vòng vị trí được chia tần xuống còn <b>8 kHz</b>. Ngoài vai trò phát PWM, kênh TIM8 channel 4 còn được dùng để tạo tín hiệu đồng bộ phục vụ lớp FPGA, bảo đảm nhịp đo và nhịp điều khiển không bị trôi nhau. Khi khởi động, firmware còn ghi mã encoder hiện hành vào thanh ghi <i>REG_ENCODER_ID</i> để FPGA chọn đúng bộ giải mã phù hợp với profile motor đang dùng.</p>
+  <p>ADC1 vẫn được khởi tạo trong project, nhưng dữ liệu dùng trong vòng điều khiển nhanh hiện tại chủ yếu đến từ FPGA. Do đó, khi mô tả firmware trong luận văn, cần nêu rõ rằng đường phản hồi chính của bộ điều khiển là <b>FPGA-backed measurement path</b>, thay vì mô tả đơn giản là “ADC MCU đọc trực tiếp dòng pha và điện áp bus”. Đây là khác biệt kiến trúc quan trọng so với format tham khảo cũ.</p>
+
+  <h2>6.1.2. Máy trạng thái điều khiển chính</h2>
+  <p>Firmware sử dụng máy trạng thái hữu hạn để điều phối quá trình khởi động, vận hành, dừng và xử lý lỗi. Trong implementation hiện tại, các trạng thái chính gồm <b>IDLE</b>, <b>OFFSET_CALIB</b>, <b>ENCODER_ALIGN</b>, <b>START</b>, <b>RUN</b>, <b>STOP</b>, <b>FAULT_NOW</b> và <b>FAULT_OVER</b>. So với sơ đồ tham khảo cũ, state <b>ENCODER_ALIGN</b> là một bổ sung quan trọng vì quá trình chụp zero điện encoder được tách ra thành một bước rõ ràng, không còn ẩn trong một thủ tục commutation chung.</p>
+  <p>Luồng vận hành cơ bản của hệ thống như sau. Khi bộ điều khiển ở trạng thái <b>IDLE</b> và nhận lệnh <b>Servo ON</b>, máy trạng thái chuyển sang <b>OFFSET_CALIB</b> để cân chỉnh zero cho cảm biến dòng. Sau khi việc cân chỉnh hoàn tất, firmware kiểm tra policy alignment đang áp dụng. Nếu đây là encoder incremental hoặc người dùng chủ động yêu cầu chạy lại alignment, hệ thống chuyển sang <b>ENCODER_ALIGN</b> để bơm dòng trục d, giữ rotor và chụp giá trị <i>Offset_Enc</i>. Ngược lại, nếu offset đã hợp lệ và không cần align lại, hệ thống chuyển trực tiếp sang <b>START</b>, bật nghịch lưu và sau đó sang <b>RUN</b>.</p>
+  <p>Khi đang ở <b>RUN</b>, driver có thể hoạt động ở nhiều chế độ logic khác nhau thông qua biến <i>gRunMode</i>, ví dụ FOC kín, open-loop V/F, alignment-only, auto-tune hoặc Uerror characterization. Tuy nhiên, ở góc nhìn state machine cấp hệ thống, tất cả các chế độ đó vẫn cùng nằm trong trạng thái <b>RUN</b>; tức là machine điều khiển chính quản lý vòng đời an toàn của driver, còn <i>gRunMode</i> quyết định thuật toán nào sẽ được chạy trong khung thời gian thực.</p>
+  <p>Nếu có lỗi xảy ra ở bất kỳ thời điểm nào, đặc biệt là quá dòng, quá áp, điện áp thấp hoặc lỗi nhiệt, quá trình điều khiển sẽ bị chặn ngay và máy trạng thái nhảy sang <b>FAULT_NOW</b>. Sau khi điều kiện lỗi không còn, hệ thống chuyển sang <b>FAULT_OVER</b> và chờ lệnh xác nhận <b>Fault ACK</b> từ PC trước khi cho phép quay về <b>IDLE</b>. Cơ chế này giúp tránh trường hợp driver tự khởi động lại ngoài ý muốn ngay sau khi lỗi vừa biến mất.</p>
+
+  <table>
+    <tr>
+      <th style="width: 28%;">Trạng thái</th>
+      <th>Mô tả trong firmware hiện tại</th>
+    </tr>
+    <tr>
+      <td><b>IDLE</b></td>
+      <td>Tắt PWM công suất, reset các cờ vận hành và chờ lệnh mới từ PC.</td>
+    </tr>
+    <tr>
+      <td><b>OFFSET_CALIB</b></td>
+      <td>Đặt duty 50% để dòng qua cuộn dây gần bằng không, sau đó tính offset cảm biến dòng trong nhiều mẫu liên tiếp.</td>
+    </tr>
+    <tr>
+      <td><b>ENCODER_ALIGN</b></td>
+      <td>Thực hiện căn chỉnh zero điện encoder, chụp <i>Offset_Enc</i> và cập nhật trạng thái alignment để GUI theo dõi.</td>
+    </tr>
+    <tr>
+      <td><b>START</b></td>
+      <td>Bật phần công suất, reset bộ điều khiển và chuẩn bị bước chuyển sang trạng thái chạy.</td>
+    </tr>
+    <tr>
+      <td><b>RUN</b></td>
+      <td>Thực thi FOC kín, open-loop V/F, auto-tune, Uerror characterization hoặc các bài test commissioning khác tùy theo <i>gRunMode</i>.</td>
+    </tr>
+    <tr>
+      <td><b>STOP</b></td>
+      <td>Dừng điều khiển, hủy các bài test đang chạy, reset bộ PI và trả hệ thống về điều kiện an toàn trước khi về IDLE.</td>
+    </tr>
+    <tr>
+      <td><b>FAULT_NOW</b></td>
+      <td>Ngắt PWM tức thời khi lỗi còn tồn tại; giữ driver ở trạng thái bảo vệ.</td>
+    </tr>
+    <tr>
+      <td><b>FAULT_OVER</b></td>
+      <td>Lỗi vật lý đã hết nhưng hệ thống chưa được người dùng xác nhận reset.</td>
+    </tr>
+  </table>
+  <div class="caption">Bảng 6.1. Các trạng thái chính của firmware điều khiển</div>
+
+  <table>
+    <tr>
+      <th style="width: 28%;">Run Mode</th>
+      <th>Ý nghĩa</th>
+    </tr>
+    <tr>
+      <td><b>RUN_MODE_FOC</b></td>
+      <td>Điều khiển FOC kín và các bài test đặt tốc độ/vị trí thông thường.</td>
+    </tr>
+    <tr>
+      <td><b>RUN_MODE_OPEN_LOOP_VF</b></td>
+      <td>Quay hở từ trường stator theo điện áp - tần số đặt trước, phục vụ khảo sát chiều và các phép thử không phụ thuộc vòng kín.</td>
+    </tr>
+    <tr>
+      <td><b>RUN_MODE_ALIGNMENT_ONLY</b></td>
+      <td>Chỉ chạy quy trình alignment encoder mà không phát lệnh chuyển động FOC kín.</td>
+    </tr>
+    <tr>
+      <td><b>RUN_MODE_AUTOTUNE</b></td>
+      <td>Thực hiện state machine ước lượng thông số và tính gain tự động.</td>
+    </tr>
+    <tr>
+      <td><b>RUN_MODE_UERROR_CHARACTERIZATION</b></td>
+      <td>Khảo sát sai số điện áp nghịch lưu để xây dựng LUT bù phi tuyến.</td>
+    </tr>
+  </table>
+  <div class="caption">Bảng 6.2. Các chế độ chạy logic bên trong trạng thái RUN</div>
+
+  <div class="figure-note">Gợi ý chèn Hình 6.2: Sơ đồ máy trạng thái hiện tại của firmware với nhánh Servo ON, ENCODER_ALIGN và FAULT processing.</div>
+
+  <h2>6.1.3. Vòng điều khiển thời gian thực 16 kHz</h2>
+  <p>Vòng điều khiển nhanh của firmware không được kích hoạt bởi callback ADC theo kiểu truyền thống, mà được chạy trong hàm <i>HAL_GPIO_EXTI_Callback</i> khi xuất hiện cạnh ngắt từ chân <i>iMeasureIsr</i>. Nói cách khác, FPGA đóng vai trò phát nhịp điều khiển 16 kHz và STM32 bám theo nhịp này để thực hiện toàn bộ chuỗi tác vụ thời gian thực. Cách tổ chức như vậy rất phù hợp với kiến trúc đang dùng, vì dữ liệu đo cũng đã được FPGA gom sẵn vào vùng nhớ chia sẻ.</p>
+  <p>Ở mỗi chu kỳ ngắt, firmware thực hiện các công việc theo thứ tự chính sau đây:</p>
+  <ol>
+    <li>Đọc phản hồi bảo vệ nhanh từ FPGA, bao gồm điện áp DC bus, dòng pha U/V và nhiệt độ.</li>
+    <li>Kiểm tra các lỗi bảo vệ tốc độ cao như quá áp, điện áp thấp, nhiệt độ và quá dòng.</li>
+    <li>Đọc dữ liệu encoder theo profile đang chọn, tính <i>DeltaPos</i>, cập nhật vị trí và tốc độ cơ.</li>
+    <li>Tính góc điện <i>fTheta</i> từ encoder resolution, số cặp cực, hướng điện và <i>Offset_Enc</i>.</li>
+    <li>Xét trạng thái hiện tại của machine để quyết định đang ở chế độ calib offset dòng, encoder alignment, FOC, open-loop V/F, auto-tune hay Uerror characterization.</li>
+    <li>Thực hiện khối điều khiển tương ứng và phát duty PWM mới cho nghịch lưu.</li>
+    <li>Nếu có yêu cầu trace, cập nhật bộ đệm thu thập dữ liệu để gửi lên GUI.</li>
+  </ol>
+  <p>Trong nhánh FOC kín, firmware sử dụng biến đổi Clarke/Park để đổi dòng pha sang hệ trục <i>dq</i>, sau đó dùng các bộ PI cho dòng <i>I<sub>d</sub></i> và <i>I<sub>q</sub></i>. Đối với bài tuning dòng, góc điều khiển có thể bị ép cố định về <i>0 rad</i> hoặc bị dịch một góc thử nghiệm nhất định, qua đó cho phép người dùng đánh giá trực tiếp chất lượng alignment và mapping dòng mà không bị ảnh hưởng bởi nhiễu vị trí tức thời của encoder.</p>
+  <p>Vòng tốc độ và vòng vị trí không cần chạy ở tần số 16 kHz. Vì vậy, firmware sử dụng cơ chế chia tần, chỉ cập nhật hai vòng này mỗi hai lần vào ngắt, tương đương khoảng <b>8 kHz</b>. Quyết định này vừa giúp giảm tải tính toán, vừa vẫn đủ nhanh so với động học cơ khí của hệ truyền động. Ngoài ra, nó cũng làm rõ sự phân tầng điều khiển: vòng dòng là vòng nhanh nhất, trong khi vòng tốc độ và vị trí là vòng ngoài với băng thông thấp hơn.</p>
+  <p>Một điểm quan trọng khác là tham số <i>MOTOR_CURRENT_CTRL_DIRECTION</i> và <i>Offset_Enc</i> đều được sử dụng trực tiếp trong khối tính toán vị trí và góc điện. Điều đó có nghĩa là dấu hướng điện và zero điện không phải là các tham số trang trí, mà quyết định trực tiếp việc khung <i>dq</i> quay đúng hay sai. Vì lý do này, firmware tách riêng việc alignment encoder, cho phép người dùng kiểm chứng và lưu offset một cách có chủ đích trước khi đưa motor vào vận hành kín.</p>
+
+  <div class="figure-note">Gợi ý chèn Hình 6.3: Lưu đồ ngắt 16 kHz hiện tại, bắt đầu từ cạnh EXTI của FPGA, qua đọc phản hồi, fault check, cập nhật encoder, FOC/Auto-tune và trace capture.</div>
+
+  <h2>6.1.4. Giao tiếp USB và quản lý tham số</h2>
+  <p>Khối giao tiếp với máy tính được triển khai trong <i>USBComunication.c</i> theo mô hình frame nhị phân có kiểm tra CRC. Mỗi frame dùng các byte điều khiển đặc trưng để nhận biết đầu và cuối khung, cụ thể là <b>STX</b> ở đầu khung, <b>ETX</b> ở cuối khung, kèm theo trường <b>SYN/ACK</b>, trường kích thước, mã lệnh và byte <b>CRC</b>. Cấu trúc này vừa đơn giản, vừa đủ chặt chẽ cho môi trường commissioning cần lặp lại nhiều lần các lệnh đọc/ghi tham số và monitor.</p>
+  <p class="equation">Frame = STX | Code | Size | Command | Payload | CRC | ETX</p>
+  <p>Toàn bộ dữ liệu nhận vào được đẩy trước vào <b>ring buffer</b>. Sau đó, bộ parser trong firmware mới tách dần các frame hoàn chỉnh, kiểm tra CRC rồi gọi hàm dispatch phù hợp. Cách làm này tránh việc phải xử lý từng byte trực tiếp ngay trong callback nhận USB, đồng thời giảm nguy cơ mất frame khi PC gửi liên tiếp các lệnh có payload dài.</p>
+  <p>Từ góc nhìn chức năng, các nhóm lệnh quan trọng nhất hiện nay bao gồm:</p>
+  <ul>
+    <li><b>Lệnh vận hành</b>: Servo ON, Servo OFF, Start/Stop FOC ở chế độ tốc độ hoặc vị trí, Start/Stop open-loop V/F.</li>
+    <li><b>Lệnh commissioning</b>: encoder alignment, current tuning, trace, auto-tune, rotating-theta test, current feedback map test, Uerror characterization.</li>
+    <li><b>Lệnh tham số</b>: đọc/ghi bảng <i>DriverParameter</i>, đọc/ghi bảng <i>MotorParameter</i> và ghi xuống flash.</li>
+    <li><b>Lệnh giám sát</b>: yêu cầu monitor packet, trace packet, autotune chart packet, debug text và dữ liệu LUT/bài khảo sát Uerror.</li>
+  </ul>
+  <p>Về lưu trữ cấu hình, firmware duy trì hai bảng tham số tách biệt: <b>DriverParameter</b> cho các tham số điều khiển cấp driver và <b>MotorParameter</b> cho thông số động cơ, encoder, hướng điện và các hằng số vật lý. Khi khởi động, hệ thống nạp giá trị mặc định, sau đó ghi đè bằng dữ liệu đã lưu trong flash nếu việc đọc flash thành công. Thiết kế này giúp người dùng có thể vừa thay đổi nhanh tham số để thử nghiệm, vừa lưu lại cấu hình ổn định sau khi commissioning hoàn tất.</p>
+  <p>Một số thao tác ghi flash bị chặn khi bộ truyền động vẫn còn đang ở trạng thái chạy. Đây là biện pháp an toàn cần thiết nhằm tránh hiện tượng cập nhật cấu hình đúng lúc bộ nghịch lưu còn đang tạo điện áp, dẫn đến sự không nhất quán giữa tham số điều khiển và trạng thái runtime hiện hành.</p>
+
+  <div class="figure-note">Gợi ý chèn Hình 6.4: Cấu trúc frame truyền thông USB CDC giữa GUI và firmware, gồm STX, code, size, command, payload, CRC và ETX.</div>
+
+  <h2>6.1.5. Các chức năng commissioning tích hợp trong firmware</h2>
+  <p>Bên cạnh FOC cơ bản, firmware hiện tại đã được mở rộng mạnh theo hướng phục vụ commissioning. Điều này thể hiện ở việc nhiều bài test và thủ tục khảo sát được tích hợp trực tiếp vào runtime thay vì tách rời hoàn toàn như các phần mềm tuning truyền thống.</p>
+  <p>Trước hết là khối <b>Encoder Alignment</b>. Firmware hỗ trợ hai policy chính. Với encoder incremental hoặc các profile không giữ vị trí sau mất nguồn, policy mặc định là <b>power-on alignment</b>; tức là sau mỗi lần Servo ON hệ thống sẽ tự đi qua bước chụp offset trước khi cho phép vào RUN. Với encoder absolute, policy có thể chuyển sang <b>manual-save alignment</b>; lúc đó người dùng chỉ chạy alignment khi cần re-commissioning và sau đó lưu <i>Offset_Enc</i> vào flash để dùng lại cho các lần khởi động sau.</p>
+  <p>Tiếp theo là nhóm <b>Id current loop tuning</b>, gồm hai chế độ <i>Alignment Hold</i> và <i>Id Square Wave</i>. Chế độ Alignment Hold dùng để giữ rotor tại trục điện cố định và quan sát xem <i>I<sub>q</sub></i>, <i>V<sub>q</sub></i> có nhỏ hay không; nhờ đó người dùng xác nhận offset điện đã hợp lý. Sau bước đó, chế độ Id Square Wave áp một profile dòng d đối xứng để người dùng điều chỉnh gain PI của vòng dòng theo đáp ứng thực tế đo được trên trace.</p>
+  <p>Firmware cũng hỗ trợ <b>open-loop V/F</b> với tần số điện có dấu, cho phép khảo sát chiều phản ứng của rotor, kiểm tra sơ bộ mapping hướng điện và phục vụ giai đoạn ước lượng số cặp cực trong auto-tune. Các bài test <b>rotating-theta current vector</b>, <b>rotating-theta voltage vector</b> và <b>current feedback map</b> tiếp tục hỗ trợ người phát triển trong việc xác minh khung điện, cực tính dòng và quan hệ giữa tín hiệu phần cứng với phép biến đổi Clarke/Park.</p>
+  <p>Một tính năng nâng cao khác là <b>Uerror characterization</b>. Bài khảo sát này thu thập sai số điện áp có hiệu lực của nghịch lưu theo nhiều mức dòng khác nhau, sau đó sinh ra một bảng tra cứu LUT để bù phi tuyến do dead time và các méo công suất. LUT sau khi được xác nhận có thể được ghi xuống flash và tái sử dụng ở các phiên chạy sau.</p>
+
+  <h1>6.2. Phần mềm commissioning và tuning trên máy tính</h1>
+  <p>Phần mềm PC của repo hiện tại không còn đi theo hướng một ứng dụng Qt C++ kiểu cũ, mà đã được phát triển lại thành một <b>desktop commissioning GUI bằng Python</b>. Ứng dụng hỗ trợ cả <b>PyQt6</b> lẫn <b>PySide6</b>, giao tiếp với driver thông qua cổng serial/USB CDC, và được tổ chức lại theo workflow commissioning thực tế thay vì chỉ gom tất cả cửa sổ chỉnh tham số vào một cây chức năng lớn.</p>
+  <div class="figure-note">Gợi ý chèn Hình 6.5: Kiến trúc software PC hiện tại gồm giao diện Qt, luồng SerialWorker, parser frame và các cửa sổ monitor/commissioning/snapshot/log.</div>
+
+  <h2>6.2.1. Kiến trúc phần mềm và luồng truyền nhận</h2>
+  <p>Kiến trúc phần mềm được chia thành ba lớp chính. Lớp giao diện người dùng nằm trong <i>main.py</i> dưới dạng một <i>QMainWindow</i> và nhiều dialog phục vụ monitor, commissioning, trend chart và snapshot. Lớp giao thức truyền thông nằm trong <i>protocol.py</i>, nơi định nghĩa toàn bộ mã lệnh, mã update packet, cấu trúc frame, logic CRC và parser dữ liệu monitor/trace/autotune. Cuối cùng, lớp vận chuyển nối tiếp nằm trong <i>transport.py</i> với đối tượng <b>SerialWorker</b> chạy nền trên <i>QThread</i>.</p>
+  <p>SerialWorker mở cổng serial ở cấu hình mặc định <b>115200 baud, 8N1</b>, sau đó thực hiện hai nhiệm vụ song song: rút dữ liệu từ hàng đợi TX để gửi lệnh xuống driver, và liên tục đọc byte từ cổng COM để ghép lại thành frame hoàn chỉnh. Nhờ có worker thread riêng, phần giao diện chính không bị block khi đường truyền tạm thời chậm hoặc khi firmware đang trả về một lượng dữ liệu trace lớn.</p>
+  <p>Ở phía parser, GUI sử dụng cùng cấu trúc <b>STX - SYN/ACK - Size - Payload - CRC - ETX</b> như firmware. Việc tái sử dụng đúng logic CRC của firmware và ứng dụng legacy giúp giảm đáng kể nguy cơ lệch chuẩn giao thức. Đồng thời, mỗi frame TX/RX đều được ghi lại dưới dạng hexdump trong cửa sổ log, rất thuận tiện cho việc debug khi một lệnh commissioning mới được bổ sung hoặc khi cần đối chiếu lỗi parser giữa hai phía.</p>
+  <p>GUI cũng duy trì một <b>monitor timer</b> định kỳ để poll dữ liệu trạng thái từ firmware. Chu kỳ mặc định hiện tại là khoảng <b>250 ms</b>, đủ nhanh để theo dõi tình trạng alignment, fault, tốc độ, dòng điện và tiến trình auto-tune ở mức commissioning, nhưng vẫn không gây quá tải đường truyền.</p>
+
+  <h2>6.2.2. Các nhóm giao diện và chức năng chính</h2>
+  <p>Điểm mạnh của phần mềm PC hiện tại là giao diện được tổ chức lại theo các nhiệm vụ commissioning thực tế, thay vì chỉ phản chiếu cấu trúc biến nội bộ của firmware. Các cửa sổ và nhóm chức năng quan trọng nhất có thể tóm tắt như trong Bảng 6.3.</p>
+
+  <table>
+    <tr>
+      <th style="width: 32%;">Nhóm chức năng / cửa sổ</th>
+      <th>Mục đích sử dụng</th>
+    </tr>
+    <tr>
+      <td><b>Connection</b> và <b>Drive Monitor</b></td>
+      <td>Kết nối cổng COM, bật/tắt auto monitor, hiển thị nhanh servo state, run mode, fault, dòng, điện áp, tốc độ và trạng thái alignment.</td>
+    </tr>
+    <tr>
+      <td><b>Alarm Status</b> và <b>Alarm History</b></td>
+      <td>Thông báo lỗi đang hoạt động, lưu lịch sử fault, cho phép gửi lệnh reset fault từ GUI.</td>
+    </tr>
+    <tr>
+      <td><b>FOC Control</b></td>
+      <td>Thiết lập target tốc độ hoặc vị trí, gain vòng tốc độ/vị trí, ramp và gửi lệnh Start FOC sau khi servo đã được arm an toàn.</td>
+    </tr>
+    <tr>
+      <td><b>Speed Test Mode</b></td>
+      <td>Chạy các chuỗi kiểm thử tốc độ lặp lại, sử dụng cấu hình FOC hiện hành để khảo sát đáp ứng động học.</td>
+    </tr>
+    <tr>
+      <td><b>Position Validation Suite</b></td>
+      <td>Thiết lập và chạy các profile xác minh vị trí single-turn hoặc multi-turn, dùng để đánh giá chất lượng tracking sau tuning.</td>
+    </tr>
+    <tr>
+      <td><b>Trend Charts</b></td>
+      <td>Vẽ đồ thị monitor tốc độ thấp theo thời gian cho dòng, điện áp trục <i>dq</i>, tốc độ và các đại lượng commissioning quan trọng.</td>
+    </tr>
+    <tr>
+      <td><b>Commissioning / Scope</b></td>
+      <td>Tập trung các workflow nâng cao như Encoder Alignment, Id tuning, Motor Auto-Tune, Trace Scope và Uerror characterization.</td>
+    </tr>
+    <tr>
+      <td><b>Drive Snapshot</b></td>
+      <td>Hiển thị ảnh chụp tức thời của monitor packet và debug text theo cách dễ đọc hơn log thô.</td>
+    </tr>
+    <tr>
+      <td><b>Communication Log</b></td>
+      <td>Lưu lại toàn bộ frame TX/RX ở dạng hex để phân tích giao thức và tái hiện chuỗi lệnh commissioning.</td>
+    </tr>
+    <tr>
+      <td><b>Parameter Editor</b></td>
+      <td>Đọc/ghi bảng Driver Parameter và Motor Parameter, sau đó lưu cấu hình xuống flash khi commissioning hoàn tất.</td>
+    </tr>
+  </table>
+  <div class="caption">Bảng 6.3. Các nhóm giao diện chính của phần mềm commissioning</div>
+
+  <p>Một chi tiết đáng lưu ý trong workflow GUI hiện tại là <b>Servo ON</b> không đồng nghĩa với việc motor lập tức chạy kín. Nút này chỉ kích hoạt chuỗi arm an toàn của firmware, gồm calib offset dòng và alignment encoder khi cần. Sau khi Driver Monitor báo trạng thái calib và alignment đã hoàn tất, người dùng mới tiếp tục dùng nút <b>Start FOC</b> để gửi cấu hình chế độ vận hành và setpoint thực tế xuống driver. Thiết kế này giảm rủi ro khởi động motor trong khi các điều kiện tiền đề của FOC vẫn chưa đạt.</p>
+
+  <h2>6.2.3. Workflow commissioning được triển khai trong GUI</h2>
+  <p>Thay vì để người dùng tự đoán thứ tự thao tác, GUI hiện tại được xây dựng xoay quanh một quy trình commissioning khá rõ ràng. Một phiên làm việc điển hình có thể được mô tả theo thứ tự sau:</p>
+  <ol>
+    <li>Kết nối cổng COM, đọc lại bộ tham số Driver và Motor từ driver để đồng bộ cấu hình ban đầu.</li>
+    <li>Nhấn <b>Servo ON</b>, sau đó quan sát Driver Monitor cho tới khi current calibration và encoder alignment hoàn tất.</li>
+    <li>Nếu cần căn lại zero điện, chạy <b>Run Encoder Alignment Only</b>; với encoder absolute có thể lưu offset bằng nút <b>Save Offset to Flash</b>.</li>
+    <li>Dùng <b>Alignment Hold</b> để kiểm tra <i>I<sub>q</sub></i> và <i>V<sub>q</sub></i>; sau đó chuyển sang <b>Id Square Wave</b> để tuning PI dòng.</li>
+    <li>Dùng <b>Trace Scope</b>, <b>Trend Charts</b> hoặc <b>Drive Snapshot</b> để đánh giá chi tiết đáp ứng.</li>
+    <li>Khi cần ước lượng tự động, chạy <b>Motor Auto-Tune</b> để đo Rs, Ls, Flux/Ke, số cặp cực, gợi ý hướng điện, J và B.</li>
+    <li>Áp dụng kết quả phù hợp xuống tham số driver/motor, sau đó lưu flash ở trạng thái an toàn.</li>
+  </ol>
+  <p>Việc bố trí GUI theo workflow trên đặc biệt hữu ích cho quá trình bảo vệ luận văn, vì nó chứng minh rằng phần mềm PC không chỉ là một công cụ “đọc ghi biến” mà thực sự đã được thiết kế để giảm lỗi thao tác trong commissioning. Các bước an toàn như chờ alignment xong rồi mới Start FOC, hoặc tách riêng nút <i>Save Offset to Flash</i>, đều phản ánh đúng logic của firmware phía dưới.</p>
+
+  <h2>6.2.4. Hỗ trợ auto-tune và commissioning nâng cao</h2>
+  <p>Trong cửa sổ <b>Commissioning / Scope</b>, tab <b>Motor Auto-Tune</b> là nơi giao nhau giữa firmware và GUI rõ ràng nhất. GUI cho phép người dùng cấu hình trực tiếp các tham số chính của bài auto-tune, bao gồm hai mức dòng ước lượng Rs, mức điện áp và tần số cho bài Ls, điện áp và tần số cho bài Flux, cùng ba bandwidth mục tiêu cho các vòng current, speed và position. Các tham số kích thích cơ khí chuyên sâu như biên độ <i>I<sub>q</sub></i> cho bài J/B hiện vẫn được giữ ở mức mặc định trong firmware để giảm bớt số lượng ô nhập liệu mà người dùng cần quan tâm.</p>
+  <p>Trong quá trình auto-tune, GUI hiển thị liên tục trạng thái đang chạy, phần trăm tiến độ, mã lỗi nếu có, các đồ thị khảo sát Rs/Ls và khối kết quả ước lượng. Khối này không chỉ hiển thị <i>Rs</i>, <i>Ls</i>, <i>Flux</i>, <i>K<sub>e</sub></i>, <i>J</i>, <i>B</i> và số cặp cực, mà còn hiển thị thêm <b>Estimated Direction</b> như một gợi ý cho dấu hướng điện của hệ thống.</p>
+  <p>Một quyết định thiết kế quan trọng là GUI không trộn thao tác áp dụng gain với thao tác đổi hướng điện. Nút <b>Apply Estimated Gains</b> chỉ ghi các thông số điện, cơ và gain điều khiển; trong khi đó nút <b>Apply Direction Suggestion</b> chỉ ghi duy nhất tham số <i>MOTOR_CURRENT_CTRL_DIRECTION</i>. Việc tách hai thao tác này bảo đảm rằng khi người dùng chỉ muốn nhận các hằng số ước lượng, GUI sẽ không tự ý làm thay đổi cấu hình zero điện hoặc logic chiều quay đã commissioning trước đó.</p>
+  <p>Đối với các phép thử chuyên sâu khác, GUI còn hỗ trợ rotating-theta test, current feedback mapping và Uerror characterization. Những bài này cho phép người phát triển xác minh từng giả thiết trong chuỗi FOC, từ cực tính dòng, khung điện, cho đến mô hình sai số điện áp của nghịch lưu. Đây là dấu hiệu cho thấy phần mềm PC hiện tại đã vượt ra khỏi vai trò một “panel vận hành”, để trở thành một công cụ kỹ thuật thực thụ cho quá trình phát triển driver.</p>
+
+  <h1>6.3. Chương trình ước lượng thông số và auto-tuning</h1>
+  <p>Khối auto-tune của firmware hiện tại được viết lại theo một state machine gọn hơn nhưng bám sát implementation đang chạy. So với sơ đồ 11 trạng thái trong tài liệu tham khảo cũ, state machine mới tập trung vào các đại lượng thực sự được hệ thống đo và sử dụng, gồm <b>Rs</b>, <b>Ls</b>, <b>Flux / Pole Pairs / Direction</b>, <b>J</b> và <b>B</b>. Cách tổ chức này giảm đáng kể phần mã trung gian, đồng thời làm cho dữ liệu gửi lên GUI phản ánh trực tiếp tiến trình tuning đang diễn ra.</p>
+  <div class="figure-note">Gợi ý chèn Hình 6.6: State machine auto-tune hiện tại của firmware gồm các trạng thái RS, LS, FLUX, J, B, DONE và ERROR.</div>
+
+  <table>
+    <tr>
+      <th style="width: 28%;">Trạng thái auto-tune</th>
+      <th>Mục đích chính</th>
+    </tr>
+    <tr>
+      <td><b>IDLE</b></td>
+      <td>Chưa chạy hoặc đã dừng auto-tune.</td>
+    </tr>
+    <tr>
+      <td><b>RS</b></td>
+      <td>Ước lượng điện trở stato ở hai mức dòng và tính gain PI dòng sơ bộ.</td>
+    </tr>
+    <tr>
+      <td><b>LS</b></td>
+      <td>Phun điện áp hình sin để tính điện cảm stato từ trở kháng đo được.</td>
+    </tr>
+    <tr>
+      <td><b>FLUX</b></td>
+      <td>Quay hở theo V/F để suy ra số cặp cực, gợi ý hướng điện và ước lượng Flux/K<sub>e</sub>.</td>
+    </tr>
+    <tr>
+      <td><b>J</b></td>
+      <td>Khảo sát động học bằng kích thích sin trên trục q để ước lượng mô-men quán tính.</td>
+    </tr>
+    <tr>
+      <td><b>B</b></td>
+      <td>Ước lượng ma sát nhớt và tải tương đương bằng hồi quy tuyến tính theo tốc độ.</td>
+    </tr>
+    <tr>
+      <td><b>DONE</b></td>
+      <td>Hoàn tất tính toán, sẵn sàng gửi kết quả và áp dụng gain.</td>
+    </tr>
+    <tr>
+      <td><b>ERROR</b></td>
+      <td>Dừng do overcurrent, stall, invalid config hoặc estimation failure.</td>
+    </tr>
+  </table>
+  <div class="caption">Bảng 6.4. Các trạng thái của state machine auto-tune hiện tại</div>
+
+  <h2>6.3.1. Ước lượng điện trở và điện cảm stato</h2>
+  <p>Hai trạng thái đầu tiên của auto-tune tập trung vào tham số điện của động cơ. Ở trạng thái <b>RS</b>, firmware dùng vòng current-loop để ép dòng trục d tới hai mức cấu hình khác nhau. Giá trị điện áp điều khiển và dòng đo được được tích lũy, sau đó lấy trung bình để suy ra điện trở stato. Việc dùng hai mức dòng thay vì chỉ một mức giúp tăng độ tin cậy trong điều kiện điện áp rất nhỏ hoặc cảm biến dòng còn nhiễu.</p>
+  <p>Sau khi có Rs, hệ thống chuyển sang trạng thái <b>LS</b>. Tại đây, firmware áp một điện áp điều hòa lên trục d, đo biên độ dòng sinh ra và tính trở kháng tổng. Thành phần điện cảm được rút ra từ phần phản kháng của trở kháng sau khi đã trừ đi phần điện trở đã đo ở bước trước. Kết quả Ls được dùng ngay để cập nhật gain PI cho vòng dòng, tạo nền tảng cho các giai đoạn về sau vốn phụ thuộc vào việc tách dòng <i>dq</i> tương đối chính xác.</p>
+
+  <h2>6.3.2. Ước lượng Flux, số cặp cực và gợi ý hướng điện</h2>
+  <p>Giai đoạn <b>FLUX</b> là nơi firmware kết hợp nhiều nhiệm vụ trong cùng một bài thử open-loop V/F. Trước hết, hệ thống cưỡng bức từ trường stator quay chậm với tần số điện và biên độ điện áp đã biết. Trong khi đó, firmware đọc encoder để đo lượng quay cơ tương ứng. Từ đây, số cặp cực được suy ra theo tỉ số giữa số vòng điện lệnh và số vòng cơ đo được:</p>
+  <p class="equation">n<sub>p</sub> = |ΔN<sub>e</sub> / ΔN<sub>m</sub>|</p>
+  <p>Điểm mới của implementation hiện tại là firmware không bỏ đi thông tin dấu của lượng quay encoder. Thay vì chỉ quan tâm đến trị tuyệt đối để lấy <i>n<sub>p</sub></i>, khối auto-tune còn theo dõi độ dời của <b>encoder raw</b> chưa qua xử lý đảo dấu bởi <i>MOTOR_CURRENT_CTRL_DIRECTION</i>. Nhờ đó, nếu cùng một lệnh quay điện dương mà encoder raw tăng lên, hệ thống có thể gợi ý một chiều direction; còn nếu encoder raw giảm xuống, hệ thống sẽ gợi ý chiều ngược lại. Nói cách khác, cùng một bài thử open-loop giờ cho ra đồng thời cả <b>độ lớn tỉ lệ điện/cơ</b> và <b>dấu hướng điện</b>.</p>
+  <p>Sau khi hoàn tất suy luận số cặp cực và direction suggestion, auto-tune tiếp tục dùng giai đoạn V/F ổn định để lấy trung bình điện áp pha, dòng pha và tốc độ. Từ các giá trị RMS này, firmware ước lượng <b>Flux</b> và hằng số <b>K<sub>e</sub></b>. Kết quả này về sau được dùng để tính hằng số mô-men, là đại lượng đầu vào cho các bước ước lượng cơ học.</p>
+  <p>Cần nhấn mạnh rằng trong phiên bản hiện tại, direction chỉ được gửi lên GUI như một <b>suggestion</b>. Nó không tự động ghi đè offset điện đã commissioning. Đây là quyết định kỹ thuật có chủ đích nhằm không phá vỡ cấu hình <i>Offset_Enc</i> mà người dùng đã xác nhận là vận hành ổn định.</p>
+
+  <h2>6.3.3. Ước lượng mô-men quán tính J và ma sát nhớt B</h2>
+  <p>Sau khi đã có số cặp cực và Flux, firmware tính được xấp xỉ hằng số mô-men theo quan hệ:</p>
+  <p class="equation">K<sub>t</sub> = 1.5 · n<sub>p</sub> · Φ</p>
+  <p>Ở trạng thái <b>J</b>, hệ thống áp một kích thích sin lên dòng <i>I<sub>q</sub></i>, từ đó tạo ra mô-men sin trên rotor. Firmware lọc tốc độ, tính gia tốc và theo dõi các lần qua điểm zero của vận tốc để tạo các cửa sổ quan sát lặp lại. Trong từng cửa sổ, mô-men điện từ và gia tốc được tích lũy theo thời gian để ước lượng mô-men quán tính <i>J</i> một cách bền vững hơn so với việc lấy sai phân tức thời vốn rất nhiễu.</p>
+  <p>Ở trạng thái <b>B</b>, firmware tiếp tục sử dụng cùng dạng kích thích cơ khí nhưng chuyển sang bài toán hồi quy. Sau khi trừ đi thành phần quán tính <i>J·ω̇</i> khỏi mô-men đã hiệu chỉnh dấu, phần còn lại được xem là tổ hợp của ma sát nhớt và tải cản gần đúng. Bằng cách hồi quy đại lượng này theo tốc độ, firmware thu được hệ số ma sát nhớt <i>B</i> và một thành phần tải tương đương. Đây là bước giúp biến các đại lượng đo vật lý thành tham số có thể dùng trực tiếp cho thiết kế vòng tốc độ và vòng vị trí.</p>
+
+  <h2>6.3.4. Tính gain điều khiển và chính sách áp dụng kết quả</h2>
+  <p>Dựa trên Rs, Ls, Flux, J và B vừa đo được, firmware tính ra các gain current, speed và position theo bandwidth mục tiêu do người dùng cấu hình từ GUI. Ở chiều ngược lại, GUI không ghi toàn bộ dữ liệu một cách mù quáng. Kết quả auto-tune được chia thành hai nhóm áp dụng:</p>
+  <ul>
+    <li><b>Nhóm gain và thông số vật lý</b>: bao gồm Rs, Ls, K<sub>e</sub>, J, B, số cặp cực và các gain current/speed/position. Nhóm này được áp dụng bởi nút <i>Apply Estimated Gains</i>.</li>
+    <li><b>Nhóm hướng điện</b>: chỉ gồm tham số <i>MOTOR_CURRENT_CTRL_DIRECTION</i>. Nhóm này được áp dụng bởi nút <i>Apply Direction Suggestion</i> riêng biệt.</li>
+  </ul>
+  <p>Cách tách này là rất quan trọng. Nó cho phép quá trình tuning tự động trở nên hữu ích hơn mà vẫn không can thiệp vào <i>Offset_Enc</i> đang được dùng ổn định. Nếu người dùng chủ động đổi direction, họ có thể tự quyết định có cần chạy lại bước alignment hoặc tối thiểu là bước xác minh alignment hold hay không. Về mặt thực hành, đây là một chính sách an toàn hơn nhiều so với việc auto-tune tự động thay đổi đồng thời cả sign lẫn zero điện.</p>
+
+  <h1>6.4. Nhận xét về kiến trúc firmware và phần mềm hiện tại</h1>
+  <p>Từ góc nhìn hệ thống, kiến trúc phần mềm hiện tại đã hình thành được một chuỗi tương đối hoàn chỉnh từ thu thập dữ liệu, điều khiển thời gian thực, giao tiếp commissioning cho tới tự động ước lượng tham số. Một trong những điểm mạnh rõ rệt nhất là sự phân tầng hợp lý giữa ba lớp: <b>FPGA front-end</b> lo phần thu nhận và giải mã mức thấp, <b>firmware STM32</b> đảm nhiệm bảo vệ và điều khiển động cơ, còn <b>GUI Python</b> tổ chức workflow commissioning ở mức người dùng.</p>
+  <p>Việc tách riêng state <b>ENCODER_ALIGN</b>, duy trì logic <b>Servo ON chỉ arm hệ thống</b>, và phát triển thêm các bài khảo sát như trace scope, rotating-theta test và Uerror characterization cho thấy phần mềm không chỉ dừng ở mức “làm cho motor quay được”, mà đã tiến gần hơn tới một công cụ driver engineering có quy trình rõ ràng. Đặc biệt, state machine auto-tune mới đã loại bỏ được nhiều phần mô tả không còn đúng với code cũ và thay bằng các bước gắn trực tiếp với implementation đang chạy.</p>
+  <p>Ở phía GUI, việc chuyển từ tư duy “cây chức năng” sang tư duy “workflow commissioning” là một cải tiến đáng kể. Người dùng được dẫn dắt qua các bước đúng thứ tự: arm hệ thống, kiểm tra alignment, tuning dòng, chạy auto-tune, xác minh monitor/trace, sau đó mới ghi flash. Điều này không chỉ giúp thao tác nhanh hơn mà còn giảm đáng kể nguy cơ tạo ra cấu hình không nhất quán giữa firmware runtime và tham số lưu trữ.</p>
+  <p>Tóm lại, firmware và phần mềm PC trong repo hiện tại đã tạo thành một nền tảng đồng bộ cho điều khiển PMSM theo FOC. Quan trọng hơn, các đặc điểm mô tả trong chương này đều bám sát trực tiếp vào mã nguồn đang triển khai, nhờ đó phần trình bày trong luận văn sẽ nhất quán hơn với sản phẩm thực tế dùng để chạy thí nghiệm và bảo vệ.</p>
+
+  <p class="small">Ghi chú biên tập: bản này được viết để người dùng sao chép sang luận văn. Khi dàn trang chính thức, nên thay các khung “Gợi ý chèn Hình ...” bằng sơ đồ hoặc ảnh giao diện thực tế chụp từ project hiện hành.</p>
+</body>
+</html>

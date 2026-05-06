@@ -209,6 +209,94 @@ PARAMETER_NAME_LABELS = {
     "MOTOR_VISCOUS_FRICTION": "MOTOR_VISCOUS_FRICTION [mN*m*s/rad]",
 }
 
+DRIVER_PARAMETER_GROUPS: dict[str, tuple[str, ...]] = {
+    "General": (
+        "DEVICE_ID",
+        "CONTROL_MODE",
+        "POSITION_TRACKING_MODE",
+    ),
+    "Position Loop": (
+        "POSITION_P_GAIN",
+        "POSITION_I_GAIN",
+        "POSITION_FF_GAIN",
+        "POSITION_FF_FILTER",
+    ),
+    "Speed Loop": (
+        "SPEED_P_GAIN",
+        "SPEED_I_GAIN",
+        "SPEED_FF_FILTER",
+        "SPEED_DETECTION_FILTER_FREQUENCY",
+        "SPEED_MOVING_THRESHOLD",
+        "SPEED_UNIT",
+    ),
+    "Limits & Ramps": (
+        "ACCELERATION_TIME",
+        "DECELERATION_TIME",
+        "MAXIMUM_SPEED",
+    ),
+    "Torque / Filter": (
+        "TORQUE_FILTER_FREQUENCY",
+    ),
+}
+
+MOTOR_PARAMETER_GROUPS: dict[str, tuple[str, ...]] = {
+    "Ratings": (
+        "MOTOR_RATED_CURRENT_RMS",
+        "MOTOR_PEAK_CURRENT_RMS",
+        "MOTOR_MAXIMUM_POWER",
+        "MOTOR_MAXIMUM_VOLTAGE",
+        "MOTOR_RATED_TORQUE",
+        "MOTOR_MAXIMUM_SPEED",
+        "MOTOR_OVERLOAD_TORQUE",
+        "MOTOR_OVERLOAD_TIME",
+    ),
+    "Electrical Model": (
+        "MOTOR_RESISTANCE",
+        "MOTOR_INDUCTANCE",
+        "MOTOR_BACK_EMF_CONSTANT",
+        "MOTOR_ROTOR_INERTIA",
+        "MOTOR_NUMBER_POLE_PAIRS",
+        "MOTOR_VISCOUS_FRICTION",
+    ),
+    "Encoder / Commutation": (
+        "MOTOR_ABS_ENCODER_MODE",
+        "MOTOR_ENCODER_ID",
+        "MOTOR_ENCODER_RESOLUTION",
+        "MOTOR_HALL_OFFSET",
+        "MOTOR_CURRENT_CTRL_DIRECTION",
+    ),
+    "Current Loop": (
+        "MOTOR_CURRENT_P_GAIN",
+        "MOTOR_CURRENT_I_GAIN",
+    ),
+    "Hall Forward Table": (
+        "MOTOR_FORWARD_HALL_0",
+        "MOTOR_FORWARD_HALL_1",
+        "MOTOR_FORWARD_HALL_2",
+        "MOTOR_FORWARD_HALL_3",
+        "MOTOR_FORWARD_HALL_4",
+        "MOTOR_FORWARD_HALL_5",
+    ),
+    "Hall Reverse Table": (
+        "MOTOR_REVERSE_HALL_0",
+        "MOTOR_REVERSE_HALL_1",
+        "MOTOR_REVERSE_HALL_2",
+        "MOTOR_REVERSE_HALL_3",
+        "MOTOR_REVERSE_HALL_4",
+        "MOTOR_REVERSE_HALL_5",
+    ),
+}
+
+PARAMETER_GROUP_ACCENT_COLORS = (
+    "#202936",
+    "#213127",
+    "#2d2436",
+    "#33281d",
+    "#24313a",
+    "#352525",
+    "#2c2c2c",
+)
+
 TRACE_CHANNEL_META = {
     0: {"label": "Unused", "unit": "", "color": "#aaaaaa"},
     1: {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
@@ -240,8 +328,12 @@ DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
 DRIVER_PARAM_POSITION_TRACKING_MODE = 16
 MOTOR_PARAM_RATED_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_RATED_CURRENT_RMS")
+MOTOR_PARAM_RESISTANCE = MOTOR_PARAMETER_NAMES.index("MOTOR_RESISTANCE")
+MOTOR_PARAM_INDUCTANCE = MOTOR_PARAMETER_NAMES.index("MOTOR_INDUCTANCE")
 MOTOR_PARAM_ENCODER_ID = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_ID")
+MOTOR_PARAM_MAXIMUM_VOLTAGE = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_VOLTAGE")
 MOTOR_PARAM_MAXIMUM_SPEED = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_SPEED")
+MOTOR_PARAM_POLE_PAIRS = MOTOR_PARAMETER_NAMES.index("MOTOR_NUMBER_POLE_PAIRS")
 MOTOR_PARAM_CURRENT_P_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_P_GAIN")
 MOTOR_PARAM_CURRENT_I_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_I_GAIN")
 MOTOR_PARAM_ENCODER_RESOLUTION = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_RESOLUTION")
@@ -3856,6 +3948,8 @@ class XyPlotView(QtWidgets.QWidget):
         self._series_defs: list[dict[str, str]] = []
         self._series_data: list[list[tuple[float, float]]] = []
         self._status_text = "Waiting for data..."
+        self._x_min_floor: float | None = None
+        self._y_min_floor: float | None = None
         self.setMinimumHeight(250)
 
     def clear(self, status_text: str = "Waiting for data...") -> None:
@@ -3875,6 +3969,8 @@ class XyPlotView(QtWidgets.QWidget):
         series_defs: list[dict[str, str]],
         series_data: list[list[tuple[float, float]]],
         status_text: str,
+        x_min_floor: float | None = None,
+        y_min_floor: float | None = None,
     ) -> None:
         self._title = title
         self._x_label = x_label
@@ -3884,6 +3980,8 @@ class XyPlotView(QtWidgets.QWidget):
         self._series_defs = list(series_defs)
         self._series_data = [[(float(x), float(y)) for x, y in series] for series in series_data]
         self._status_text = status_text
+        self._x_min_floor = None if x_min_floor is None else float(x_min_floor)
+        self._y_min_floor = None if y_min_floor is None else float(y_min_floor)
         self.update()
 
     def _chart_colors(self) -> dict[str, QtGui.QColor]:
@@ -3932,11 +4030,19 @@ class XyPlotView(QtWidgets.QWidget):
             y_max += 1.0
         x_margin = (x_max - x_min) * 0.08
         y_margin = (y_max - y_min) * 0.12
+        x_min -= x_margin
+        x_max += x_margin
+        y_min -= y_margin
+        y_max += y_margin
+        if self._x_min_floor is not None:
+            x_min = max(x_min, self._x_min_floor)
+        if self._y_min_floor is not None:
+            y_min = max(y_min, self._y_min_floor)
         return (
-            x_min - x_margin,
-            x_max + x_margin,
-            y_min - y_margin,
-            y_max + y_margin,
+            x_min,
+            x_max,
+            y_min,
+            y_max,
         )
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
@@ -4084,6 +4190,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1220, 800)
 
         self._worker = SerialWorker(FrameStreamParser(), self)
+        self._settings = QtCore.QSettings("HCMUT", "ASD04ServoCommissioning")
         self._connected = False
         self._current_port = ""
         self._pending_frames: deque[PendingFrame] = deque()
@@ -4114,6 +4221,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._uerror_lut_preview_norm: list[float] = []
         self._uerror_lut_preview_current_max_a = 0.0
         self._active_trace_target: str | None = None
+        self._mechanical_zero_valid = False
+        self._mechanical_zero_single_turn_counts = 0.0
+        self._mechanical_zero_multi_turn_counts = 0.0
         self._alarm_history: list[AlarmHistoryEntry] = []
         self._active_fault_code = 0
         self._active_alarm_summary_text = "No active alarms"
@@ -4151,6 +4261,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._connect_signals()
+        self._load_mechanical_zero_settings()
         self._set_active_timing_profile(self._active_timing_mode)
         self._refresh_ports()
         self._monitor_timer.start()
@@ -4224,7 +4335,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.connection_state_label = QtWidgets.QLabel("Disconnected")
         self.connection_state_label.setStyleSheet("color: #c62828; font-weight: 600;")
-        self.timing_mode_state_label = QtWidgets.QLabel("Fixed: 16 kHz (16000 Hz)")
         self.open_trends_button = QtWidgets.QPushButton("Trend Charts...")
         self.open_tuning_button = QtWidgets.QPushButton("Commissioning...")
         self.open_debug_terminal_button = QtWidgets.QPushButton("Snapshot...")
@@ -4238,9 +4348,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.auto_poll_checkbox, 0, 5)
         layout.addWidget(QtWidgets.QLabel("Rate"), 0, 6)
         layout.addWidget(self.monitor_rate_combo, 0, 7)
-        layout.addWidget(QtWidgets.QLabel("Timing"), 0, 8)
-        layout.addWidget(self.timing_mode_state_label, 0, 9, 1, 2)
-        layout.addWidget(self.device_hint_label, 1, 0, 1, 5)
+        layout.addWidget(self.device_hint_label, 1, 0, 1, 6)
         layout.addWidget(self.open_trends_button, 1, 6)
         layout.addWidget(self.open_tuning_button, 1, 7)
         layout.addWidget(self.open_debug_terminal_button, 1, 8)
@@ -4252,59 +4360,80 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(box)
         self.monitor_labels: dict[str, QtWidgets.QLabel] = {}
 
-        status_fields = [
+        drive_state_fields = [
             ("enable_run", "Servo"),
             ("run_mode", "Run Mode"),
-            ("control_timing_mode", "Timing"),
-            ("effective_loop_hz", "Loop Freq"),
+            ("control_timing_mode", "Current Loop"),
             ("fault_occurred", "Fault"),
+        ]
+        electrical_fields = [
             ("vdc", "Vdc"),
             ("temperature", "Temp"),
-            ("calibration_status", "Cal Status"),
             ("adc_offset_ia", "ADC Offset Ia"),
             ("adc_offset_ib", "ADC Offset Ib"),
+        ]
+        alignment_fields = [
+            ("calibration_status", "Cal Status"),
             ("alignment_status", "Align Status"),
             ("alignment_offset", "Enc Offset"),
             ("alignment_save", "Align Save"),
         ]
-        motion_fields = [
+        speed_fields = [
             ("cmd_speed", "Cmd Speed"),
             ("act_speed", "Act Speed"),
             ("speed_error", "Speed Error"),
+        ]
+        position_fields = [
             ("setting_position", "Setting Position"),
             ("tracking_error", "Tracking Error"),
-            ("mech_angle_single", "Mech Angle (ST)"),
-            ("mech_angle_multi", "Mech Angle (MT)"),
+            ("mech_angle_single", "Mech Angle (Single Turn)"),
+            ("mech_angle_multi", "Mech Angle (Multi Turn)"),
             ("total_distance", "Total Distance"),
         ]
 
         dashboard_widget = QtWidgets.QWidget()
         dashboard_layout = QtWidgets.QGridLayout(dashboard_widget)
         dashboard_layout.setContentsMargins(0, 0, 0, 0)
-        dashboard_layout.setHorizontalSpacing(10)
-        dashboard_layout.setVerticalSpacing(10)
+        dashboard_layout.setHorizontalSpacing(12)
+        dashboard_layout.setVerticalSpacing(12)
         dashboard_layout.addWidget(
-            self._build_monitor_dashboard_section("Status", status_fields, columns=2),
+            self._build_monitor_dashboard_section("Drive State", drive_state_fields, columns=1),
             0,
+            0,
+        )
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Power & Sensors", electrical_fields, columns=1),
             0,
             1,
+        )
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Alignment", alignment_fields, columns=1),
+            1,
+            0,
+        )
+        dashboard_layout.addWidget(
+            self._build_monitor_dashboard_section("Speed", speed_fields, columns=1),
+            0,
             2,
         )
         dashboard_layout.addWidget(
-            self._build_monitor_dashboard_section("Motion", motion_fields, columns=2),
+            self._build_monitor_dashboard_section("Position", position_fields, columns=1),
             1,
-            0,
+            1,
             1,
             2,
         )
         dashboard_layout.setColumnStretch(0, 1)
         dashboard_layout.setColumnStretch(1, 1)
-        dashboard_layout.setRowStretch(2, 1)
+        dashboard_layout.setColumnStretch(2, 1)
+        dashboard_layout.setRowStretch(0, 1)
+        dashboard_layout.setRowStretch(1, 1)
 
         trend_note = QtWidgets.QLabel(
             "Main monitor shows the commissioning essentials. Use Trend Charts and Snapshot for deeper traces and debug detail."
         )
         trend_note.setWordWrap(True)
+        trend_note.setStyleSheet("color: #9aa0a6;")
 
         layout.addWidget(dashboard_widget, 1)
         layout.addWidget(trend_note)
@@ -5214,7 +5343,10 @@ class MainWindow(QtWidgets.QMainWindow):
         foc_tab = self._build_foc_control_tab()
 
         vf_tab = QtWidgets.QWidget()
-        vf_layout = QtWidgets.QGridLayout(vf_tab)
+        vf_tab_layout = QtWidgets.QVBoxLayout(vf_tab)
+
+        vf_control_group = QtWidgets.QGroupBox("Open Loop Command")
+        vf_layout = QtWidgets.QGridLayout(vf_control_group)
         self.vf_frequency_spin = QtWidgets.QDoubleSpinBox()
         self.vf_frequency_spin.setRange(
             -DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ,
@@ -5239,13 +5371,84 @@ class MainWindow(QtWidgets.QMainWindow):
         vf_layout.addWidget(self.vf_voltage_spin, 1, 1)
         vf_layout.addWidget(self.vf_toggle_button, 2, 0, 1, 2)
         vf_layout.addWidget(vf_note, 3, 0, 1, 2)
-        vf_layout.setRowStretch(4, 1)
+        vf_layout.setColumnStretch(1, 1)
+
+        vf_guide_group = QtWidgets.QGroupBox("V/f Guide")
+        vf_guide_layout = QtWidgets.QVBoxLayout(vf_guide_group)
+        vf_guide_form = QtWidgets.QGridLayout()
+        self.vf_guide_load_motor_button = QtWidgets.QPushButton("Load From Motor Params")
+        self.vf_guide_rs_spin = QtWidgets.QDoubleSpinBox()
+        self.vf_guide_rs_spin.setRange(0.0, 1000.0)
+        self.vf_guide_rs_spin.setDecimals(4)
+        self.vf_guide_rs_spin.setSingleStep(0.1000)
+        self.vf_guide_rs_spin.setSuffix(" ohm")
+        self.vf_guide_ls_spin = QtWidgets.QDoubleSpinBox()
+        self.vf_guide_ls_spin.setRange(0.0, 1000000.0)
+        self.vf_guide_ls_spin.setDecimals(1)
+        self.vf_guide_ls_spin.setSingleStep(10.0)
+        self.vf_guide_ls_spin.setSuffix(" uH")
+        self.vf_guide_rated_current_spin = QtWidgets.QDoubleSpinBox()
+        self.vf_guide_rated_current_spin.setRange(0.0, 1000.0)
+        self.vf_guide_rated_current_spin.setDecimals(3)
+        self.vf_guide_rated_current_spin.setSingleStep(0.1)
+        self.vf_guide_rated_current_spin.setSuffix(" A")
+        self.vf_guide_rated_freq_spin = QtWidgets.QDoubleSpinBox()
+        self.vf_guide_rated_freq_spin.setRange(0.0, 5000.0)
+        self.vf_guide_rated_freq_spin.setDecimals(2)
+        self.vf_guide_rated_freq_spin.setSingleStep(1.0)
+        self.vf_guide_rated_freq_spin.setSuffix(" Hz")
+        self.vf_guide_rated_voltage_spin = QtWidgets.QDoubleSpinBox()
+        self.vf_guide_rated_voltage_spin.setRange(0.0, 1000.0)
+        self.vf_guide_rated_voltage_spin.setDecimals(2)
+        self.vf_guide_rated_voltage_spin.setSingleStep(1.0)
+        self.vf_guide_rated_voltage_spin.setSuffix(" V")
+        self.vf_guide_boost_value_label = QtWidgets.QLabel("-")
+        self.vf_guide_slope_value_label = QtWidgets.QLabel("-")
+        self.vf_guide_rl_value_label = QtWidgets.QLabel("-")
+        self.vf_guide_suggested_voltage_value_label = QtWidgets.QLabel("-")
+        self.vf_guide_formula_value_label = QtWidgets.QLabel("Waiting for inputs...")
+        self.vf_guide_formula_value_label.setWordWrap(True)
+        self.vf_guide_formula_value_label.setStyleSheet("color: #d7e3fc; font-weight: 600;")
+        self.vf_guide_plot = XyPlotView()
+        self.vf_guide_plot.setMinimumHeight(360)
+
+        vf_guide_form.addWidget(self.vf_guide_load_motor_button, 0, 0, 1, 2)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Rs"), 1, 0)
+        vf_guide_form.addWidget(self.vf_guide_rs_spin, 1, 1)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Ls"), 1, 2)
+        vf_guide_form.addWidget(self.vf_guide_ls_spin, 1, 3)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Rated Current"), 1, 4)
+        vf_guide_form.addWidget(self.vf_guide_rated_current_spin, 1, 5)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Rated Elec Freq"), 2, 0)
+        vf_guide_form.addWidget(self.vf_guide_rated_freq_spin, 2, 1)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Rated Voltage"), 2, 2)
+        vf_guide_form.addWidget(self.vf_guide_rated_voltage_spin, 2, 3)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Suggested @ Cmd F"), 2, 4)
+        vf_guide_form.addWidget(self.vf_guide_suggested_voltage_value_label, 2, 5)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Voltage Boost"), 3, 0)
+        vf_guide_form.addWidget(self.vf_guide_boost_value_label, 3, 1)
+        vf_guide_form.addWidget(QtWidgets.QLabel("Linear Slope"), 3, 2)
+        vf_guide_form.addWidget(self.vf_guide_slope_value_label, 3, 3)
+        vf_guide_form.addWidget(QtWidgets.QLabel("RL @ Rated F"), 3, 4)
+        vf_guide_form.addWidget(self.vf_guide_rl_value_label, 3, 5)
+        vf_guide_form.addWidget(self.vf_guide_formula_value_label, 4, 0, 1, 6)
+        for column in range(6):
+            vf_guide_form.setColumnStretch(column, 1)
+
+        vf_guide_layout.addLayout(vf_guide_form)
+        vf_guide_layout.addWidget(self.vf_guide_plot, 1)
+
+        vf_tab_layout.addWidget(vf_control_group)
+        vf_tab_layout.addWidget(vf_guide_group, 1)
+        vf_tab_layout.addStretch(1)
 
         self.quick_command_tabs.addTab(drive_tab, "Drive")
         self.quick_command_tabs.addTab(foc_tab, "FOC Control")
         self.quick_command_tabs.addTab(test_tab, "Test Mode")
-        self.quick_command_tabs.addTab(vf_tab, "Open Loop V/F")
+        self.quick_command_tabs.addTab(self._wrap_tuning_tab_scroll_area(vf_tab), "Open Loop V/F")
         layout.addWidget(self.quick_command_tabs)
+        self._load_vf_guide_from_motor_table()
+        self._refresh_vf_guide_plot()
         return box
 
     def _build_foc_control_tab(self) -> QtWidgets.QWidget:
@@ -5299,14 +5502,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_target_angle_spin.setSuffix(" deg")
 
         self.foc_jog_label = QtWidgets.QLabel("Relative Move")
-        self.foc_jog_minus_90_button = QtWidgets.QPushButton("<<")
-        self.foc_jog_minus_10_button = QtWidgets.QPushButton("<")
-        self.foc_jog_plus_10_button = QtWidgets.QPushButton(">")
-        self.foc_jog_plus_90_button = QtWidgets.QPushButton(">>")
+        self.foc_jog_minus_90_button = QtWidgets.QPushButton("-90")
+        self.foc_jog_minus_10_button = QtWidgets.QPushButton("-10")
+        self.foc_jog_plus_10_button = QtWidgets.QPushButton("+10")
+        self.foc_jog_plus_90_button = QtWidgets.QPushButton("+90")
         self.foc_jog_minus_90_button.setToolTip("Move target by -90 deg")
         self.foc_jog_minus_10_button.setToolTip("Move target by -10 deg")
         self.foc_jog_plus_10_button.setToolTip("Move target by +10 deg")
         self.foc_jog_plus_90_button.setToolTip("Move target by +90 deg")
+        for button in (
+            self.foc_jog_minus_90_button,
+            self.foc_jog_minus_10_button,
+            self.foc_jog_plus_10_button,
+            self.foc_jog_plus_90_button,
+        ):
+            button.setMinimumWidth(56)
 
         self.foc_angle_slider_label = QtWidgets.QLabel("Angle Slider")
         self.foc_angle_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -5469,6 +5679,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_angle_slider.sliderReleased.connect(self._handle_position_angle_slider_released)
         self.foc_position_tracking_combo.currentIndexChanged.connect(self._handle_position_tracking_mode_changed)
 
+        mech_zero_group = QtWidgets.QGroupBox("Mechanical Zero")
+        mech_zero_layout = QtWidgets.QGridLayout(mech_zero_group)
+        self.mech_zero_status_value_label = QtWidgets.QLabel("Not set")
+        self.mech_zero_status_value_label.setStyleSheet("font-weight: 600;")
+        self.mech_zero_single_turn_value_label = QtWidgets.QLabel("0.0 cnt")
+        self.mech_zero_multi_turn_value_label = QtWidgets.QLabel("0.0 cnt")
+        self.mech_zero_capture_button = QtWidgets.QPushButton("Set Current As 0 deg")
+        self.mech_zero_clear_button = QtWidgets.QPushButton("Clear Mechanical Zero")
+        mech_zero_layout.addWidget(QtWidgets.QLabel("Status"), 0, 0)
+        mech_zero_layout.addWidget(self.mech_zero_status_value_label, 0, 1)
+        mech_zero_layout.addWidget(QtWidgets.QLabel("ST Zero"), 1, 0)
+        mech_zero_layout.addWidget(self.mech_zero_single_turn_value_label, 1, 1)
+        mech_zero_layout.addWidget(QtWidgets.QLabel("MT Zero"), 1, 2)
+        mech_zero_layout.addWidget(self.mech_zero_multi_turn_value_label, 1, 3)
+        mech_zero_layout.addWidget(self.mech_zero_capture_button, 2, 0, 1, 2)
+        mech_zero_layout.addWidget(self.mech_zero_clear_button, 2, 2, 1, 2)
+        self.mech_zero_capture_button.clicked.connect(self._capture_current_as_mechanical_zero)
+        self.mech_zero_clear_button.clicked.connect(self._clear_mechanical_zero)
+
         note_group = QtWidgets.QGroupBox("How It Works")
         note_layout = QtWidgets.QVBoxLayout(note_group)
         self.foc_mode_description_label = QtWidgets.QLabel()
@@ -5494,6 +5723,7 @@ class MainWindow(QtWidgets.QMainWindow):
         control_page_layout = QtWidgets.QVBoxLayout(control_page)
         control_page_layout.setContentsMargins(0, 0, 0, 0)
         control_page_layout.addWidget(summary_group)
+        control_page_layout.addWidget(mech_zero_group)
         control_page_layout.addStretch(1)
 
         help_page = QtWidgets.QWidget()
@@ -5507,6 +5737,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         layout.addWidget(control_tabs)
         layout.addStretch(1)
+        self._refresh_mechanical_zero_panel()
         self._update_foc_mode_ui()
         return widget
 
@@ -5945,12 +6176,113 @@ class MainWindow(QtWidgets.QMainWindow):
             layout.setColumnStretch(column * 2 + 1, 1)
         return box
 
+    def _parameter_group_for_name(
+        self,
+        parameter_name: str,
+        group_map: dict[str, tuple[str, ...]],
+    ) -> str:
+        for group_name, members in group_map.items():
+            if parameter_name in members:
+                return group_name
+        return "Other"
+
+    def _style_parameter_table_groups(
+        self,
+        table: QtWidgets.QTableWidget,
+        names: list[str],
+        group_map: dict[str, tuple[str, ...]],
+    ) -> None:
+        group_order = list(group_map.keys()) + ["Other"]
+        color_map = {
+            group_name: PARAMETER_GROUP_ACCENT_COLORS[index % len(PARAMETER_GROUP_ACCENT_COLORS)]
+            for index, group_name in enumerate(group_order)
+        }
+        for row, name in enumerate(names):
+            group_name = self._parameter_group_for_name(name, group_map)
+            for column in range(table.columnCount()):
+                item = table.item(row, column)
+                if item is None:
+                    continue
+                item.setToolTip(f"Group: {group_name}")
+                if column == 1:
+                    item.setBackground(QtGui.QColor(color_map[group_name]))
+
+    def _apply_parameter_group_filter(
+        self,
+        table: QtWidgets.QTableWidget,
+        names: list[str],
+        group_map: dict[str, tuple[str, ...]],
+        group_name: str,
+        status_label: QtWidgets.QLabel,
+    ) -> None:
+        visible_count = 0
+        for row, name in enumerate(names):
+            row_group = self._parameter_group_for_name(name, group_map)
+            is_visible = (group_name == "All") or (row_group == group_name)
+            table.setRowHidden(row, not is_visible)
+            if is_visible:
+                visible_count += 1
+        status_label.setText(f"{group_name}: {visible_count}/{len(names)} rows")
+
+    def _build_parameter_table_page(
+        self,
+        table: QtWidgets.QTableWidget,
+        names: list[str],
+        group_map: dict[str, tuple[str, ...]],
+    ) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        filter_row = QtWidgets.QHBoxLayout()
+        filter_row.addWidget(QtWidgets.QLabel("Group"))
+        group_combo = QtWidgets.QComboBox()
+        group_combo.addItem("All")
+        for group_name in group_map.keys():
+            group_combo.addItem(group_name)
+        status_label = QtWidgets.QLabel()
+        status_label.setStyleSheet("color: #9aa0a6; font-weight: 600;")
+        filter_row.addWidget(group_combo)
+        filter_row.addSpacing(12)
+        filter_row.addWidget(status_label)
+        filter_row.addStretch(1)
+        layout.addLayout(filter_row)
+        layout.addWidget(table, 1)
+
+        self._style_parameter_table_groups(table, names, group_map)
+        group_combo.currentTextChanged.connect(
+            lambda group_name, table=table, names=names, group_map=group_map, status_label=status_label: self._apply_parameter_group_filter(
+                table,
+                names,
+                group_map,
+                str(group_name),
+                status_label,
+            )
+        )
+        self._apply_parameter_group_filter(table, names, group_map, "All", status_label)
+        return widget
+
     def _build_parameter_tabs(self) -> QtWidgets.QTabWidget:
         tabs = QtWidgets.QTabWidget()
         self.driver_table = self._create_parameter_table(DRIVER_PARAMETER_NAMES)
         self.motor_table = self._create_parameter_table(MOTOR_PARAMETER_NAMES)
-        tabs.addTab(self.driver_table, "Driver Parameters")
-        tabs.addTab(self.motor_table, "Motor Parameters")
+        self.motor_table.itemChanged.connect(lambda _item: self._load_vf_guide_from_motor_table())
+        tabs.addTab(
+            self._build_parameter_table_page(
+                self.driver_table,
+                DRIVER_PARAMETER_NAMES,
+                DRIVER_PARAMETER_GROUPS,
+            ),
+            "Driver Parameters",
+        )
+        tabs.addTab(
+            self._build_parameter_table_page(
+                self.motor_table,
+                MOTOR_PARAMETER_NAMES,
+                MOTOR_PARAMETER_GROUPS,
+            ),
+            "Motor Parameters",
+        )
         self._populate_default_parameter_tables()
         return tabs
 
@@ -6088,6 +6420,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_foc_button.clicked.connect(self._start_foc_control)
         self.stop_foc_button.clicked.connect(self._stop_foc_control)
         self.vf_toggle_button.clicked.connect(self._toggle_open_loop_vf)
+        self.vf_guide_load_motor_button.clicked.connect(self._load_vf_guide_from_motor_table)
+        self.vf_frequency_spin.valueChanged.connect(self._refresh_vf_guide_plot)
+        self.vf_voltage_spin.valueChanged.connect(self._refresh_vf_guide_plot)
+        self.vf_guide_rs_spin.valueChanged.connect(self._refresh_vf_guide_plot)
+        self.vf_guide_ls_spin.valueChanged.connect(self._refresh_vf_guide_plot)
+        self.vf_guide_rated_current_spin.valueChanged.connect(self._refresh_vf_guide_plot)
+        self.vf_guide_rated_freq_spin.valueChanged.connect(self._refresh_vf_guide_plot)
+        self.vf_guide_rated_voltage_spin.valueChanged.connect(self._refresh_vf_guide_plot)
         self.servo_on_button.clicked.connect(self._handle_servo_on)
         self.servo_off_button.clicked.connect(self._handle_servo_off)
         self.ack_fault_button.clicked.connect(self._reset_alarm)
@@ -6222,6 +6562,16 @@ class MainWindow(QtWidgets.QMainWindow):
         _ = mode
         return "16 kHz"
 
+    def _current_loop_display_text(
+        self,
+        loop_hz: float,
+        debug_isr_frequency_hz: float | None = None,
+    ) -> str:
+        effective_hz = float(loop_hz)
+        if debug_isr_frequency_hz is not None and abs(float(debug_isr_frequency_hz)) > 1.0:
+            effective_hz = float(debug_isr_frequency_hz)
+        return f"{effective_hz:.0f} Hz"
+
     def _format_capture_rate_label(self, decimation: int, loop_hz: float) -> str:
         rate_hz = loop_hz / float(decimation + 1)
         if rate_hz >= 1000.0:
@@ -6278,11 +6628,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._active_timing_mode = mode
         self._active_control_loop_hz = float(current_loop_hz)
         self._active_speed_loop_hz = float(speed_loop_hz)
-
-        if hasattr(self, "timing_mode_state_label"):
-            self.timing_mode_state_label.setText(
-                f"Fixed: {self._timing_mode_text(mode)} ({self._active_control_loop_hz:.0f} Hz)"
-            )
 
         if hasattr(self, "ctuning_rate_combo") and hasattr(self, "trace_rate_combo"):
             self._refresh_capture_rate_combos()
@@ -6605,18 +6950,75 @@ class MainWindow(QtWidgets.QMainWindow):
         return 0 if direction == 0 else 1
 
     def _snapshot_single_turn_counts(self, snapshot) -> float:
-        encoder_resolution = self._encoder_resolution_counts()
         if snapshot is None:
             return 0.0
-        if (
-            encoder_resolution > 1.0
-            and int(getattr(snapshot, "debug_enc_single_turn_valid", 0)) != 0
-        ):
-            single_turn_counts = float(getattr(snapshot, "debug_enc_single_turn", 0))
-            if self._motor_current_ctrl_direction() != 0:
-                single_turn_counts = encoder_resolution - single_turn_counts
-            return self._normalize_single_turn_counts(single_turn_counts)
-        return self._normalize_single_turn_counts(float(getattr(snapshot, "act_position", 0.0)))
+        # For GUI position/home handling, use the same frame as the firmware
+        # position loop: Parameter.fPosition. Single-turn views are just that
+        # accumulated position wrapped to one revolution. Using the raw
+        # debug_enc_single_turn field here makes target/actual disagree because
+        # the controller does not close the loop on that raw register directly.
+        return self._normalize_single_turn_counts(
+            float(getattr(snapshot, "act_position", 0.0))
+        )
+
+    def _load_mechanical_zero_settings(self) -> None:
+        valid = self._settings.value("mechanical_zero/valid", False, type=bool)
+        single_turn_counts = self._settings.value(
+            "mechanical_zero/single_turn_counts",
+            0.0,
+            type=float,
+        )
+        multi_turn_counts = self._settings.value(
+            "mechanical_zero/multi_turn_counts",
+            0.0,
+            type=float,
+        )
+        self._mechanical_zero_valid = bool(valid)
+        self._mechanical_zero_single_turn_counts = float(single_turn_counts)
+        self._mechanical_zero_multi_turn_counts = float(multi_turn_counts)
+        self._refresh_mechanical_zero_panel()
+
+    def _save_mechanical_zero_settings(self) -> None:
+        self._settings.setValue("mechanical_zero/valid", bool(self._mechanical_zero_valid))
+        self._settings.setValue(
+            "mechanical_zero/single_turn_counts",
+            float(self._mechanical_zero_single_turn_counts),
+        )
+        self._settings.setValue(
+            "mechanical_zero/multi_turn_counts",
+            float(self._mechanical_zero_multi_turn_counts),
+        )
+        self._settings.sync()
+
+    def _raw_multi_turn_counts_to_display_counts(self, counts: float) -> float:
+        if self._mechanical_zero_valid:
+            return float(counts) - float(self._mechanical_zero_multi_turn_counts)
+        return float(counts)
+
+    def _display_multi_turn_counts_to_raw_counts(self, counts: float) -> float:
+        if self._mechanical_zero_valid:
+            return float(counts) + float(self._mechanical_zero_multi_turn_counts)
+        return float(counts)
+
+    def _raw_single_turn_counts_to_display_counts(self, counts: float) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        display_counts = self._normalize_single_turn_counts(float(counts))
+        if self._mechanical_zero_valid:
+            display_counts -= float(self._mechanical_zero_single_turn_counts)
+        display_counts = self._normalize_single_turn_counts(display_counts)
+        if encoder_resolution > 1.0:
+            zero_snap_counts = max(1.0, encoder_resolution / 7200.0)
+            if (display_counts <= zero_snap_counts) or (
+                display_counts >= (encoder_resolution - zero_snap_counts)
+            ):
+                return 0.0
+        return display_counts
+
+    def _display_single_turn_counts_to_raw_counts(self, counts: float) -> float:
+        raw_counts = self._normalize_single_turn_counts(float(counts))
+        if self._mechanical_zero_valid:
+            raw_counts += float(self._mechanical_zero_single_turn_counts)
+        return self._normalize_single_turn_counts(raw_counts)
 
     def _snapshot_position_counts_for_display(
         self,
@@ -6628,9 +7030,102 @@ class MainWindow(QtWidgets.QMainWindow):
             return 0.0, 0.0
         cmd_counts = float(getattr(snapshot, "cmd_position", 0.0))
         if mode == POSITION_TRACKING_MODE_MULTI_TURN:
-            act_counts = float(getattr(snapshot, "act_position", 0.0))
+            act_counts = self._raw_multi_turn_counts_to_display_counts(
+                float(getattr(snapshot, "act_position", 0.0))
+            )
+            cmd_counts = self._raw_multi_turn_counts_to_display_counts(cmd_counts)
             return cmd_counts, act_counts
-        return self._normalize_single_turn_counts(cmd_counts), self._snapshot_single_turn_counts(snapshot)
+        return (
+            self._raw_single_turn_counts_to_display_counts(cmd_counts),
+            self._raw_single_turn_counts_to_display_counts(
+                self._snapshot_single_turn_counts(snapshot)
+            ),
+        )
+
+    def _mechanical_zero_status_text(self) -> str:
+        if self._mechanical_zero_valid:
+            return "Saved (GUI local)"
+        return "Not set"
+
+    def _mechanical_zero_capture_allowed(self, snapshot=None) -> bool:
+        active_snapshot = self._latest_monitor_snapshot if snapshot is None else snapshot
+        if active_snapshot is None:
+            return False
+        if not self._foc_is_running(active_snapshot):
+            return True
+        if self._current_foc_mode() == POSITION_CONTROL_MODE:
+            return False
+        cmd_speed = abs(float(getattr(active_snapshot, "cmd_speed", 0.0)))
+        act_speed = abs(float(getattr(active_snapshot, "act_speed", 0.0)))
+        return max(cmd_speed, act_speed) <= 0.5
+
+    def _refresh_mechanical_zero_panel(self) -> None:
+        if not hasattr(self, "mech_zero_status_value_label"):
+            return
+        self.mech_zero_status_value_label.setText(self._mechanical_zero_status_text())
+        self.mech_zero_single_turn_value_label.setText(
+            f"{self._mechanical_zero_single_turn_counts:.1f} cnt"
+        )
+        self.mech_zero_multi_turn_value_label.setText(
+            f"{self._mechanical_zero_multi_turn_counts:.1f} cnt"
+        )
+        if hasattr(self, "mech_zero_capture_button"):
+            self.mech_zero_capture_button.setEnabled(
+                self._mechanical_zero_capture_allowed(self._latest_monitor_snapshot)
+            )
+
+    def _capture_current_as_mechanical_zero(self) -> None:
+        snapshot = self._latest_monitor_snapshot
+        if snapshot is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Mechanical Zero",
+                "Connect to the drive and wait for monitor data before capturing a mechanical zero.",
+            )
+            return
+        if not self._mechanical_zero_capture_allowed(snapshot):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Mechanical Zero",
+                "Mechanical Zero capture is blocked while Position Mode is actively running. "
+                "Stop FOC or switch to an idle / zero-speed state first, then capture the current pose as 0 deg.",
+            )
+            return
+        self._mechanical_zero_single_turn_counts = self._normalize_single_turn_counts(
+            self._snapshot_single_turn_counts(snapshot)
+        )
+        self._mechanical_zero_multi_turn_counts = float(getattr(snapshot, "act_position", 0.0))
+        self._mechanical_zero_valid = True
+        self._save_mechanical_zero_settings()
+        self._refresh_mechanical_zero_panel()
+        tracking_mode = self._position_tracking_mode()
+        current_raw_target = (
+            float(self._snapshot_single_turn_counts(snapshot))
+            if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN
+            else float(getattr(snapshot, "act_position", 0.0))
+        )
+        self._set_foc_target_position_counts(current_raw_target)
+        self.foc_live_summary_label.setText(
+            "Mechanical zero captured from the current encoder pose. GUI 0 deg now matches "
+            "this mechanical home. Position commands are interpreted as: target counts from "
+            "angle plus this saved mechanical-zero offset; FOC commutation still uses Offset_Enc."
+        )
+        self._request_monitor_once()
+
+    def _clear_mechanical_zero(self) -> None:
+        self._mechanical_zero_valid = False
+        self._mechanical_zero_single_turn_counts = 0.0
+        self._mechanical_zero_multi_turn_counts = 0.0
+        self._save_mechanical_zero_settings()
+        self._refresh_mechanical_zero_panel()
+        if self._latest_monitor_snapshot is not None:
+            self._set_foc_target_position_counts(
+                float(getattr(self._latest_monitor_snapshot, "cmd_position", 0.0))
+            )
+        self.foc_live_summary_label.setText(
+            "Mechanical zero cleared. GUI position display is back to the raw encoder frame after direction convention only."
+        )
+        self._request_monitor_once()
 
     def _position_tracking_mode(self) -> int:
         if not hasattr(self, "foc_position_tracking_combo"):
@@ -6684,9 +7179,11 @@ class MainWindow(QtWidgets.QMainWindow):
             return 0.0
         mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
         if mode == POSITION_TRACKING_MODE_MULTI_TURN:
-            return (float(degrees) / 360.0) * encoder_resolution
+            display_counts = (float(degrees) / 360.0) * encoder_resolution
+            return self._display_multi_turn_counts_to_raw_counts(display_counts)
         normalized_degrees = float(degrees) % 360.0
-        return (normalized_degrees / 360.0) * encoder_resolution
+        display_counts = (normalized_degrees / 360.0) * encoder_resolution
+        return self._display_single_turn_counts_to_raw_counts(display_counts)
 
     def _position_angle_range_deg(self, tracking_mode: int | None = None) -> tuple[float, float]:
         mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
@@ -6771,16 +7268,21 @@ class MainWindow(QtWidgets.QMainWindow):
             if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN
             else float(counts)
         )
+        display_counts = (
+            self._raw_single_turn_counts_to_display_counts(normalized_counts)
+            if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN
+            else self._raw_multi_turn_counts_to_display_counts(normalized_counts)
+        )
         self.foc_target_position_spin.blockSignals(True)
-        self.foc_target_position_spin.setValue(normalized_counts)
+        self.foc_target_position_spin.setValue(display_counts)
         self.foc_target_position_spin.blockSignals(False)
-        self.foc_target_counts_hint_label.setText(f"{normalized_counts:.1f} cnt")
-        target_degrees = self._counts_to_position_mode_degrees(normalized_counts, tracking_mode)
+        self.foc_target_counts_hint_label.setText(f"{display_counts:.1f} cnt")
+        target_degrees = self._counts_to_position_mode_degrees(display_counts, tracking_mode)
         self.foc_target_angle_spin.blockSignals(True)
         self.foc_target_angle_spin.setValue(target_degrees)
         self.foc_target_angle_spin.blockSignals(False)
         if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN:
-            slider_value = int(round(self._counts_to_single_turn_degrees(normalized_counts) * 10.0))
+            slider_value = int(round(self._counts_to_single_turn_degrees(display_counts) * 10.0))
             self.foc_angle_slider.blockSignals(True)
             self.foc_angle_slider.setValue(slider_value)
             self.foc_angle_slider.blockSignals(False)
@@ -6789,7 +7291,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.foc_angle_slider_value_label.setText("Disabled in multi-turn")
 
     def _handle_position_tracking_mode_changed(self) -> None:
-        current_counts = float(self.foc_target_position_spin.value())
+        current_counts = 0.0
+        if self._latest_monitor_snapshot is not None:
+            current_counts = float(getattr(self._latest_monitor_snapshot, "cmd_position", 0.0))
+        elif self._position_tracking_mode() == POSITION_TRACKING_MODE_SINGLE_TURN:
+            current_counts = self._display_single_turn_counts_to_raw_counts(
+                float(self.foc_target_position_spin.value())
+            )
+        else:
+            current_counts = self._display_multi_turn_counts_to_raw_counts(
+                float(self.foc_target_position_spin.value())
+            )
         tracking_mode = self._position_tracking_mode()
         lower_deg, upper_deg = self._position_angle_range_deg(tracking_mode)
         self.foc_target_angle_spin.blockSignals(True)
@@ -6807,10 +7319,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _apply_relative_angle_delta(self, delta_degrees: float) -> None:
-        base_counts = float(self.foc_target_position_spin.value())
-        if self._latest_monitor_snapshot is not None:
-            base_counts = float(getattr(self._latest_monitor_snapshot, "act_position", base_counts))
-        current_target_degrees = self._counts_to_position_mode_degrees(base_counts)
+        current_target_degrees = float(self.foc_target_angle_spin.value())
         self._set_foc_target_position_counts(
             self._degrees_to_counts(current_target_degrees + float(delta_degrees))
         )
@@ -6890,7 +7399,17 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if self._foc_speed_target_rpm <= 1.0:
             self._foc_speed_target_rpm = 300.0
-        self._set_foc_target_position_counts(self.foc_target_position_spin.value())
+        if self._latest_monitor_snapshot is not None:
+            target_counts = float(getattr(self._latest_monitor_snapshot, "cmd_position", 0.0))
+        elif tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN:
+            target_counts = self._display_single_turn_counts_to_raw_counts(
+                float(self.foc_target_position_spin.value())
+            )
+        else:
+            target_counts = self._display_multi_turn_counts_to_raw_counts(
+                float(self.foc_target_position_spin.value())
+            )
+        self._set_foc_target_position_counts(target_counts)
         self._update_foc_mode_ui()
 
     def _sync_foc_controls_to_driver_table(self) -> None:
@@ -8408,14 +8927,19 @@ class MainWindow(QtWidgets.QMainWindow):
                 tracking_mode,
             )
             self._set_foc_target_position_counts(position_target)
+            position_target_display_counts = (
+                self._raw_single_turn_counts_to_display_counts(position_target)
+                if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN
+                else self._raw_multi_turn_counts_to_display_counts(position_target)
+            )
             position_target_degrees = self._counts_to_position_mode_degrees(
-                position_target,
+                position_target_display_counts,
                 tracking_mode,
             )
             current_position = (
                 self._snapshot_position_counts_for_display(last_monitor, tracking_mode)[1]
                 if last_monitor is not None
-                else position_target
+                else position_target_display_counts
             )
             current_position_degrees = self._counts_to_position_mode_degrees(
                 current_position,
@@ -8439,7 +8963,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             description = (
                 f"Start FOC Position Mode "
-                f"(target={position_target_degrees:.2f} deg / {position_target:.1f} cnt, "
+                f"(target={position_target_degrees:.2f} deg / {position_target_display_counts:.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
                 f"pi=({self.foc_position_kp_spin.value():.3f}, {self.foc_position_ki_spin.value():.3f}), "
                 f"vff=({self.foc_position_vff_gain_spin.value():.3f}, {self.foc_position_vff_filter_spin.value():.1f} Hz), "
@@ -8447,13 +8971,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 "frame=none)"
             )
             command = Command.CMD_START_POSITIONCONTROL
-            if abs(position_target - current_position) < 1.0:
+            if abs(position_target_display_counts - current_position) < 1.0:
                 self.foc_live_summary_label.setText(
                     "Position Mode start sent, but Target Position already matches the current position within 1 count. Change the target angle if you expect motion."
                 )
             else:
                 self.foc_live_summary_label.setText(
-                    f"Starting Position Mode: target {position_target_degrees:.2f} deg / {position_target:.1f} cnt | "
+                    f"Starting Position Mode: target {position_target_degrees:.2f} deg / {position_target_display_counts:.1f} cnt | "
                     f"current {current_position_degrees:.2f} deg / {current_position:.1f} cnt | "
                     f"speed limit {self._foc_position_speed_limit_rpm:.1f} rpm | "
                     f"{self._position_tracking_mode_text(tracking_mode)}"
@@ -10047,6 +10571,185 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "vf_toggle_button"):
             self.vf_toggle_button.setText("Start V/F")
 
+    def _load_vf_guide_from_motor_table(self) -> None:
+        if not hasattr(self, "motor_table"):
+            return
+        updates: list[tuple[QtWidgets.QDoubleSpinBox, float]] = []
+
+        rs_mohm = self._table_float_value(self.motor_table, MOTOR_PARAM_RESISTANCE, 0.0)
+        if rs_mohm > 0.0 and hasattr(self, "vf_guide_rs_spin"):
+            updates.append((self.vf_guide_rs_spin, rs_mohm / 1000.0))
+
+        ls_uh = self._table_float_value(self.motor_table, MOTOR_PARAM_INDUCTANCE, 0.0)
+        if ls_uh > 0.0 and hasattr(self, "vf_guide_ls_spin"):
+            updates.append((self.vf_guide_ls_spin, ls_uh))
+
+        rated_current = self._table_float_value(self.motor_table, MOTOR_PARAM_RATED_CURRENT_RMS, 0.0)
+        if rated_current > 0.0 and hasattr(self, "vf_guide_rated_current_spin"):
+            updates.append((self.vf_guide_rated_current_spin, rated_current))
+
+        rated_voltage = self._table_float_value(self.motor_table, MOTOR_PARAM_MAXIMUM_VOLTAGE, 0.0)
+        if rated_voltage > 0.0 and hasattr(self, "vf_guide_rated_voltage_spin"):
+            updates.append((self.vf_guide_rated_voltage_spin, rated_voltage))
+
+        pole_pairs = self._table_float_value(self.motor_table, MOTOR_PARAM_POLE_PAIRS, 0.0)
+        maximum_speed_rpm = self._table_float_value(self.motor_table, MOTOR_PARAM_MAXIMUM_SPEED, 0.0)
+        rated_freq_hz = 0.0
+        if pole_pairs > 0.0 and maximum_speed_rpm > 0.0:
+            rated_freq_hz = abs(pole_pairs * maximum_speed_rpm / 60.0)
+        if rated_freq_hz <= 0.0:
+            rated_freq_hz = DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ
+        if hasattr(self, "vf_guide_rated_freq_spin"):
+            updates.append((self.vf_guide_rated_freq_spin, rated_freq_hz))
+
+        for spin, value in updates:
+            spin.blockSignals(True)
+            spin.setValue(float(value))
+            spin.blockSignals(False)
+
+        self._refresh_vf_guide_plot()
+
+    def _refresh_vf_guide_plot(self) -> None:
+        if not hasattr(self, "vf_guide_plot"):
+            return
+
+        rs_ohm = float(self.vf_guide_rs_spin.value()) if hasattr(self, "vf_guide_rs_spin") else 0.0
+        ls_uh = float(self.vf_guide_ls_spin.value()) if hasattr(self, "vf_guide_ls_spin") else 0.0
+        rated_current_a = (
+            float(self.vf_guide_rated_current_spin.value())
+            if hasattr(self, "vf_guide_rated_current_spin")
+            else 0.0
+        )
+        rated_freq_hz = (
+            float(self.vf_guide_rated_freq_spin.value())
+            if hasattr(self, "vf_guide_rated_freq_spin")
+            else 0.0
+        )
+        rated_voltage_v = (
+            float(self.vf_guide_rated_voltage_spin.value())
+            if hasattr(self, "vf_guide_rated_voltage_spin")
+            else 0.0
+        )
+        command_freq_hz = abs(float(self.vf_frequency_spin.value())) if hasattr(self, "vf_frequency_spin") else 0.0
+        command_voltage_v = float(self.vf_voltage_spin.value()) if hasattr(self, "vf_voltage_spin") else 0.0
+
+        voltage_boost_v = max(0.0, rated_current_a * rs_ohm)
+        slope_v_per_hz = 0.0
+        if rated_freq_hz > 1.0e-6:
+            slope_v_per_hz = max(0.0, rated_voltage_v - voltage_boost_v) / rated_freq_hz
+
+        def linear_vf_voltage(freq_hz: float) -> float:
+            freq_abs = max(0.0, float(freq_hz))
+            if rated_freq_hz > 1.0e-6 and freq_abs > rated_freq_hz:
+                return max(rated_voltage_v, 0.0)
+            return voltage_boost_v + (slope_v_per_hz * freq_abs)
+
+        suggested_voltage_v = linear_vf_voltage(command_freq_hz)
+        ls_h = max(0.0, ls_uh * 1.0e-6)
+        rl_rated_voltage_v = 0.0
+        if rated_current_a > 0.0 and rated_freq_hz > 0.0:
+            rl_rated_voltage_v = rated_current_a * math.sqrt(
+                (rs_ohm * rs_ohm) + ((2.0 * math.pi * rated_freq_hz * ls_h) ** 2)
+            )
+
+        if hasattr(self, "vf_guide_boost_value_label"):
+            self.vf_guide_boost_value_label.setText(f"{voltage_boost_v:.3f} V")
+        if hasattr(self, "vf_guide_slope_value_label"):
+            self.vf_guide_slope_value_label.setText(f"{slope_v_per_hz:.4f} V/Hz")
+        if hasattr(self, "vf_guide_rl_value_label"):
+            self.vf_guide_rl_value_label.setText(f"{rl_rated_voltage_v:.3f} V")
+        if hasattr(self, "vf_guide_suggested_voltage_value_label"):
+            self.vf_guide_suggested_voltage_value_label.setText(f"{suggested_voltage_v:.3f} V")
+
+        if rated_freq_hz <= 0.0 or rated_voltage_v <= 0.0:
+            if hasattr(self, "vf_guide_formula_value_label"):
+                self.vf_guide_formula_value_label.setText(
+                    "Enter rated electrical frequency and rated voltage to generate the V/f guide."
+                )
+            self.vf_guide_plot.clear("Waiting for V/f guide inputs...")
+            return
+
+        formula_text = (
+            f"Guide: V = {voltage_boost_v:.3f} + {slope_v_per_hz:.4f} * f "
+            f"for 0..{rated_freq_hz:.2f} Hz, then clamp near {rated_voltage_v:.2f} V."
+        )
+        if hasattr(self, "vf_guide_formula_value_label"):
+            self.vf_guide_formula_value_label.setText(formula_text)
+
+        chart_max_freq_hz = max(rated_freq_hz, command_freq_hz, 1.0)
+        sample_count = 49
+        guide_series: list[tuple[float, float]] = []
+        rl_series: list[tuple[float, float]] = []
+        for index in range(sample_count):
+            freq_hz = chart_max_freq_hz * index / float(sample_count - 1)
+            guide_series.append((freq_hz, linear_vf_voltage(freq_hz)))
+            if rated_current_a > 0.0 and ls_h > 0.0:
+                rl_voltage = rated_current_a * math.sqrt(
+                    (rs_ohm * rs_ohm) + ((2.0 * math.pi * freq_hz * ls_h) ** 2)
+                )
+                rl_series.append((freq_hz, rl_voltage))
+
+        series_defs = [
+            {
+                "label": "Linear V/f guide",
+                "color": "#4dabf7",
+                "mode": "line",
+                "line_width": 2.2,
+            }
+        ]
+        series_data: list[list[tuple[float, float]]] = [guide_series]
+
+        if rl_series:
+            series_defs.append(
+                {
+                    "label": "RL estimate @ I rated",
+                    "color": "#f59f00",
+                    "mode": "line",
+                    "line_width": 1.8,
+                    "alpha": 220,
+                }
+            )
+            series_data.append(rl_series)
+
+        series_defs.extend(
+            [
+                {
+                    "label": "Suggested @ cmd f",
+                    "color": "#51cf66",
+                    "mode": "scatter",
+                    "marker_radius": 3.4,
+                },
+                {
+                    "label": "Current command",
+                    "color": "#ff6b6b",
+                    "mode": "scatter",
+                    "marker_radius": 3.4,
+                },
+            ]
+        )
+        series_data.extend(
+            [
+                [(command_freq_hz, suggested_voltage_v)],
+                [(command_freq_hz, command_voltage_v)],
+            ]
+        )
+
+        self.vf_guide_plot.set_plot(
+            title="Open-loop V/f Suggestion",
+            x_label="Electrical Frequency",
+            x_unit="Hz",
+            y_label="Voltage",
+            y_unit="V",
+            series_defs=series_defs,
+            series_data=series_data,
+            status_text=(
+                f"Boost {voltage_boost_v:.3f} V | Slope {slope_v_per_hz:.4f} V/Hz | "
+                f"Suggested @ {command_freq_hz:.2f} Hz = {suggested_voltage_v:.3f} V"
+            ),
+            x_min_floor=0.0,
+            y_min_floor=0.0,
+        )
+
     def _handle_frame(self, frame: ParsedFrame) -> None:
         if frame.code == ACK_NOERROR:
             sent_command = self._last_sent.command if self._last_sent is not None else None
@@ -10256,6 +10959,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 item.setText(f"{value:.6f}")
         if table is getattr(self, "motor_table", None):
             self._refresh_autotune_input_review_from_motor_table()
+            self._load_vf_guide_from_motor_table()
 
     def _clear_trend_history(self) -> None:
         self._trend_buffer.clear()
@@ -10614,8 +11318,8 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Setting Position: {self._counts_to_position_mode_degrees(cmd_position_counts):.3f} deg",
             f"Tracking Error: {self._display_position_error_degrees(cmd_position_counts, act_position_counts):.3f} deg",
             f"Mechanical Angle (Single-turn): {self._counts_to_single_turn_degrees(act_position_counts):.3f} deg",
-            f"Mechanical Angle (Multi-turn): {self._counts_to_accumulated_degrees(snapshot.act_position):.3f} deg",
-            f"Total Distance: {self._counts_to_turns(snapshot.act_position):.3f} turns",
+            f"Mechanical Angle (Multi-turn): {self._counts_to_accumulated_degrees(self._raw_multi_turn_counts_to_display_counts(snapshot.act_position)):.3f} deg",
+            f"Total Distance: {self._counts_to_turns(self._raw_multi_turn_counts_to_display_counts(snapshot.act_position)):.3f} turns",
             "",
             "[Currents]",
             f"Id Ref / Id: {snapshot.id_ref:.3f} A / {snapshot.id_current:.3f} A",
@@ -10695,8 +11399,10 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setStyleSheet("")
         self._set_monitor_value("enable_run", "OFF")
         self._set_monitor_value("run_mode", "Idle")
-        self._set_monitor_value("control_timing_mode", self._timing_mode_text(self._active_timing_mode))
-        self._set_monitor_value("effective_loop_hz", f"{self._active_control_loop_hz:.0f} Hz")
+        self._set_monitor_value(
+            "control_timing_mode",
+            self._current_loop_display_text(self._active_control_loop_hz),
+        )
         self._set_monitor_value("calibration_status", "Idle")
         self._set_monitor_value("adc_offset_ia", "0x7FFF (default)")
         self._set_monitor_value("adc_offset_ib", "0x7FFF (default)")
@@ -10919,16 +11625,26 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         setting_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts)
         mechanical_angle_single_deg = self._counts_to_single_turn_degrees(act_position_counts)
-        mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(snapshot.act_position)
-        total_distance_turns = self._counts_to_turns(snapshot.act_position)
+        mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(
+            self._raw_multi_turn_counts_to_display_counts(snapshot.act_position)
+        )
+        total_distance_turns = self._counts_to_turns(
+            self._raw_multi_turn_counts_to_display_counts(snapshot.act_position)
+        )
         self._set_monitor_value("enable_run", "ON" if snapshot.enable_run else "OFF")
         self._set_monitor_value("run_mode", self._run_mode_text(snapshot.run_mode))
-        self._set_monitor_value("control_timing_mode", self._timing_mode_text(snapshot.control_timing_mode))
-        self._set_monitor_value("effective_loop_hz", f"{snapshot.control_loop_frequency_hz:.0f} Hz")
+        self._set_monitor_value(
+            "control_timing_mode",
+            self._current_loop_display_text(
+                snapshot.control_loop_frequency_hz,
+                snapshot.debug_isr_frequency_hz,
+            ),
+        )
         self._set_fault_label(snapshot.fault_occurred)
         self._handle_fault_transition(snapshot.fault_occurred, "Monitor")
         self._refresh_alignment_panel(snapshot)
         self._refresh_foc_control_panel(snapshot)
+        self._refresh_mechanical_zero_panel()
         self._refresh_autotune_panel(snapshot)
         self._set_monitor_value("vdc", f"{snapshot.vdc:.3f} V")
         self._set_monitor_value("temperature", f"{snapshot.temperature:.3f} C")
@@ -10988,12 +11704,21 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         setting_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts)
         mechanical_angle_single_deg = self._counts_to_single_turn_degrees(act_position_counts)
-        mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(snapshot.act_position)
-        total_distance_turns = self._counts_to_turns(snapshot.act_position)
+        mechanical_angle_multi_deg = self._counts_to_accumulated_degrees(
+            self._raw_multi_turn_counts_to_display_counts(snapshot.act_position)
+        )
+        total_distance_turns = self._counts_to_turns(
+            self._raw_multi_turn_counts_to_display_counts(snapshot.act_position)
+        )
         self._set_monitor_value("enable_run", "OFF")
         self._set_monitor_value("run_mode", "FAULT")
-        self._set_monitor_value("control_timing_mode", self._timing_mode_text(self._active_timing_mode))
-        self._set_monitor_value("effective_loop_hz", f"{self._active_control_loop_hz:.0f} Hz")
+        self._set_monitor_value(
+            "control_timing_mode",
+            self._current_loop_display_text(
+                self._active_control_loop_hz,
+                snapshot.debug_isr_frequency_hz,
+            ),
+        )
         self._set_monitor_value("vdc", f"{snapshot.vdc:.3f} V")
         self._set_monitor_value("temperature", f"{snapshot.temperature:.3f} C")
         if snapshot.fault_code & 0x0100:
