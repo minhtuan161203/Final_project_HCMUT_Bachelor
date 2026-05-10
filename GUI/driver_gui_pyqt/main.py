@@ -337,10 +337,16 @@ MOTOR_PARAM_POLE_PAIRS = MOTOR_PARAMETER_NAMES.index("MOTOR_NUMBER_POLE_PAIRS")
 MOTOR_PARAM_CURRENT_P_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_P_GAIN")
 MOTOR_PARAM_CURRENT_I_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_I_GAIN")
 MOTOR_PARAM_ENCODER_RESOLUTION = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_RESOLUTION")
+MOTOR_PARAM_CURRENT_CTRL_DIRECTION = MOTOR_PARAMETER_NAMES.index(
+    "MOTOR_CURRENT_CTRL_DIRECTION"
+)
 AUTOTUNE_ENCODER_BITS_CUSTOM = 0
 AUTOTUNE_ENCODER_BITS_MAX = 24
 AUTOTUNE_RS_LOW_RATIO = 0.9
 AUTOTUNE_RS_HIGH_RATIO = 1.0
+AUTOTUNE_DIRECTION_SUGGESTION_MIN_TURNS = 0.10
+AUTOTUNE_DIRECTION_SUGGESTION_MIN_COUNTS = 32.0
+AUTOTUNE_DIRECTION_APPLY_DESCRIPTION = "Apply Auto-Tune Direction Suggestion"
 
 TRACE_PRESETS = {
     "Encoder Alignment": [12, 11, 4, 14],
@@ -4213,6 +4219,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._autotune_rs_capture = _empty_scope_state("Rs Calibration Chart")
         self._autotune_ls_capture = _empty_scope_state("Ls Sine Injection Response")
         self._autotune_continue_signature: tuple[int, int] | None = None
+        self._autotune_direction_suggestion_value: int | None = None
+        self._autotune_direction_last_raw_count: int | None = None
+        self._autotune_direction_raw_delta_counts = 0.0
+        self._autotune_direction_tracking_active = False
+        self._autotune_direction_apply_pending = False
         self._trace_capture = _empty_scope_state("Firmware Trace Scope")
         self._uerror_samples: list[UerrorRawSample] = []
         self._uerror_status_text = "Waiting for survey..."
@@ -4931,6 +4942,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_start_button = QtWidgets.QPushButton("Start Auto-Tune")
         self.autotune_stop_button = QtWidgets.QPushButton("Stop Auto-Tune")
         self.autotune_apply_button = QtWidgets.QPushButton("Apply Estimated Gains")
+        self.autotune_apply_direction_button = QtWidgets.QPushButton(
+            "Apply Direction Suggestion"
+        )
+        self.autotune_apply_direction_button.setEnabled(False)
+        self.autotune_apply_direction_button.setToolTip(
+            "Writes only MOTOR_CURRENT_CTRL_DIRECTION into the live motor-parameter table. "
+            "Use Save Params to Flash separately if the new direction should persist after reboot."
+        )
         self.autotune_progress_bar = QtWidgets.QProgressBar()
         self.autotune_progress_bar.setRange(0, 100)
         self.autotune_progress_bar.setValue(0)
@@ -4943,6 +4962,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_ke_value_label = QtWidgets.QLabel("-")
         self.autotune_flux_value_label = QtWidgets.QLabel("-")
         self.autotune_pp_value_label = QtWidgets.QLabel("-")
+        self.autotune_direction_value_label = QtWidgets.QLabel(
+            "Waiting for FLUX rotation..."
+        )
+        self.autotune_direction_value_label.setWordWrap(True)
         self.autotune_kt_value_label = QtWidgets.QLabel("-")
         self.autotune_j_value_label = QtWidgets.QLabel("-")
         self.autotune_b_value_label = QtWidgets.QLabel("-")
@@ -5012,12 +5035,15 @@ class MainWindow(QtWidgets.QMainWindow):
         estimated_layout.addWidget(self.autotune_flux_value_label, 3, 1)
         estimated_layout.addWidget(QtWidgets.QLabel("Pole Pairs"), 4, 0)
         estimated_layout.addWidget(self.autotune_pp_value_label, 4, 1)
-        estimated_layout.addWidget(QtWidgets.QLabel("Kt"), 5, 0)
-        estimated_layout.addWidget(self.autotune_kt_value_label, 5, 1)
-        estimated_layout.addWidget(QtWidgets.QLabel("J"), 6, 0)
-        estimated_layout.addWidget(self.autotune_j_value_label, 6, 1)
-        estimated_layout.addWidget(QtWidgets.QLabel("B"), 7, 0)
-        estimated_layout.addWidget(self.autotune_b_value_label, 7, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("Direction"), 5, 0)
+        estimated_layout.addWidget(self.autotune_direction_value_label, 5, 1)
+        estimated_layout.addWidget(self.autotune_apply_direction_button, 6, 0, 1, 2)
+        estimated_layout.addWidget(QtWidgets.QLabel("Kt"), 7, 0)
+        estimated_layout.addWidget(self.autotune_kt_value_label, 7, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("J"), 8, 0)
+        estimated_layout.addWidget(self.autotune_j_value_label, 8, 1)
+        estimated_layout.addWidget(QtWidgets.QLabel("B"), 9, 0)
+        estimated_layout.addWidget(self.autotune_b_value_label, 9, 1)
         estimated_layout.setColumnStretch(1, 1)
 
         gains_group = QtWidgets.QGroupBox("Loop Gains")
@@ -5044,6 +5070,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "<li>Run the <b>Flux</b>, <b>J</b>, and <b>B</b> stages only with the motor unloaded and free to spin.</li>"
             "<li>Before Flux estimation, try the same <b>Flux Voltage</b> and <b>Flux Frequency</b> in <b>Open Loop V/F</b> first.</li>"
             "<li>The motor should spin smoothly without strong jerks, buzz, or unstable vibration before you trust the Ke / flux estimate.</li>"
+            "<li>During the Flux rotation, the GUI also watches the raw encoder count and suggests <b>MOTOR_CURRENT_CTRL_DIRECTION</b>. Apply it only after the motion test is over, then verify or rerun encoder alignment before closed-loop FOC.</li>"
             "<li>The mechanical stages use a sinusoidal <b>Iq</b> excitation, filtered speed, and cycle-based integration between zero crossings.</li>"
             "</ul>"
             "<b>Rs Estimation Note</b>"
@@ -5320,6 +5347,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ack_fault_button = QtWidgets.QPushButton("Reset Alarm")
         self.ack_fault_button.setEnabled(False)
         self.save_flash_button = QtWidgets.QPushButton("Save Params to Flash")
+        self.save_flash_button.setToolTip(
+            "Writes the current runtime Driver/Motor parameter arrays into flash. "
+            "Normal GUI writes change live RAM only; they are not persistent until this succeeds."
+        )
 
         self.quick_command_tabs = QtWidgets.QTabWidget()
 
@@ -5332,7 +5363,7 @@ class MainWindow(QtWidgets.QMainWindow):
         button_grid.addWidget(self.save_flash_button, 0, 3)
         drive_layout.addLayout(button_grid)
         drive_hint = QtWidgets.QLabel(
-            "Servo ON only performs the safe arm sequence with no motion command. Watch Driver Monitor for current calibration and encoder alignment status, then use the FOC Control tab to start closed-loop motion when the drive is ready."
+            "Servo ON only performs the safe arm sequence with no motion command. Watch Driver Monitor for current calibration and encoder alignment status, then use the FOC Control tab to start closed-loop motion when the drive is ready. Parameter writes and auto-tune apply update the live runtime tables first; flash is only updated by Save Params to Flash."
         )
         drive_hint.setWordWrap(True)
         drive_layout.addWidget(drive_hint)
@@ -5709,6 +5740,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "<li><b>Servo ON</b> only arms the drive: current-sensor offset calibration, zero-current references, and PWM enable.</li>"
             "<li>Watch <b>Driver Monitor</b> until encoder alignment is done before starting motion.</li>"
             "<li><b>Start FOC</b> sends the selected mode, target, gains, and ramp limits to firmware.</li>"
+            "<li>The firmware PI controllers use the <b>parallel PI</b> form <b>u = Kp*e + Ki*integral(e dt)</b>, so the gains on this panel are direct <b>Kp</b> and <b>Ki</b> entries, not a series / interacting PI pair.</li>"
             "<li>Runtime FOC uses <b>raw theta</b> with no extra electrical frame offset.</li>"
             "<li>Current-loop decoupling assumes <b>Ld = Lq = estimated MOTOR_INDUCTANCE</b>, matching the present motor setup.</li>"
             "</ul>"
@@ -6440,6 +6472,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_start_button.clicked.connect(self._start_motor_autotune)
         self.autotune_stop_button.clicked.connect(self._stop_motor_autotune)
         self.autotune_apply_button.clicked.connect(self._apply_motor_autotune_estimates)
+        self.autotune_apply_direction_button.clicked.connect(
+            self._apply_autotune_direction_suggestion
+        )
         self.autotune_clear_button.clicked.connect(self._clear_autotune_capture)
         self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_rs_scope_view.set_auto_scale)
         self.autotune_auto_scale_checkbox.toggled.connect(self.autotune_ls_scope_view.set_auto_scale)
@@ -6876,6 +6911,214 @@ class MainWindow(QtWidgets.QMainWindow):
                 bytes(payload),
                 f"{description_prefix} chunk {chunk_index}/{chunk_total}",
             )
+
+    def _autotune_direction_encoder_resolution(self) -> int:
+        resolution = 0
+        if hasattr(self, "autotune_init_encoder_resolution_spin"):
+            resolution = int(self.autotune_init_encoder_resolution_spin.value())
+        if resolution <= 0 and hasattr(self, "motor_table"):
+            resolution = int(
+                round(
+                    self._table_float_value(
+                        self.motor_table,
+                        MOTOR_PARAM_ENCODER_RESOLUTION,
+                        float(1 << 20),
+                    )
+                )
+            )
+        return max(1, resolution)
+
+    def _current_motor_direction_value(self) -> int:
+        if not hasattr(self, "motor_table"):
+            return 0
+        direction_value = self._table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_CURRENT_CTRL_DIRECTION,
+            0.0,
+        )
+        return 0 if int(round(direction_value)) == 0 else 1
+
+    def _reset_autotune_direction_tracking(self) -> None:
+        self._autotune_direction_suggestion_value = None
+        self._autotune_direction_last_raw_count = None
+        self._autotune_direction_raw_delta_counts = 0.0
+        self._autotune_direction_tracking_active = False
+        self._autotune_direction_apply_pending = False
+        self._refresh_autotune_direction_ui(None)
+
+    def _autotune_direction_signed_motion_counts(self, snapshot) -> float:
+        command_hz = float(getattr(snapshot, "debug_open_loop_electrical_hz_cmd", 0.0))
+        if abs(command_hz) < 1.0e-6 and hasattr(self, "autotune_flux_frequency_spin"):
+            command_hz = float(self.autotune_flux_frequency_spin.value())
+        if abs(command_hz) < 1.0e-6:
+            command_hz = 1.0
+        return self._autotune_direction_raw_delta_counts * (1.0 if command_hz >= 0.0 else -1.0)
+
+    def _update_autotune_direction_suggestion(self, snapshot) -> None:
+        if snapshot is None:
+            self._refresh_autotune_direction_ui(None)
+            return
+
+        if int(snapshot.autotune_error) != MOTOR_AUTOTUNE_ERROR_NONE:
+            self._autotune_direction_tracking_active = False
+            self._autotune_direction_last_raw_count = None
+            self._refresh_autotune_direction_ui(snapshot)
+            return
+
+        if (
+            int(snapshot.autotune_state) == MOTOR_AUTOTUNE_STATE_FLUX
+            and int(getattr(snapshot, "debug_enc_single_turn_valid", 0)) != 0
+        ):
+            resolution = self._autotune_direction_encoder_resolution()
+            raw_count = int(snapshot.debug_enc_single_turn) % resolution
+            if not self._autotune_direction_tracking_active:
+                self._autotune_direction_tracking_active = True
+                self._autotune_direction_last_raw_count = raw_count
+                self._refresh_autotune_direction_ui(snapshot)
+                return
+
+            if self._autotune_direction_last_raw_count is not None:
+                delta_counts = raw_count - self._autotune_direction_last_raw_count
+                half_counts = resolution * 0.5
+                if delta_counts > half_counts:
+                    delta_counts -= resolution
+                elif delta_counts < -half_counts:
+                    delta_counts += resolution
+                self._autotune_direction_raw_delta_counts += float(delta_counts)
+            self._autotune_direction_last_raw_count = raw_count
+
+            required_counts = max(
+                AUTOTUNE_DIRECTION_SUGGESTION_MIN_COUNTS,
+                float(resolution) * AUTOTUNE_DIRECTION_SUGGESTION_MIN_TURNS,
+            )
+            signed_motion_counts = self._autotune_direction_signed_motion_counts(snapshot)
+            if abs(signed_motion_counts) >= required_counts:
+                self._autotune_direction_suggestion_value = (
+                    0 if signed_motion_counts > 0.0 else 1
+                )
+        else:
+            self._autotune_direction_tracking_active = False
+            self._autotune_direction_last_raw_count = None
+
+        self._refresh_autotune_direction_ui(snapshot)
+
+    def _refresh_autotune_direction_ui(self, snapshot) -> None:
+        if not hasattr(self, "autotune_direction_value_label"):
+            return
+
+        current_direction = self._current_motor_direction_value()
+        suggestion = self._autotune_direction_suggestion_value
+        resolution = max(1, self._autotune_direction_encoder_resolution())
+        raw_turns = self._autotune_direction_raw_delta_counts / float(resolution)
+        raw_direction_text = (
+            "raw encoder increasing"
+            if raw_turns >= 0.0
+            else "raw encoder decreasing"
+        )
+
+        if suggestion is None:
+            if (
+                snapshot is not None
+                and int(snapshot.autotune_state) == MOTOR_AUTOTUNE_STATE_FLUX
+                and int(getattr(snapshot, "debug_enc_single_turn_valid", 0)) != 0
+            ):
+                text = (
+                    f"Tracking FLUX motion... {abs(raw_turns):.3f} turn captured "
+                    f"({raw_direction_text})."
+                )
+            elif (
+                snapshot is not None
+                and int(snapshot.autotune_error) != MOTOR_AUTOTUNE_ERROR_NONE
+            ):
+                text = (
+                    "No suggestion available because auto-tune ended with "
+                    f"{self._autotune_error_text(snapshot.autotune_error)}. "
+                    f"Current runtime value = {current_direction}."
+                )
+            else:
+                text = (
+                    f"Waiting for FLUX rotation. Current runtime value = "
+                    f"{current_direction}. This suggestion is estimated from raw "
+                    "encoder motion during positive auto-tune rotation."
+                )
+            self.autotune_direction_value_label.setText(text)
+            self.autotune_apply_direction_button.setEnabled(False)
+            return
+
+        status_suffix = (
+            "already active"
+            if current_direction == suggestion
+            else f"current runtime value = {current_direction}"
+        )
+        self.autotune_direction_value_label.setText(
+            f"{suggestion} suggested from {raw_direction_text} "
+            f"({abs(raw_turns):.3f} turn during FLUX). {status_suffix}."
+        )
+        allow_apply = (
+            not self._autotune_direction_apply_pending
+            and current_direction != suggestion
+            and (
+                snapshot is None
+                or int(snapshot.autotune_state)
+                in (
+                    MOTOR_AUTOTUNE_STATE_IDLE,
+                    MOTOR_AUTOTUNE_STATE_DONE,
+                    MOTOR_AUTOTUNE_STATE_ERROR,
+                )
+            )
+        )
+        self.autotune_apply_direction_button.setEnabled(allow_apply)
+
+    def _apply_autotune_direction_suggestion(self) -> None:
+        suggestion = self._autotune_direction_suggestion_value
+        if suggestion is None:
+            self._set_parameter_status(
+                "No motor-direction suggestion is available yet.",
+                "warn",
+            )
+            return
+
+        snapshot = self._latest_monitor_snapshot
+        if (
+            snapshot is not None
+            and int(snapshot.autotune_state)
+            not in (
+                MOTOR_AUTOTUNE_STATE_IDLE,
+                MOTOR_AUTOTUNE_STATE_DONE,
+                MOTOR_AUTOTUNE_STATE_ERROR,
+            )
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Apply Auto-Tune Direction Suggestion",
+                "Wait until the auto-tune motion stops before applying "
+                "MOTOR_CURRENT_CTRL_DIRECTION.",
+            )
+            return
+
+        if hasattr(self, "motor_table"):
+            self._set_table_float_value(
+                self.motor_table,
+                MOTOR_PARAM_CURRENT_CTRL_DIRECTION,
+                float(suggestion),
+            )
+
+        self._autotune_direction_apply_pending = True
+        self._refresh_autotune_direction_ui(snapshot)
+        self._set_parameter_status(
+            "Applying auto-tune direction suggestion to runtime motor parameters. "
+            "Flash is unchanged until Save Params to Flash is used.",
+            "info",
+        )
+        self.statusBar().showMessage(
+            "Applying runtime motor direction. Recheck encoder alignment before "
+            "closed-loop FOC.",
+            5000,
+        )
+        self._enqueue_motor_parameter_updates(
+            [(MOTOR_PARAM_CURRENT_CTRL_DIRECTION, float(suggestion))],
+            AUTOTUNE_DIRECTION_APPLY_DESCRIPTION,
+        )
 
     def _current_foc_mode(self) -> int:
         return int(self.foc_mode_combo.currentData() or SPEED_CONTROL_MODE)
@@ -9467,6 +9710,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "autotune_state_value_label"):
             return
         if snapshot is None:
+            self._refresh_autotune_direction_ui(None)
             self.autotune_state_value_label.setText("Idle")
             self.autotune_error_value_label.setText("No error")
             self._refresh_autotune_result_lamp(
@@ -9489,6 +9733,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.autotune_apply_button.setEnabled(False)
             return
 
+        self._update_autotune_direction_suggestion(snapshot)
         self.autotune_state_value_label.setText(
             self._autotune_state_text(snapshot.autotune_state)
         )
@@ -9630,6 +9875,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self.auto_poll_checkbox.setChecked(True)
+        self._reset_autotune_direction_tracking()
         self._clear_autotune_capture()
         self.autotune_chart_state_label.setText("Starting auto-tune...")
         self._set_parameter_status(
@@ -9653,6 +9899,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _stop_motor_autotune(self) -> None:
         self._autotune_continue_signature = None
+        self._autotune_direction_tracking_active = False
+        self._autotune_direction_last_raw_count = None
+        self._refresh_autotune_direction_ui(self._latest_monitor_snapshot)
         self._enqueue_command(
             Command.CMD_STOP_AUTOTUNING_T,
             b"",
@@ -9664,7 +9913,7 @@ class MainWindow(QtWidgets.QMainWindow):
         synced_from_snapshot = self._sync_parameter_tables_from_autotune_snapshot()
         if synced_from_snapshot:
             self._set_parameter_status(
-                "Prepared auto-tune gains in GUI. Applying them to firmware...",
+                "Prepared auto-tune gains in GUI. Applying them to firmware runtime tables; flash is unchanged until Save Params to Flash is used.",
                 "info",
             )
         self._enqueue_command(
@@ -10395,6 +10644,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_ack_timeout(self) -> None:
         if self._last_sent is not None:
+            sent_description = self._last_sent.description or ""
+            is_direction_apply = (
+                self._last_sent.command == Command.CMD_WRITE_MOTOR
+                and sent_description.startswith(AUTOTUNE_DIRECTION_APPLY_DESCRIPTION)
+            )
             self._append_log(
                 f"ACK timeout for {self._last_sent.description} "
                 f"(0x{self._last_sent.command:02X})"
@@ -10408,7 +10662,12 @@ class MainWindow(QtWidgets.QMainWindow):
             elif self._last_sent.command == Command.CMD_WRITE_DRIVER:
                 self._set_parameter_status("Driver parameter write timed out.", "error")
             elif self._last_sent.command == Command.CMD_WRITE_MOTOR:
-                self._set_parameter_status("Motor parameter write timed out.", "error")
+                if is_direction_apply:
+                    self._autotune_direction_apply_pending = False
+                    self._set_parameter_status("Motor direction apply timed out.", "error")
+                    self._refresh_autotune_direction_ui(self._latest_monitor_snapshot)
+                else:
+                    self._set_parameter_status("Motor parameter write timed out.", "error")
         self._awaiting_ack = False
         self._last_sent = None
         self._try_send_next()
@@ -10753,9 +11012,16 @@ class MainWindow(QtWidgets.QMainWindow):
     def _handle_frame(self, frame: ParsedFrame) -> None:
         if frame.code == ACK_NOERROR:
             sent_command = self._last_sent.command if self._last_sent is not None else None
+            sent_description = (
+                self._last_sent.description if self._last_sent is not None else ""
+            )
             echoed_command = frame.payload[0] if frame.payload else None
             should_resync_after_autotune_apply = (
                 sent_command == Command.CMD_UPDATE_TUNING_GAIN
+            )
+            should_resync_after_direction_apply = (
+                sent_command == Command.CMD_WRITE_MOTOR
+                and str(sent_description).startswith(AUTOTUNE_DIRECTION_APPLY_DESCRIPTION)
             )
             if not (self._last_sent and self._last_sent.quiet):
                 if echoed_command is None:
@@ -10764,6 +11030,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._append_log(f"ACK received for command 0x{echoed_command:02X}")
             if sent_command == Command.CMD_WRITE_DRIVER:
                 self._set_parameter_status("Driver parameter write acknowledged.", "ok")
+            elif should_resync_after_direction_apply:
+                self._autotune_direction_apply_pending = False
+                self._set_parameter_status(
+                    "Motor direction acknowledged. Reading back runtime motor parameters...",
+                    "info",
+                )
             elif sent_command == Command.CMD_WRITE_MOTOR:
                 self._set_parameter_status("Motor parameter write chunk acknowledged.", "ok")
             elif sent_command == Command.CMD_START_UERROR_CHARACTERIZATION:
@@ -10795,11 +11067,35 @@ class MainWindow(QtWidgets.QMainWindow):
                         5000,
                     )
                 self._queue_autotune_parameter_resync()
+            elif should_resync_after_direction_apply:
+                self.statusBar().showMessage(
+                    "Runtime motor direction applied. Verify or rerun encoder alignment before closed-loop FOC. Save to flash separately if needed.",
+                    7000,
+                )
+                self._enqueue_command(
+                    Command.CMD_READ_MOTOR,
+                    bytes([len(MOTOR_PARAMETER_NAMES)]),
+                    "Read Motor Parameters After Direction Apply",
+                )
+                self._enqueue_command(
+                    Command.CMD_UPDATE_MONITOR,
+                    b"",
+                    "Monitor Poll After Direction Apply",
+                    quiet=True,
+                )
+                self._refresh_autotune_direction_ui(self._latest_monitor_snapshot)
             self._try_send_next()
             return
 
         if frame.code == ACK_ERROR:
             sent_command = self._last_sent.command if self._last_sent is not None else None
+            sent_description = (
+                self._last_sent.description if self._last_sent is not None else ""
+            )
+            is_direction_apply = (
+                sent_command == Command.CMD_WRITE_MOTOR
+                and str(sent_description).startswith(AUTOTUNE_DIRECTION_APPLY_DESCRIPTION)
+            )
             self._append_log("Driver returned ACK_ERROR")
             if sent_command == Command.CMD_CONTINUE_AUTO_TUNING_STATE:
                 self._autotune_continue_signature = None
@@ -10813,8 +11109,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._set_parameter_status("Driver parameter write failed.", "error")
                 QtWidgets.QMessageBox.warning(self, "Write Driver Parameters", "Driver parameter write failed.")
             elif sent_command == Command.CMD_WRITE_MOTOR:
-                self._set_parameter_status("Motor parameter write failed.", "error")
-                QtWidgets.QMessageBox.warning(self, "Write Motor Parameters", "Motor parameter write failed.")
+                if is_direction_apply:
+                    self._autotune_direction_apply_pending = False
+                    self._set_parameter_status("Motor direction apply failed.", "error")
+                    self._refresh_autotune_direction_ui(self._latest_monitor_snapshot)
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Apply Auto-Tune Direction Suggestion",
+                        "Firmware did not accept MOTOR_CURRENT_CTRL_DIRECTION.",
+                    )
+                else:
+                    self._set_parameter_status("Motor parameter write failed.", "error")
+                    QtWidgets.QMessageBox.warning(self, "Write Motor Parameters", "Motor parameter write failed.")
             elif sent_command == Command.CMD_UPDATE_TUNING_GAIN:
                 self._set_parameter_status("Auto-tune estimate apply failed.", "error")
                 QtWidgets.QMessageBox.warning(
