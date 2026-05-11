@@ -45,6 +45,12 @@ typedef enum
 	MOTOR_AUTOTUNE_CHART_LS = 2u
 } MotorAutoTuneChartStage_e;
 
+typedef enum
+{
+	MOTOR_AUTOTUNE_MECH_MODE_LEGACY = 0u,
+	MOTOR_AUTOTUNE_MECH_MODE_LOADED = 1u
+} MotorAutoTuneMechanicalMode_e;
+
 typedef struct
 {
 	float rs_current_low_a;
@@ -59,6 +65,13 @@ typedef struct
 	float mechanical_iq_amplitude_a;
 	float mechanical_frequency_hz;
 	float mechanical_speed_lpf_hz;
+	uint8_t mechanical_estimation_mode;
+	uint8_t reserved0;
+	uint8_t reserved1;
+	uint8_t reserved2;
+	float loaded_speed_low_rpm;
+	float loaded_speed_high_rpm;
+	float loaded_capture_hold_s;
 } MotorAutoTuneConfig_t;
 
 typedef struct
@@ -174,7 +187,13 @@ typedef struct
 	float mechanical_regression_s11;
 	float mechanical_regression_swy;
 	float mechanical_regression_sy;
+	float mechanical_loaded_regression_saa;
+	float mechanical_loaded_regression_saw;
+	float mechanical_loaded_regression_sa1;
+	float mechanical_loaded_regression_say;
+	float mechanical_loaded_pi_integral_a;
 	uint32_t mechanical_timeout_ticks;
+	uint32_t mechanical_loaded_sample_count;
 	uint16_t mechanical_zero_cross_count;
 	uint16_t mechanical_window_count;
 	uint8_t mechanical_window_active;

@@ -257,6 +257,7 @@ static float GetAngleTestModeOffsetRad(uint8_t electrical_angle_test_mode);
 static float GetAngleTestModeOffsetDeg(uint8_t electrical_angle_test_mode);
 static float GetRuntimeFocControlTheta(void);
 static float GetIdSquareLockedControlTheta(void);
+static float GetAutoTuneEncoderMechanicalAngle(void);
 static float GetAutoTuneControlTheta(void);
 static int32_t ElectricalAngleDegToEncoderCounts(float electrical_deg, float encoder_resolution, uint8_t pole_pairs);
 static void ApplyEncoderOffsetElectricalDelta(float electrical_deg, float encoder_resolution);
@@ -526,6 +527,32 @@ static float GetIdSquareLockedControlTheta(void)
 	return WrapAngle(-90.0f + globalcontrolthetatune);
 }
 
+static float GetAutoTuneEncoderMechanicalAngle(void)
+{
+	float encoder_resolution;
+	float single_turn_position;
+	float mechanical_angle;
+
+	encoder_resolution = (MotorParameter[MOTOR_ENCODER_RESOLUTION] > 0.0f) ?
+		MotorParameter[MOTOR_ENCODER_RESOLUTION] : (float)MOTOR_ENC_RES;
+	if (encoder_resolution <= 1.0f)
+	{
+		return gDebugMechanicalAngleRad;
+	}
+
+	single_turn_position = GetAlignedSingleTurnPositionCounts(encoder_resolution);
+	single_turn_position += (float)Parameter.Offset_Enc;
+	single_turn_position = fmodf(single_turn_position, encoder_resolution);
+	if (single_turn_position < 0.0f)
+	{
+		single_turn_position += encoder_resolution;
+	}
+
+	mechanical_angle =
+		(1.0f - (single_turn_position / encoder_resolution)) * (2.0f * PI);
+	return WrapAngle(mechanical_angle);
+}
+
 static float GetAutoTuneControlTheta(void)
 {
 	if ((gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_RS) ||
@@ -534,6 +561,23 @@ static float GetAutoTuneControlTheta(void)
 		/* Keep Rs/Ls injection on the same locked d-axis frame that already
 		   works for Id tuning so Vd does not leak into torque-producing Vq. */
 		return GetIdSquareLockedControlTheta();
+	}
+
+	if ((gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_J) ||
+		(gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_B))
+	{
+		float pole_pairs = gMotorAutoTune.measured_PolePairs;
+		float mechanical_angle = GetAutoTuneEncoderMechanicalAngle();
+
+		if (pole_pairs <= 0.5f)
+		{
+			pole_pairs = (Parameter.u8PolePair > 0u) ?
+				(float)Parameter.u8PolePair :
+				(float)INITIAL_MOTOR_POLE_PAIRS;
+		}
+		return WrapAngle(
+			(mechanical_angle * pole_pairs) +
+			((DEFAULT_RUNTIME_FOC_FRAME_DEG * PI) / 180.0f));
 	}
 
 	return GetRuntimeFocControlTheta();
@@ -3897,6 +3941,17 @@ static void RunMotorAutoTuneLoop(void)
 			}
 			gIdRefA = outputs.id_ref_a;
 			gIqRefA = outputs.iq_ref_a;
+			if ((gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_J) &&
+				(gMotorAutoTune.config.mechanical_estimation_mode == MOTOR_AUTOTUNE_MECH_MODE_LOADED))
+			{
+				float commanded_speed_rpm = gMotorAutoTune.config.loaded_speed_low_rpm;
+				if ((gMotorAutoTune.substep == 2u) || (gMotorAutoTune.substep == 3u))
+				{
+					commanded_speed_rpm = gMotorAutoTune.config.loaded_speed_high_rpm;
+				}
+				gTargetSpeedRpm = commanded_speed_rpm;
+				gCommandedSpeedRpm = commanded_speed_rpm;
+			}
 			RunCurrentLoopForTheta(
 				electrical_theta,
 				outputs.id_ref_a,

@@ -118,11 +118,14 @@ TREND_BUFFER_CAPACITY = 4000
 TREND_REFRESH_INTERVAL_MS = 20
 TRACE_CAPTURE_REFRESH_INTERVAL_MS = 100
 SPEED_TEST_TIMER_INTERVAL_MS = 20
+MOTOR_AUTOTUNE_MECH_MODE_LEGACY = 0
+MOTOR_AUTOTUNE_MECH_MODE_LOADED = 1
 SPEED_TEST_TRAPEZOID_UPDATE_INTERVAL_MS = 20
 SPEED_TEST_PROFILE_STEP = "step_response"
 SPEED_TEST_PROFILE_REVERSE = "reversing"
 SPEED_TEST_PROFILE_LOW_SPEED = "low_speed"
 SPEED_TEST_PROFILE_TRAPEZOID = "trapezoidal"
+SPEED_TEST_PROFILE_LOADED_MECH = "loaded_mechanical_id"
 SPEED_TEST_STEP_RAMP_BYPASS_SENTINEL_MS = -1.0
 POSITION_TEST_TIMER_INTERVAL_MS = 20
 POSITION_TEST_PROFILE_SHORT = "short_distance"
@@ -150,6 +153,7 @@ TREND_SERIES_META = {
     "vd": {"label": "Vd", "unit": "V", "color": "#8c564b"},
     "vq": {"label": "Vq", "unit": "V", "color": "#e377c2"},
     "act_speed": {"label": "Act Speed", "unit": "rpm", "color": "#17becf"},
+    "raw_speed": {"label": "Raw Speed", "unit": "rpm", "color": "#00bcd4"},
     "cmd_speed": {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
     "speed_error": {"label": "Speed Error", "unit": "rpm", "color": "#7f7f7f"},
     "cmd_position_deg": {"label": "Setting Position", "unit": "deg", "color": "#bcbd22"},
@@ -168,6 +172,7 @@ TREND_EMA_ALPHA = {
     "vd": 0.22,
     "vq": 0.22,
     "act_speed": 0.25,
+    "raw_speed": 0.20,
     "cmd_speed": None,
     "speed_error": 0.22,
     "cmd_position_deg": None,
@@ -334,6 +339,9 @@ MOTOR_PARAM_ENCODER_ID = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_ID")
 MOTOR_PARAM_MAXIMUM_VOLTAGE = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_VOLTAGE")
 MOTOR_PARAM_MAXIMUM_SPEED = MOTOR_PARAMETER_NAMES.index("MOTOR_MAXIMUM_SPEED")
 MOTOR_PARAM_POLE_PAIRS = MOTOR_PARAMETER_NAMES.index("MOTOR_NUMBER_POLE_PAIRS")
+MOTOR_PARAM_BACK_EMF_CONSTANT = MOTOR_PARAMETER_NAMES.index("MOTOR_BACK_EMF_CONSTANT")
+MOTOR_PARAM_ROTOR_INERTIA = MOTOR_PARAMETER_NAMES.index("MOTOR_ROTOR_INERTIA")
+MOTOR_PARAM_VISCOUS_FRICTION = MOTOR_PARAMETER_NAMES.index("MOTOR_VISCOUS_FRICTION")
 MOTOR_PARAM_CURRENT_P_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_P_GAIN")
 MOTOR_PARAM_CURRENT_I_GAIN = MOTOR_PARAMETER_NAMES.index("MOTOR_CURRENT_I_GAIN")
 MOTOR_PARAM_ENCODER_RESOLUTION = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_RESOLUTION")
@@ -523,6 +531,25 @@ class SpeedTestSession:
     last_target_send_at: float = 0.0
     last_target_rpm: float | None = None
     completion_text: str = "Completed"
+    capture_started_at: float | None = None
+    capture_finished_at: float | None = None
+    analysis_context: dict[str, object] = field(default_factory=dict)
+    step_history: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class LoadedMechanicalIdEstimate:
+    speed_source_key: str
+    torque_constant_nm_per_a: float
+    lower_speed_rpm: float
+    upper_speed_rpm: float
+    lower_torque_nm: float
+    upper_torque_nm: float
+    inertia_kg_m2: float
+    viscous_friction_nm_s_per_rad: float
+    load_torque_nm: float
+    fit_rmse_nm: float
+    ramp_sample_count: int
 
 
 @dataclass(slots=True)
@@ -4213,6 +4240,7 @@ class MainWindow(QtWidgets.QMainWindow):
             capacity=TREND_BUFFER_CAPACITY,
             ema_alpha=TREND_EMA_ALPHA,
         )
+        self._loaded_mechanical_id_estimate: LoadedMechanicalIdEstimate | None = None
         self._trend_panels: list[ScadaTrendPanel] = []
         self._current_tuning_capture = _empty_scope_state("Current Tuning Response")
         self._autotune_capture = _empty_scope_state("Motor Auto-Tune Charts")
@@ -4939,6 +4967,49 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_position_bw_spin.setValue(5.0)
         self.autotune_position_bw_spin.setSuffix(" Hz")
 
+        self.autotune_mech_mode_combo = QtWidgets.QComboBox()
+        self.autotune_mech_mode_combo.addItem(
+            "Legacy No-load Sine",
+            MOTOR_AUTOTUNE_MECH_MODE_LEGACY,
+        )
+        self.autotune_mech_mode_combo.addItem(
+            "Loaded Speed Profile",
+            MOTOR_AUTOTUNE_MECH_MODE_LOADED,
+        )
+        self.autotune_mech_mode_combo.setToolTip(
+            "Legacy mode keeps the original no-load sinusoidal J/B excitation. "
+            "Loaded mode keeps the assembly attached and estimates equivalent J/B from a one-way low/high/low speed profile."
+        )
+
+        self.autotune_mech_iq_spin = QtWidgets.QDoubleSpinBox()
+        self.autotune_mech_iq_spin.setRange(0.0, 100.0)
+        self.autotune_mech_iq_spin.setDecimals(3)
+        self.autotune_mech_iq_spin.setValue(0.0)
+        self.autotune_mech_iq_spin.setSpecialValueText("Auto")
+        self.autotune_mech_iq_spin.setSuffix(" A")
+        self.autotune_mech_iq_spin.setToolTip(
+            "Optional current limit for the mechanical identification stages. "
+            "Leave at Auto to let firmware choose a conservative value from rated current and over-current threshold."
+        )
+
+        self.autotune_loaded_low_speed_spin = QtWidgets.QDoubleSpinBox()
+        self.autotune_loaded_low_speed_spin.setRange(-50000.0, 50000.0)
+        self.autotune_loaded_low_speed_spin.setDecimals(1)
+        self.autotune_loaded_low_speed_spin.setValue(300.0)
+        self.autotune_loaded_low_speed_spin.setSuffix(" rpm")
+        self.autotune_loaded_low_speed_spin.setToolTip(
+            "Loaded-mode lower speed plateau. Use the same sign as the upper speed and keep a meaningful gap between them."
+        )
+
+        self.autotune_loaded_high_speed_spin = QtWidgets.QDoubleSpinBox()
+        self.autotune_loaded_high_speed_spin.setRange(-50000.0, 50000.0)
+        self.autotune_loaded_high_speed_spin.setDecimals(1)
+        self.autotune_loaded_high_speed_spin.setValue(800.0)
+        self.autotune_loaded_high_speed_spin.setSuffix(" rpm")
+        self.autotune_loaded_high_speed_spin.setToolTip(
+            "Loaded-mode upper speed plateau. The firmware will run a low -> high -> low sequence and fit equivalent J/B from the response."
+        )
+
         self.autotune_start_button = QtWidgets.QPushButton("Start Auto-Tune")
         self.autotune_stop_button = QtWidgets.QPushButton("Stop Auto-Tune")
         self.autotune_apply_button = QtWidgets.QPushButton("Apply Estimated Gains")
@@ -4996,11 +5067,19 @@ class MainWindow(QtWidgets.QMainWindow):
         config_layout.addWidget(self.autotune_speed_bw_spin, 3, 3)
         config_layout.addWidget(QtWidgets.QLabel("Position Bandwidth"), 4, 0)
         config_layout.addWidget(self.autotune_position_bw_spin, 4, 1)
-        config_layout.addWidget(self.autotune_start_button, 5, 0)
-        config_layout.addWidget(self.autotune_stop_button, 5, 1)
-        config_layout.addWidget(self.autotune_apply_button, 5, 2, 1, 2)
-        config_layout.addWidget(QtWidgets.QLabel("Progress"), 6, 0)
-        config_layout.addWidget(self.autotune_progress_bar, 6, 1, 1, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Mechanical Mode"), 4, 2)
+        config_layout.addWidget(self.autotune_mech_mode_combo, 4, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Mechanical Iq Limit"), 5, 0)
+        config_layout.addWidget(self.autotune_mech_iq_spin, 5, 1)
+        config_layout.addWidget(QtWidgets.QLabel("Loaded Low Speed"), 5, 2)
+        config_layout.addWidget(self.autotune_loaded_low_speed_spin, 5, 3)
+        config_layout.addWidget(QtWidgets.QLabel("Loaded High Speed"), 6, 0)
+        config_layout.addWidget(self.autotune_loaded_high_speed_spin, 6, 1)
+        config_layout.addWidget(self.autotune_start_button, 7, 0)
+        config_layout.addWidget(self.autotune_stop_button, 7, 1)
+        config_layout.addWidget(self.autotune_apply_button, 7, 2, 1, 2)
+        config_layout.addWidget(QtWidgets.QLabel("Progress"), 8, 0)
+        config_layout.addWidget(self.autotune_progress_bar, 8, 1, 1, 3)
 
         results_group = QtWidgets.QGroupBox("Measured Results")
         results_layout = QtWidgets.QVBoxLayout(results_group)
@@ -5067,11 +5146,13 @@ class MainWindow(QtWidgets.QMainWindow):
             "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
             "<li>First review <b>Rated Current RMS</b>, <b>Encoder Type</b>, and <b>Encoder Resolution</b> in the initial input table.</li>"
             "<li>Lock the rotor mechanically for the <b>Rs</b> and <b>Ls</b> stages.</li>"
-            "<li>Run the <b>Flux</b>, <b>J</b>, and <b>B</b> stages only with the motor unloaded and free to spin.</li>"
+            "<li>Choose <b>Legacy No-load Sine</b> when the shaft is free and can oscillate around zero speed.</li>"
+            "<li>Choose <b>Loaded Speed Profile</b> when the motor stays attached to its load and the mechanical ID should represent the assembled system.</li>"
+            "<li>The <b>Flux</b> stage still needs the mechanism to rotate cleanly in open loop before any J/B mode can succeed.</li>"
             "<li>Before Flux estimation, try the same <b>Flux Voltage</b> and <b>Flux Frequency</b> in <b>Open Loop V/F</b> first.</li>"
             "<li>The motor should spin smoothly without strong jerks, buzz, or unstable vibration before you trust the Ke / flux estimate.</li>"
             "<li>During the Flux rotation, the GUI also watches the raw encoder count and suggests <b>MOTOR_CURRENT_CTRL_DIRECTION</b>. Apply it only after the motion test is over, then verify or rerun encoder alignment before closed-loop FOC.</li>"
-            "<li>The mechanical stages use a sinusoidal <b>Iq</b> excitation, filtered speed, and cycle-based integration between zero crossings.</li>"
+            "<li>Legacy mode uses sinusoidal <b>Iq</b> excitation with zero-crossing windows. Loaded mode drives a firmware-side <b>low -&gt; high -&gt; low</b> speed sequence and fits equivalent J/B from torque, speed, and acceleration.</li>"
             "</ul>"
             "<b>Rs Estimation Note</b>"
             "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
@@ -5112,6 +5193,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ls_chart_layout.addWidget(self.autotune_ls_scope_view)
 
         self._refresh_autotune_panel(None)
+        self._refresh_autotune_mechanical_mode_controls()
 
         scope_toolbar.addWidget(self.autotune_auto_scale_checkbox)
         scope_toolbar.addWidget(self.autotune_clear_button)
@@ -6481,6 +6563,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_reload_init_button.clicked.connect(
             self._refresh_autotune_input_review_from_motor_table
         )
+        self.autotune_mech_mode_combo.currentIndexChanged.connect(
+            self._refresh_autotune_mechanical_mode_controls
+        )
         self.autotune_init_rated_current_spin.valueChanged.connect(
             self._on_autotune_rated_current_changed
         )
@@ -6888,6 +6973,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_init_encoder_bits_spin.setValue(int(encoder_bits))
         del blocker
         self._sync_autotune_input_review_to_motor_table(update_current_suggestions=False)
+
+    def _refresh_autotune_mechanical_mode_controls(self, *_args) -> None:
+        loaded_mode = False
+        if hasattr(self, "autotune_mech_mode_combo"):
+            loaded_mode = (
+                int(self.autotune_mech_mode_combo.currentData() or 0)
+                == MOTOR_AUTOTUNE_MECH_MODE_LOADED
+            )
+        if hasattr(self, "autotune_loaded_low_speed_spin"):
+            self.autotune_loaded_low_speed_spin.setEnabled(loaded_mode)
+        if hasattr(self, "autotune_loaded_high_speed_spin"):
+            self.autotune_loaded_high_speed_spin.setEnabled(loaded_mode)
 
     def _enqueue_motor_parameter_updates(
         self,
@@ -7726,11 +7823,29 @@ class MainWindow(QtWidgets.QMainWindow):
             SPEED_TEST_PROFILE_REVERSE: 1,
             SPEED_TEST_PROFILE_LOW_SPEED: 2,
             SPEED_TEST_PROFILE_TRAPEZOID: 3,
+            SPEED_TEST_PROFILE_LOADED_MECH: 4,
         }.get(profile_key, 0)
         self.speed_test_stack.setCurrentIndex(page_index)
 
     def _speed_test_profile_key(self) -> str:
         return str(self.speed_test_profile_combo.currentData() or SPEED_TEST_PROFILE_STEP)
+
+    def _loaded_mechanical_id_config(self) -> dict[str, float | str]:
+        return {
+            "lower_rpm": float(self.speed_test_loaded_lower_spin.value()),
+            "upper_rpm": float(self.speed_test_loaded_upper_spin.value()),
+            "ramp_s": float(self.speed_test_loaded_ramp_spin.value()),
+            "steady_tolerance_rpm": float(self.speed_test_loaded_tolerance_spin.value()),
+            "steady_hold_s": float(self.speed_test_loaded_steady_hold_spin.value()) / 1000.0,
+            "capture_hold_s": float(self.speed_test_loaded_capture_hold_spin.value()),
+            "speed_source_key": str(self.speed_test_loaded_speed_source_combo.currentData() or "raw_speed"),
+        }
+
+    def _set_loaded_mechanical_id_result_text(self, text: str, *, enable_apply: bool = False) -> None:
+        if hasattr(self, "speed_test_results_edit"):
+            self.speed_test_results_edit.setPlainText(text)
+        if hasattr(self, "speed_test_mech_apply_button"):
+            self.speed_test_mech_apply_button.setEnabled(bool(enable_apply))
 
     def _communication_idle(self) -> bool:
         return bool(self._connected and (not self._awaiting_ack) and (not self._pending_frames))
@@ -7906,6 +8021,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Accel / Decel: {self.speed_test_trapezoid_accel_spin.value():.3f} s",
                 f"Hold: {self.speed_test_trapezoid_hold_spin.value():.2f} s",
                 "Behavior: Repeats until Cancel",
+            ]
+        if profile_key == SPEED_TEST_PROFILE_LOADED_MECH:
+            config = self._loaded_mechanical_id_config()
+            speed_source_label = (
+                self.speed_test_loaded_speed_source_combo.currentText()
+                if hasattr(self, "speed_test_loaded_speed_source_combo")
+                else str(config["speed_source_key"])
+            )
+            return [
+                "Profile: Loaded Mechanical ID (GUI Fit)",
+                f"Lower Speed: {float(config['lower_rpm']):.1f} rpm",
+                f"Upper Speed: {float(config['upper_rpm']):.1f} rpm",
+                f"Accel / Decel: {float(config['ramp_s']):.3f} s",
+                f"Steady tolerance: {float(config['steady_tolerance_rpm']):.1f} rpm",
+                f"Steady hold: {float(config['steady_hold_s']):.2f} s",
+                f"Capture hold: {float(config['capture_hold_s']):.2f} s",
+                f"Speed source for fit: {speed_source_label}",
+                "Model: Kt*Iq = J_eq*alpha + B_eq*omega + tau_bias",
             ]
         return [
             f"Profile: Step Response",
@@ -8530,6 +8663,86 @@ class MainWindow(QtWidgets.QMainWindow):
                 {"type": "wait", "duration_s": accel_s, "status": "Step 7/8: Finishing the down-ramp..."},
                 {"type": "repeat", "to_index": 3, "status": "Step 8/8: Restarting the trapezoid cycle..."},
             ]
+        if profile_key == SPEED_TEST_PROFILE_LOADED_MECH:
+            config = self._loaded_mechanical_id_config()
+            lower_target = float(config["lower_rpm"])
+            upper_target = float(config["upper_rpm"])
+            tolerance_rpm = float(config["steady_tolerance_rpm"])
+            steady_hold_s = float(config["steady_hold_s"])
+            capture_hold_s = float(config["capture_hold_s"])
+            timeout_s = max(
+                2.0,
+                (2.0 * float(config["ramp_s"])) + steady_hold_s + capture_hold_s + 0.75,
+            )
+            return [
+                {
+                    "type": "prepare_target",
+                    "target_rpm": lower_target,
+                    "status": f"Step 1/12: Priming the target to {lower_target:.1f} rpm...",
+                },
+                {
+                    "type": "start_foc",
+                    "target_rpm": lower_target,
+                    "status": f"Step 2/12: Starting FOC at {lower_target:.1f} rpm...",
+                },
+                {"type": "wait", "duration_s": 0.10, "status": "Step 3/12: Waiting for the drive to arm..."},
+                {
+                    "type": "wait_steady",
+                    "target_rpm": lower_target,
+                    "tolerance_rpm": tolerance_rpm,
+                    "hold_s": steady_hold_s,
+                    "timeout_s": timeout_s,
+                    "analysis_role": "settle_lower_initial",
+                    "status": f"Step 4/12: Waiting for the lower plateau at {lower_target:.1f} rpm...",
+                },
+                {
+                    "type": "wait",
+                    "duration_s": capture_hold_s,
+                    "analysis_role": "plateau_lower_1",
+                    "status": f"Step 5/12: Capturing the lower plateau for {capture_hold_s:.2f} s...",
+                },
+                {
+                    "type": "set_speed",
+                    "target_rpm": upper_target,
+                    "status": f"Step 6/12: Ramping to the upper plateau at {upper_target:.1f} rpm...",
+                },
+                {
+                    "type": "wait_steady",
+                    "target_rpm": upper_target,
+                    "tolerance_rpm": tolerance_rpm,
+                    "hold_s": steady_hold_s,
+                    "timeout_s": timeout_s,
+                    "analysis_role": "ramp_up",
+                    "status": f"Step 7/12: Tracking the upper-speed transient toward {upper_target:.1f} rpm...",
+                },
+                {
+                    "type": "wait",
+                    "duration_s": capture_hold_s,
+                    "analysis_role": "plateau_upper",
+                    "status": f"Step 8/12: Capturing the upper plateau for {capture_hold_s:.2f} s...",
+                },
+                {
+                    "type": "set_speed",
+                    "target_rpm": lower_target,
+                    "status": f"Step 9/12: Ramping back to {lower_target:.1f} rpm...",
+                },
+                {
+                    "type": "wait_steady",
+                    "target_rpm": lower_target,
+                    "tolerance_rpm": tolerance_rpm,
+                    "hold_s": steady_hold_s,
+                    "timeout_s": timeout_s,
+                    "analysis_role": "ramp_down",
+                    "status": f"Step 10/12: Tracking the down-ramp back to {lower_target:.1f} rpm...",
+                },
+                {
+                    "type": "wait",
+                    "duration_s": capture_hold_s,
+                    "analysis_role": "plateau_lower_2",
+                    "status": f"Step 11/12: Capturing the return plateau for {capture_hold_s:.2f} s...",
+                },
+                {"type": "stop_foc", "status": "Step 12/12: Stopping FOC..."},
+            ]
         target = float(self.speed_test_step_target_spin.value())
         pre_delay_s = float(self.speed_test_step_pre_delay_spin.value()) / 1000.0
         run_time_s = float(self.speed_test_step_run_time_spin.value())
@@ -8627,6 +8840,33 @@ class MainWindow(QtWidgets.QMainWindow):
         if profile_key == SPEED_TEST_PROFILE_TRAPEZOID:
             accel_ms = float(self.speed_test_trapezoid_accel_spin.value()) * 1000.0
             self._apply_speed_ramp_to_ui(accel_ms, accel_ms)
+        elif profile_key == SPEED_TEST_PROFILE_LOADED_MECH:
+            config = self._loaded_mechanical_id_config()
+            lower_target = float(config["lower_rpm"])
+            upper_target = float(config["upper_rpm"])
+            if abs(upper_target - lower_target) < 10.0:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Speed Test Mode",
+                    "Loaded Mechanical ID needs two distinct speed levels separated by at least 10 rpm.",
+                )
+                return
+            if lower_target != 0.0 and upper_target != 0.0 and (lower_target * upper_target) < 0.0:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Speed Test Mode",
+                    "Loaded Mechanical ID assumes one-way operation. Keep the lower and upper speeds on the same side of zero.",
+                )
+                return
+            if self._loaded_mechanical_torque_constant_nm_per_a() <= 0.0:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Speed Test Mode",
+                    "Loaded Mechanical ID needs valid MOTOR_BACK_EMF_CONSTANT and MOTOR_NUMBER_POLE_PAIRS in Motor Parameters first.",
+                )
+                return
+            accel_ms = float(config["ramp_s"]) * 1000.0
+            self._apply_speed_ramp_to_ui(accel_ms, accel_ms)
         profile_lines = self._speed_test_summary_lines(profile_key)
         reply = QtWidgets.QMessageBox.question(
             self,
@@ -8647,16 +8887,42 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self.auto_poll_checkbox.setChecked(True)
+        self._loaded_mechanical_id_estimate = None
+        if profile_key == SPEED_TEST_PROFILE_LOADED_MECH:
+            self._set_loaded_mechanical_id_result_text(
+                "Loaded Mechanical ID result\nRunning sequence and waiting for monitor history...",
+                enable_apply=False,
+            )
         sequence = self._build_speed_test_sequence(profile_key)
         self._queue_driver_parameter_write_chunks(values, "Automated Speed Test: Write Driver Parameters")
-        self._speed_test_session = SpeedTestSession(profile_key=profile_key, sequence=sequence)
+        analysis_context: dict[str, object] = {}
+        if profile_key == SPEED_TEST_PROFILE_LOADED_MECH:
+            analysis_context = self._loaded_mechanical_id_config()
+        self._speed_test_session = SpeedTestSession(
+            profile_key=profile_key,
+            sequence=sequence,
+            analysis_context=analysis_context,
+        )
         self._set_speed_test_running_ui(True)
         self.speed_test_status_label.setText("Preparing: writing driver parameters to the drive...")
         self._request_monitor_once()
         self._speed_test_timer.start()
 
     def _finish_speed_test(self, text: str) -> None:
+        session = self._speed_test_session
         self._speed_test_timer.stop()
+        if session is not None:
+            session.capture_finished_at = time.monotonic()
+        if session is not None and session.profile_key == SPEED_TEST_PROFILE_LOADED_MECH:
+            analysis_text = self._analyze_loaded_mechanical_id_session(session)
+            if self._loaded_mechanical_id_estimate is not None:
+                text = f"{text} Loaded Mechanical ID fit complete."
+            else:
+                text = f"{text} Loaded Mechanical ID fit needs review."
+            self._set_loaded_mechanical_id_result_text(
+                analysis_text,
+                enable_apply=self._loaded_mechanical_id_estimate is not None,
+            )
         self._speed_test_session = None
         self._set_speed_test_running_ui(False)
         self.speed_test_status_label.setText(text)
@@ -8668,6 +8934,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pending_frames.clear()
         self._set_speed_test_running_ui(False)
         self.speed_test_status_label.setText(text)
+        if hasattr(self, "speed_test_mech_apply_button"):
+            self.speed_test_mech_apply_button.setEnabled(
+                self._loaded_mechanical_id_estimate is not None
+            )
         if request_stop and self._connected:
             self._enqueue_speed_stop_command(
                 description="Automated Speed Test: Emergency Stop",
@@ -8678,6 +8948,11 @@ class MainWindow(QtWidgets.QMainWindow):
         session = self._speed_test_session
         if session is None:
             return
+        if 0 <= session.step_index < len(session.sequence) and session.step_started_at > 0.0:
+            completed_step = dict(session.sequence[session.step_index])
+            completed_step["_started_at"] = session.step_started_at
+            completed_step["_ended_at"] = time.monotonic()
+            session.step_history.append(completed_step)
         session.step_index += 1
         session.step_started_at = 0.0
         session.steady_since_at = None
@@ -8700,6 +8975,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 session.steady_since_at = None
                 session.last_target_send_at = 0.0
                 session.last_target_rpm = None
+                session.capture_started_at = time.monotonic()
+                session.step_history = []
             return
 
         if session.step_index >= len(session.sequence):
@@ -8787,6 +9064,239 @@ class MainWindow(QtWidgets.QMainWindow):
                     request_stop=True,
                 )
             return
+
+    def _loaded_mechanical_torque_constant_nm_per_a(self) -> float:
+        if not hasattr(self, "motor_table"):
+            return 0.0
+        pole_pairs = self._table_float_value(self.motor_table, MOTOR_PARAM_POLE_PAIRS, 0.0)
+        ke_millivolt_per_rad_s = self._table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_BACK_EMF_CONSTANT,
+            0.0,
+        )
+        if pole_pairs <= 0.0 or ke_millivolt_per_rad_s <= 0.0:
+            return 0.0
+        return 1.5 * pole_pairs * (ke_millivolt_per_rad_s * 0.001)
+
+    def _analyze_loaded_mechanical_id_session(self, session: SpeedTestSession) -> str:
+        self._loaded_mechanical_id_estimate = None
+        if session.capture_started_at is None or session.capture_finished_at is None:
+            return (
+                "Loaded Mechanical ID result\n"
+                "Not enough timing information was captured to run the GUI fit."
+            )
+
+        config = dict(session.analysis_context)
+        speed_source_key = str(config.get("speed_source_key", "raw_speed"))
+        if speed_source_key not in ("raw_speed", "act_speed"):
+            speed_source_key = "act_speed"
+
+        kt_nm_per_a = self._loaded_mechanical_torque_constant_nm_per_a()
+        if kt_nm_per_a <= 0.0:
+            return (
+                "Loaded Mechanical ID result\n"
+                "Missing Kt input. Load valid MOTOR_BACK_EMF_CONSTANT and MOTOR_NUMBER_POLE_PAIRS into Motor Parameters first."
+            )
+
+        required_keys = ["act_speed", "raw_speed", "iq_current"]
+        _, full_window_values = self._trend_buffer.windowed_series(
+            required_keys,
+            session.capture_started_at,
+            session.capture_finished_at,
+        )
+        if (
+            speed_source_key == "raw_speed"
+            and max((abs(value) for value in full_window_values.get("raw_speed", [])), default=0.0) < 1.0e-6
+        ):
+            speed_source_key = "act_speed"
+
+        history_by_role = {
+            str(step.get("analysis_role")): step
+            for step in session.step_history
+            if step.get("analysis_role")
+        }
+
+        def mean_window_value(
+            start_s: float,
+            end_s: float,
+            keys: list[str],
+        ) -> tuple[list[float], dict[str, list[float]]]:
+            return self._trend_buffer.windowed_series(keys, start_s, end_s)
+
+        def plateau_mean(role: str) -> tuple[float, float, int] | None:
+            step = history_by_role.get(role)
+            if step is None:
+                return None
+            start_s = float(step.get("_started_at", 0.0))
+            end_s = float(step.get("_ended_at", 0.0))
+            if end_s <= start_s:
+                return None
+            times, values = mean_window_value(start_s, end_s, [speed_source_key, "iq_current"])
+            if len(times) < 3:
+                return None
+            mean_speed_rpm = _mean(values[speed_source_key])
+            mean_iq_a = _mean(values["iq_current"])
+            if mean_speed_rpm is None or mean_iq_a is None:
+                return None
+            return mean_speed_rpm, (kt_nm_per_a * mean_iq_a), len(times)
+
+        lower_plateaus = []
+        for role in ("plateau_lower_1", "plateau_lower_2"):
+            plateau = plateau_mean(role)
+            if plateau is not None:
+                lower_plateaus.append(plateau)
+        upper_plateau = plateau_mean("plateau_upper")
+
+        if len(lower_plateaus) == 0 or upper_plateau is None:
+            return (
+                "Loaded Mechanical ID result\n"
+                "Missing steady-state windows. Increase capture hold / steady tolerance and rerun."
+            )
+
+        lower_speed_rpm = sum(item[0] for item in lower_plateaus) / float(len(lower_plateaus))
+        lower_torque_nm = sum(item[1] for item in lower_plateaus) / float(len(lower_plateaus))
+        upper_speed_rpm = upper_plateau[0]
+        upper_torque_nm = upper_plateau[1]
+
+        lower_speed_rad_s = lower_speed_rpm * ((2.0 * math.pi) / 60.0)
+        upper_speed_rad_s = upper_speed_rpm * ((2.0 * math.pi) / 60.0)
+        delta_speed_rad_s = upper_speed_rad_s - lower_speed_rad_s
+        if abs(delta_speed_rad_s) <= 1.0e-6:
+            return (
+                "Loaded Mechanical ID result\n"
+                "The two plateau speeds were too close together to estimate B_eq. Increase the speed gap and rerun."
+            )
+
+        viscous_friction_nm_s_per_rad = (
+            (upper_torque_nm - lower_torque_nm) / delta_speed_rad_s
+        )
+        load_torque_nm = lower_torque_nm - (
+            viscous_friction_nm_s_per_rad * lower_speed_rad_s
+        )
+
+        ramp_points: list[tuple[float, float]] = []
+        ramp_sample_count = 0
+        expected_alpha_rad_s2 = abs(delta_speed_rad_s) / max(float(config.get("ramp_s", 1.0)), 1.0e-3)
+        alpha_min_rad_s2 = max(0.5, expected_alpha_rad_s2 * 0.10)
+        for role in ("ramp_up", "ramp_down"):
+            step = history_by_role.get(role)
+            if step is None:
+                continue
+            start_s = float(step.get("_started_at", 0.0))
+            end_s = float(step.get("_ended_at", 0.0)) - float(step.get("hold_s", 0.0))
+            if end_s <= start_s:
+                continue
+            times, values = mean_window_value(start_s, end_s, [speed_source_key, "iq_current"])
+            if len(times) < 5:
+                continue
+            speed_rad_s = [
+                speed_rpm * ((2.0 * math.pi) / 60.0)
+                for speed_rpm in values[speed_source_key]
+            ]
+            iq_current = values["iq_current"]
+            for index in range(1, len(times) - 1):
+                dt_s = times[index + 1] - times[index - 1]
+                if dt_s <= 1.0e-6:
+                    continue
+                alpha_rad_s2 = (speed_rad_s[index + 1] - speed_rad_s[index - 1]) / dt_s
+                if abs(alpha_rad_s2) < alpha_min_rad_s2:
+                    continue
+                torque_rhs_nm = (
+                    (kt_nm_per_a * iq_current[index])
+                    - (viscous_friction_nm_s_per_rad * speed_rad_s[index])
+                    - load_torque_nm
+                )
+                ramp_points.append((alpha_rad_s2, torque_rhs_nm))
+        ramp_sample_count = len(ramp_points)
+        if ramp_sample_count < 6:
+            return (
+                "Loaded Mechanical ID result\n"
+                "Ramp data was too sparse for J_eq. Use Auto Monitor at 40 Hz, increase capture time, or slow the ramp."
+            )
+
+        numerator = sum(alpha * torque_rhs for alpha, torque_rhs in ramp_points)
+        denominator = sum(alpha * alpha for alpha, _ in ramp_points)
+        if denominator <= 1.0e-9:
+            return (
+                "Loaded Mechanical ID result\n"
+                "Ramp acceleration collapsed numerically. Slow the ramp or increase the speed span and rerun."
+            )
+
+        inertia_kg_m2 = numerator / denominator
+        if not math.isfinite(inertia_kg_m2) or inertia_kg_m2 <= 0.0:
+            return (
+                "Loaded Mechanical ID result\n"
+                "The fitted inertia was non-physical. Check the speed source, current sign, and load direction."
+            )
+
+        fit_rmse_nm = math.sqrt(
+            max(
+                0.0,
+                sum((torque_rhs - (inertia_kg_m2 * alpha)) ** 2 for alpha, torque_rhs in ramp_points)
+                / float(ramp_sample_count),
+            )
+        )
+
+        self._loaded_mechanical_id_estimate = LoadedMechanicalIdEstimate(
+            speed_source_key=speed_source_key,
+            torque_constant_nm_per_a=kt_nm_per_a,
+            lower_speed_rpm=lower_speed_rpm,
+            upper_speed_rpm=upper_speed_rpm,
+            lower_torque_nm=lower_torque_nm,
+            upper_torque_nm=upper_torque_nm,
+            inertia_kg_m2=inertia_kg_m2,
+            viscous_friction_nm_s_per_rad=viscous_friction_nm_s_per_rad,
+            load_torque_nm=load_torque_nm,
+            fit_rmse_nm=fit_rmse_nm,
+            ramp_sample_count=ramp_sample_count,
+        )
+
+        speed_source_label = "Raw Speed" if speed_source_key == "raw_speed" else "Act Speed"
+        return "\n".join(
+            [
+                "Loaded Mechanical ID result",
+                f"Speed source: {speed_source_label}",
+                f"Kt: {kt_nm_per_a:.6f} Nm/A",
+                (
+                    f"Lower plateau: {lower_speed_rpm:.3f} rpm, "
+                    f"Te = {lower_torque_nm:.6f} Nm"
+                ),
+                (
+                    f"Upper plateau: {upper_speed_rpm:.3f} rpm, "
+                    f"Te = {upper_torque_nm:.6f} Nm"
+                ),
+                (
+                    f"B_eq: {viscous_friction_nm_s_per_rad:.6f} N*m*s/rad "
+                    f"({viscous_friction_nm_s_per_rad * 1000.0:.3f} mN*m*s/rad)"
+                ),
+                f"Tau bias: {load_torque_nm:.6f} Nm",
+                (
+                    f"J_eq: {inertia_kg_m2:.6f} kg*m^2 "
+                    f"({inertia_kg_m2 * 1000.0:.3f} x10^-3 kg*m^2)"
+                ),
+                f"Ramp samples: {ramp_sample_count:d}",
+                f"Fit RMSE: {fit_rmse_nm:.6f} Nm",
+            ]
+        )
+
+    def _apply_loaded_mechanical_id_to_motor_table(self) -> None:
+        estimate = getattr(self, "_loaded_mechanical_id_estimate", None)
+        if estimate is None or not hasattr(self, "motor_table"):
+            return
+        self._set_table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_ROTOR_INERTIA,
+            estimate.inertia_kg_m2 * 1000.0,
+        )
+        self._set_table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_VISCOUS_FRICTION,
+            estimate.viscous_friction_nm_s_per_rad * 1000.0,
+        )
+        self._set_parameter_status(
+            "Loaded Mechanical ID copied to Motor Parameters. Write Motor Parameters to send J/B to the drive.",
+            "ok",
+        )
 
     def _update_foc_mode_ui(self) -> None:
         position_mode = self._current_foc_mode() == POSITION_CONTROL_MODE
@@ -9539,7 +10049,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_autotune_payload(self) -> bytes:
         return struct.pack(
-            "<9f",
+            "<16f",
             float(self.autotune_rs_low_spin.value()),
             float(self.autotune_rs_high_spin.value()),
             float(self.autotune_ls_voltage_spin.value()),
@@ -9549,6 +10059,13 @@ class MainWindow(QtWidgets.QMainWindow):
             float(self.autotune_current_bw_spin.value()),
             float(self.autotune_speed_bw_spin.value()),
             float(self.autotune_position_bw_spin.value()),
+            float(self.autotune_mech_iq_spin.value()),
+            0.8,
+            10.0,
+            float(self.autotune_mech_mode_combo.currentData() or 0),
+            float(self.autotune_loaded_low_speed_spin.value()),
+            float(self.autotune_loaded_high_speed_spin.value()),
+            0.75,
         )
 
     def _autotune_state_text(self, state: int) -> str:
@@ -9873,6 +10390,31 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Encoder Resolution must be greater than zero before starting auto-tune.",
             )
             return
+        mechanical_mode = int(self.autotune_mech_mode_combo.currentData() or 0)
+        loaded_low_speed = float(self.autotune_loaded_low_speed_spin.value())
+        loaded_high_speed = float(self.autotune_loaded_high_speed_spin.value())
+        if mechanical_mode == MOTOR_AUTOTUNE_MECH_MODE_LOADED:
+            if (abs(loaded_low_speed) < 1.0) or (abs(loaded_high_speed) < 1.0):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Invalid Auto-Tune Input",
+                    "Loaded Speed Profile needs two non-zero speed plateaus.",
+                )
+                return
+            if loaded_low_speed * loaded_high_speed < 0.0:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Invalid Auto-Tune Input",
+                    "Loaded Speed Profile expects the low and high speed levels to use the same sign.",
+                )
+                return
+            if abs(abs(loaded_high_speed) - abs(loaded_low_speed)) < 10.0:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Invalid Auto-Tune Input",
+                    "Loaded Speed Profile needs at least a 10 rpm gap between the low and high speed levels.",
+                )
+                return
 
         self.auto_poll_checkbox.setChecked(True)
         self._reset_autotune_direction_tracking()
@@ -11486,6 +12028,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "vd": snapshot.vd,
                 "vq": snapshot.vq,
                 "act_speed": snapshot.act_speed,
+                "raw_speed": snapshot.debug_speed_raw_rpm,
                 "cmd_speed": snapshot.cmd_speed,
                 "speed_error": snapshot.speed_error,
                 "cmd_position_deg": cmd_position_deg,
@@ -11548,6 +12091,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "vd": float(last_monitor.vd) if last_monitor is not None else 0.0,
                 "vq": float(last_monitor.vq) if last_monitor is not None else 0.0,
                 "act_speed": snapshot.act_speed,
+                "raw_speed": float(getattr(snapshot, "debug_speed_raw_rpm", 0.0)),
                 "cmd_speed": snapshot.cmd_speed,
                 "speed_error": snapshot.speed_error,
                 "cmd_position_deg": cmd_position_deg,

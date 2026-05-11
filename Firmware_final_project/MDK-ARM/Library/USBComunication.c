@@ -1568,6 +1568,27 @@ static uint8_t USB_HandleAutoTuneStart(USB_Comunication_t *USB_Comunicate, const
 	{
 		memcpy(&config.mechanical_speed_lpf_hz, &payload[44], sizeof(float));
 	}
+	if (payload_length >= 52u)
+	{
+		float mechanical_mode = 0.0f;
+		memcpy(&mechanical_mode, &payload[48], sizeof(float));
+		config.mechanical_estimation_mode =
+			(mechanical_mode >= 0.5f) ?
+				MOTOR_AUTOTUNE_MECH_MODE_LOADED :
+				MOTOR_AUTOTUNE_MECH_MODE_LEGACY;
+	}
+	if (payload_length >= 56u)
+	{
+		memcpy(&config.loaded_speed_low_rpm, &payload[52], sizeof(float));
+	}
+	if (payload_length >= 60u)
+	{
+		memcpy(&config.loaded_speed_high_rpm, &payload[56], sizeof(float));
+	}
+	if (payload_length >= 64u)
+	{
+		memcpy(&config.loaded_capture_hold_s, &payload[60], sizeof(float));
+	}
 
 	if (MotorAutoTune_Start(
 		&gMotorAutoTune,
