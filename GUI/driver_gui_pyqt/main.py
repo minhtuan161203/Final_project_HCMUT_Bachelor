@@ -6187,6 +6187,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.position_test_note_label, 3, 0, 1, 3)
         layout.setColumnStretch(1, 1)
 
+        self._refresh_position_test_backlash_angle_ranges()
+
         return box
 
     def _build_alarm_tab(self) -> QtWidgets.QWidget:
@@ -7254,17 +7256,60 @@ class MainWindow(QtWidgets.QMainWindow):
             limit_rpm = DEFAULT_MOTOR_RATED_SPEED_RPM
         return float(limit_rpm)
 
+    def _effective_encoder_resolution_info(self) -> tuple[float, str]:
+        default_resolution = float(1 << 20)
+        motor_resolution = 0.0
+        review_resolution = 0.0
+
+        if hasattr(self, "motor_table"):
+            motor_resolution = float(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_ENCODER_RESOLUTION,
+                    0.0,
+                )
+            )
+        if hasattr(self, "autotune_init_encoder_resolution_spin"):
+            review_resolution = float(self.autotune_init_encoder_resolution_spin.value())
+
+        motor_valid = motor_resolution > 1.0
+        review_valid = review_resolution > 1.0
+        motor_is_default = abs(motor_resolution - default_resolution) <= 0.5
+
+        if review_valid and ((not motor_valid) or motor_is_default):
+            source = (
+                "Auto-Tune Input Review override"
+                if motor_is_default
+                else "Auto-Tune Input Review"
+            )
+            return float(review_resolution), source
+        if motor_valid:
+            return float(motor_resolution), "Motor Parameters"
+        if review_valid:
+            return float(review_resolution), "Auto-Tune Input Review"
+        return default_resolution, "Default 20-bit fallback"
+
     def _encoder_resolution_counts(self) -> float:
-        if not hasattr(self, "motor_table"):
-            return float(1 << 20)
-        encoder_resolution = self._table_float_value(
-            self.motor_table,
-            MOTOR_PARAM_ENCODER_RESOLUTION,
-            float(1 << 20),
-        )
-        if encoder_resolution <= 1.0:
-            encoder_resolution = float(1 << 20)
+        encoder_resolution, _source = self._effective_encoder_resolution_info()
         return float(encoder_resolution)
+
+    def _ensure_encoder_resolution_ready_for_position_commands(
+        self,
+        parent_title: str,
+    ) -> bool:
+        encoder_resolution, source = self._effective_encoder_resolution_info()
+        if source != "Default 20-bit fallback":
+            return True
+        QtWidgets.QMessageBox.warning(
+            self,
+            parent_title,
+            "Position commands are still using the default 20-bit encoder resolution "
+            f"({int(round(encoder_resolution)):,} counts/rev).\n\n"
+            "Read Motor Parameters from the drive first, or set the correct Encoder "
+            "Resolution in the Auto-Tune Input Review so the GUI can convert degrees "
+            "to counts correctly.",
+        )
+        return False
 
     def _normalize_single_turn_counts(self, counts: float) -> float:
         encoder_resolution = self._encoder_resolution_counts()
@@ -7650,6 +7695,7 @@ class MainWindow(QtWidgets.QMainWindow):
             10.0 if tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN else 1.0
         )
         self.foc_target_angle_spin.blockSignals(False)
+        self._refresh_position_test_backlash_angle_ranges()
         self._set_foc_target_position_counts(current_counts)
         self._update_foc_mode_ui()
 
@@ -7719,6 +7765,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.foc_position_tracking_combo.blockSignals(True)
             self.foc_position_tracking_combo.setCurrentIndex(combo_index)
             self.foc_position_tracking_combo.blockSignals(False)
+        self._refresh_position_test_backlash_angle_ranges()
         self.foc_position_vff_gain_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_FF_GAIN, 0.0)
         )
@@ -8053,6 +8100,21 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.position_test_stack.setCurrentIndex(self.position_test_profile_combo.currentIndex())
 
+    def _refresh_position_test_backlash_angle_ranges(self) -> None:
+        if not hasattr(self, "position_test_backlash_a_spin"):
+            return
+        tracking_mode = self._position_tracking_mode()
+        lower_deg, upper_deg = self._position_angle_range_deg(tracking_mode)
+        step_deg = 10.0 if tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN else 5.0
+        for spin in (
+            self.position_test_backlash_a_spin,
+            self.position_test_backlash_b_spin,
+        ):
+            spin.blockSignals(True)
+            spin.setRange(lower_deg, upper_deg)
+            spin.setSingleStep(step_deg)
+            spin.blockSignals(False)
+
     def _position_test_profile_key(self) -> str:
         return str(self.position_test_profile_combo.currentData() or POSITION_TEST_PROFILE_SHORT)
 
@@ -8077,7 +8139,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Settle Tol: {self.position_test_backlash_tol_spin.value():.3f} deg",
                 f"Settle Hold: {self.position_test_backlash_hold_spin.value():.0f} ms",
                 f"Timeout: {self.position_test_backlash_timeout_spin.value():.2f} s",
-                "Tracking: Single Turn",
+                f"Tracking: {self._position_tracking_mode_text()}",
             ]
         return [
             "Profile: Short-distance (Jitter / Sensitivity)",
@@ -8138,6 +8200,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ]
 
         if profile_key == POSITION_TEST_PROFILE_BACKLASH:
+            tracking_mode = self._position_tracking_mode()
             position_a_deg = float(self.position_test_backlash_a_spin.value())
             position_b_deg = float(self.position_test_backlash_b_spin.value())
             dwell_s = float(self.position_test_backlash_dwell_spin.value()) / 1000.0
@@ -8145,26 +8208,26 @@ class MainWindow(QtWidgets.QMainWindow):
             tolerance_deg = float(self.position_test_backlash_tol_spin.value())
             hold_s = float(self.position_test_backlash_hold_spin.value()) / 1000.0
             timeout_s = float(self.position_test_backlash_timeout_spin.value())
-            position_a_counts = self._degrees_to_counts(position_a_deg, POSITION_TRACKING_MODE_SINGLE_TURN)
-            position_b_counts = self._degrees_to_counts(position_b_deg, POSITION_TRACKING_MODE_SINGLE_TURN)
+            position_a_counts = self._degrees_to_counts(position_a_deg, tracking_mode)
+            position_b_counts = self._degrees_to_counts(position_b_deg, tracking_mode)
             sequence: list[dict[str, object]] = [
                 {
                     "type": "prepare_position",
                     "target_counts": position_a_counts,
-                    "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                    "tracking_mode": tracking_mode,
                     "status": f"Step 1/? Priming endpoint A at {position_a_deg:.2f} deg...",
                 },
                 {
                     "type": "start_foc_position",
                     "target_counts": position_a_counts,
-                    "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                    "tracking_mode": tracking_mode,
                     "status": "Step 2/? Starting FOC in Position Mode...",
                 },
                 {"type": "wait", "duration_s": 0.10, "status": "Step 3/? Waiting for the drive to arm..."},
                 {
                     "type": "wait_position_steady",
                     "target_counts": position_a_counts,
-                    "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                    "tracking_mode": tracking_mode,
                     "tolerance_deg": tolerance_deg,
                     "hold_s": hold_s,
                     "timeout_s": timeout_s,
@@ -8179,13 +8242,13 @@ class MainWindow(QtWidgets.QMainWindow):
                         {
                             "type": "set_position",
                             "target_counts": position_b_counts,
-                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "tracking_mode": tracking_mode,
                             "status": f"Cycle {cycle_index + 1}/{cycles}: moving to endpoint B ({position_b_deg:.2f} deg)...",
                         },
                         {
                             "type": "wait_position_steady",
                             "target_counts": position_b_counts,
-                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "tracking_mode": tracking_mode,
                             "tolerance_deg": tolerance_deg,
                             "hold_s": hold_s,
                             "timeout_s": timeout_s,
@@ -8196,13 +8259,13 @@ class MainWindow(QtWidgets.QMainWindow):
                         {
                             "type": "set_position",
                             "target_counts": position_a_counts,
-                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "tracking_mode": tracking_mode,
                             "status": f"Cycle {cycle_index + 1}/{cycles}: returning to endpoint A ({position_a_deg:.2f} deg)...",
                         },
                         {
                             "type": "wait_position_steady",
                             "target_counts": position_a_counts,
-                            "tracking_mode": POSITION_TRACKING_MODE_SINGLE_TURN,
+                            "tracking_mode": tracking_mode,
                             "tolerance_deg": tolerance_deg,
                             "hold_s": hold_s,
                             "timeout_s": timeout_s,
@@ -8335,13 +8398,17 @@ class MainWindow(QtWidgets.QMainWindow):
             if combo_index >= 0:
                 self.foc_mode_combo.setCurrentIndex(combo_index)
 
+        if not self._ensure_encoder_resolution_ready_for_position_commands(
+            "Position Validation Suite",
+        ):
+            self.position_test_status_label.setText("Idle")
+            return
+
         profile_key = self._position_test_profile_key()
-        preferred_tracking_mode = (
-            POSITION_TRACKING_MODE_MULTI_TURN
-            if profile_key == POSITION_TEST_PROFILE_LONG
-            else POSITION_TRACKING_MODE_SINGLE_TURN
-        )
-        self._apply_position_tracking_mode_to_ui(preferred_tracking_mode)
+        if profile_key == POSITION_TEST_PROFILE_LONG:
+            self._apply_position_tracking_mode_to_ui(POSITION_TRACKING_MODE_MULTI_TURN)
+        elif profile_key == POSITION_TEST_PROFILE_SHORT:
+            self._apply_position_tracking_mode_to_ui(POSITION_TRACKING_MODE_SINGLE_TURN)
 
         try:
             self._sync_foc_controls_to_driver_table()
@@ -8351,12 +8418,14 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         profile_lines = self._position_test_summary_lines(profile_key)
+        encoder_resolution, encoder_source = self._effective_encoder_resolution_info()
         reply = QtWidgets.QMessageBox.question(
             self,
             "Confirm Position Validation",
             "\n".join(
                 [
                     *profile_lines,
+                    f"Encoder resolution for deg->counts: {int(round(encoder_resolution)):,} counts/rev ({encoder_source})",
                     "",
                     "Current FOC position and speed gains, ramps, speed limit, and tracking mode from the FOC Control tab will be written to Driver Parameters before the test starts.",
                     "Continue?",
