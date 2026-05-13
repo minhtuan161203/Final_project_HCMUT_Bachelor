@@ -5007,6 +5007,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "Apply Direction Suggestion"
         )
         self.autotune_apply_direction_button.setEnabled(False)
+        self.autotune_apply_direction_button.setVisible(False)
         self.autotune_apply_direction_button.setToolTip(
             "Writes only MOTOR_CURRENT_CTRL_DIRECTION into the live motor-parameter table. "
             "Use Save Params to Flash separately if the new direction should persist after reboot."
@@ -5023,10 +5024,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_ke_value_label = QtWidgets.QLabel("-")
         self.autotune_flux_value_label = QtWidgets.QLabel("-")
         self.autotune_pp_value_label = QtWidgets.QLabel("-")
+        self.autotune_direction_row_label = QtWidgets.QLabel("Direction")
         self.autotune_direction_value_label = QtWidgets.QLabel(
             "Waiting for FLUX rotation..."
         )
         self.autotune_direction_value_label.setWordWrap(True)
+        self.autotune_direction_row_label.setVisible(False)
+        self.autotune_direction_value_label.setVisible(False)
         self.autotune_kt_value_label = QtWidgets.QLabel("-")
         self.autotune_j_value_label = QtWidgets.QLabel("-")
         self.autotune_b_value_label = QtWidgets.QLabel("-")
@@ -5101,7 +5105,7 @@ class MainWindow(QtWidgets.QMainWindow):
         estimated_layout.addWidget(self.autotune_flux_value_label, 3, 1)
         estimated_layout.addWidget(QtWidgets.QLabel("Pole Pairs"), 4, 0)
         estimated_layout.addWidget(self.autotune_pp_value_label, 4, 1)
-        estimated_layout.addWidget(QtWidgets.QLabel("Direction"), 5, 0)
+        estimated_layout.addWidget(self.autotune_direction_row_label, 5, 0)
         estimated_layout.addWidget(self.autotune_direction_value_label, 5, 1)
         estimated_layout.addWidget(self.autotune_apply_direction_button, 6, 0, 1, 2)
         estimated_layout.addWidget(QtWidgets.QLabel("Kt"), 7, 0)
