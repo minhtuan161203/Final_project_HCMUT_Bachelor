@@ -221,9 +221,7 @@ static void UpdateIsrMeasureOnlyFrequency(void);
 static float GetEffectiveCurrentLoopFrequency(void);
 static float GetEffectiveSpeedLoopFrequency(void);
 static uint8_t GetActiveFocControlMode(void);
-static float GetConfiguredPositionGain(void);
 static float GetConfiguredPositionIntegralGain(void);
-static float GetConfiguredPositionVffGain(void);
 static float GetConfiguredPositionVffFilterHz(void);
 static uint8_t GetConfiguredPositionTrackingMode(void);
 static float GetConfiguredSpeedLimitRpm(void);
@@ -244,6 +242,14 @@ static float GetPositionControlErrorCounts(float target_position_counts, float a
 static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution);
 static float GetPositionLoopErrorReleaseDeadbandCounts(float encoder_resolution);
 static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec);
+static float PlanPositionSpeedReferenceRpm(
+	float target_position_counts,
+	float actual_position_counts,
+	float current_command_rpm,
+	float actual_speed_rpm,
+	float encoder_resolution,
+	float max_speed_rpm,
+	float dt_sec);
 static float GetSpeedEstimateLpfAlpha(float raw_speed_rpm);
 static uint8_t IsAbsoluteEncoderId(uint32_t encoder_id);
 static void RefreshEncoderAlignmentPolicy(void);
@@ -559,7 +565,7 @@ static float GetAutoTuneControlTheta(void)
 		(gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_LS))
 	{
 		/* Keep Rs/Ls injection on the same locked d-axis frame that already
-		   works for Id tuning so Vd does not leak into torque-producing Vq. */
+		   works for Id tunning*/
 		return GetIdSquareLockedControlTheta();
 	}
 
@@ -1692,16 +1698,6 @@ static uint8_t GetActiveFocControlMode(void)
 	return SPEED_CONTROL_MODE;
 }
 
-static float GetConfiguredPositionGain(void)
-{
-	float position_gain = DriverParameter[POSITION_P_GAIN];
-	if (position_gain < 0.0f)
-	{
-		position_gain = 0.0f;
-	}
-	return position_gain;
-}
-
 static float GetConfiguredPositionIntegralGain(void)
 {
 	float position_integral_gain = DriverParameter[POSITION_I_GAIN];
@@ -1710,16 +1706,6 @@ static float GetConfiguredPositionIntegralGain(void)
 		position_integral_gain = 0.0f;
 	}
 	return position_integral_gain;
-}
-
-static float GetConfiguredPositionVffGain(void)
-{
-	float position_vff_gain = DriverParameter[POSITION_FF_GAIN];
-	if (position_vff_gain < 0.0f)
-	{
-		position_vff_gain = 0.0f;
-	}
-	return position_vff_gain;
 }
 
 static float GetConfiguredPositionVffFilterHz(void)
@@ -2025,6 +2011,99 @@ static float ApplySpeedRampLimit(float current_command, float target_command, fl
 	}
 
 	return current_command + delta;
+}
+
+static float PlanPositionSpeedReferenceRpm(
+	float target_position_counts,
+	float actual_position_counts,
+	float current_command_rpm,
+	float actual_speed_rpm,
+	float encoder_resolution,
+	float max_speed_rpm,
+	float dt_sec)
+{
+	float position_error_counts;
+	float remaining_revolutions;
+	float desired_direction;
+	float accel_ms = DriverParameter[ACCELERATION_TIME];
+	float decel_ms = DriverParameter[DECELERATION_TIME];
+	float decel_rpm_per_sec;
+	float planning_speed_rpm;
+	float braking_speed_limit_rpm;
+	float braking_distance_rev;
+	float actual_speed_rps;
+	float decel_rps2;
+	float target_speed_rpm;
+
+	if ((encoder_resolution <= 1.0f) || (max_speed_rpm <= 0.0f) || (dt_sec <= 0.0f))
+	{
+		return 0.0f;
+	}
+
+	position_error_counts = GetPositionControlErrorCounts(
+		target_position_counts,
+		actual_position_counts,
+		encoder_resolution);
+	if (position_error_counts > 0.0f)
+	{
+		/* Preserve the project's existing position-loop sign convention:
+		   positive position error previously produced a negative speed reference
+		   via position_pi_output_rpm = -gPositionPi.fOut. The planner must emit
+		   the same speed direction so position mode behavior stays unchanged. */
+		desired_direction = -1.0f;
+	}
+	else if (position_error_counts < 0.0f)
+	{
+		desired_direction = 1.0f;
+	}
+	else
+	{
+		return 0.0f;
+	}
+
+	remaining_revolutions = fabsf(position_error_counts) / encoder_resolution;
+	if (remaining_revolutions <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	if (accel_ms <= 0.0f)
+	{
+		accel_ms = 200.0f;
+	}
+	if (decel_ms <= 0.0f)
+	{
+		decel_ms = accel_ms;
+	}
+
+	decel_rpm_per_sec = max_speed_rpm / (decel_ms * 0.001f);
+	if (decel_rpm_per_sec <= 0.0f)
+	{
+		decel_rpm_per_sec = max_speed_rpm / dt_sec;
+	}
+
+	planning_speed_rpm = fmaxf(fabsf(current_command_rpm), fabsf(actual_speed_rpm));
+	actual_speed_rps = planning_speed_rpm / 60.0f;
+	decel_rps2 = decel_rpm_per_sec / 60.0f;
+	braking_distance_rev = (actual_speed_rps * actual_speed_rps) / (2.0f * decel_rps2);
+
+	if (remaining_revolutions <= braking_distance_rev)
+	{
+		braking_speed_limit_rpm = sqrtf(2.0f * decel_rps2 * remaining_revolutions) * 60.0f;
+	}
+	else
+	{
+		braking_speed_limit_rpm = max_speed_rpm;
+	}
+
+	braking_speed_limit_rpm = ClampFloat(braking_speed_limit_rpm, 0.0f, max_speed_rpm);
+	target_speed_rpm = desired_direction * braking_speed_limit_rpm;
+
+	return ApplySpeedRampLimit(
+		current_command_rpm,
+		target_speed_rpm,
+		max_speed_rpm,
+		dt_sec);
 }
 
 static void LimitDqVoltageVector(float *vd, float *vq, float limit)
@@ -3670,7 +3749,6 @@ static void RunFocLoop(void)
 					gTargetPositionCounts,
 					Parameter.fPosition,
 					encoder_resolution);
-				float position_error_counts = position_raw_error_counts;
 				float position_deadband_counts = GetPositionLoopErrorDeadbandCounts(encoder_resolution);
 				float position_release_deadband_counts = GetPositionLoopErrorReleaseDeadbandCounts(encoder_resolution);
 				float speed_limit_rpm = GetConfiguredSpeedLimitRpm();
@@ -3678,12 +3756,6 @@ static void RunFocLoop(void)
 					gTargetPositionCounts,
 					encoder_resolution,
 					gSpeedPi.fDtSec);
-				// float position_vff_rpm = -GetConfiguredPositionVffGain() * setpoint_velocity_rpm;
-				float position_vff_rpm = GetConfiguredPositionVffGain() * setpoint_velocity_rpm;
-				float position_pi_limit_rpm;
-				float position_pi_output_rpm;
-				float position_speed_target_rpm;
-				uint8_t position_deadband_hold_active = 0u;
 				uint8_t setpoint_velocity_is_quiet =
 					(fabsf(setpoint_velocity_rpm) < POSITION_LOOP_FF_DEADBAND_RPM) ? 1u : 0u;
 
@@ -3703,47 +3775,25 @@ static void RunFocLoop(void)
 				{
 					gPositionPi.m_rst(&gPositionPi);
 					gSpeedPi.m_rst(&gSpeedPi);
-					position_error_counts = 0.0f;
 					gTracePosError = 0.0f;
-					position_vff_rpm = 0.0f;
-					position_speed_target_rpm = 0.0f;
 					speed_reference_rpm = 0.0f;
 					gCommandedSpeedRpm = 0.0f;
-					position_deadband_hold_active = 1u;
 				}
 				else
 				{
-				gTracePosError = position_error_counts;
-				position_vff_rpm = ClampFloat(
-					position_vff_rpm,
-					-speed_limit_rpm,
-					speed_limit_rpm);
-				position_pi_limit_rpm = speed_limit_rpm - fabsf(position_vff_rpm);
-				if (position_pi_limit_rpm < 0.0f)
-				{
-					position_pi_limit_rpm = 0.0f;
-				}
-				gPositionPi.fDtSec = gSpeedPi.fDtSec;
-				gPositionPi.fKp = GetConfiguredPositionGain();
-				gPositionPi.fKi = GetConfiguredPositionIntegralGain();
-				gPositionPi.fUpOutLim = position_pi_limit_rpm;
-				gPositionPi.fLowOutLim = -position_pi_limit_rpm;
-				gPositionPi.fIn = position_error_counts;
-				gPositionPi.m_calc(&gPositionPi);
-				position_pi_output_rpm = -gPositionPi.fOut;
-				position_speed_target_rpm = position_pi_output_rpm + position_vff_rpm;
-				}
-				position_speed_target_rpm = ClampFloat(
-					position_speed_target_rpm,
-					-speed_limit_rpm,
-					speed_limit_rpm);
-				if (position_deadband_hold_active == 0u)
-				{
-				speed_reference_rpm = ApplySpeedRampLimit(
-					gCommandedSpeedRpm,
-					position_speed_target_rpm,
-					speed_limit_rpm,
-					gSpeedPi.fDtSec);
+					/* Position mode now uses an online trapezoidal planner:
+					   every speed-loop tick the remaining distance and the
+					   accel/decel constraints generate the next speed command. */
+					gPositionPi.m_rst(&gPositionPi);
+					gTracePosError = position_raw_error_counts;
+					speed_reference_rpm = PlanPositionSpeedReferenceRpm(
+						gTargetPositionCounts,
+						Parameter.fPosition,
+						gCommandedSpeedRpm,
+						Parameter.fActSpeed,
+						encoder_resolution,
+						speed_limit_rpm,
+						gSpeedPi.fDtSec);
 				}
 			}
 			else
