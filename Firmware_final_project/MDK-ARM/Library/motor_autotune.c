@@ -60,6 +60,10 @@
 #define MOTOR_AUTOTUNE_LOADED_IQ_TRACK_RATIO     0.20f
 #define MOTOR_AUTOTUNE_LOADED_IQ_TRACK_MIN_A     0.10f
 #define MOTOR_AUTOTUNE_LOADED_VOLTAGE_HEADROOM   0.95f
+#define MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RATIO 1.35f
+#define MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RPM 40.0f
+#define MOTOR_AUTOTUNE_LOADED_OVERSPEED_GRACE_S  0.25f
+#define MOTOR_AUTOTUNE_LOADED_PLATEAU_RAMP_S     0.20f
 #define MOTOR_AUTOTUNE_LOADED_RAMP_DOWN_S        0.30f
 #define MOTOR_AUTOTUNE_LOADED_AUTO_MIN_VALID_RPM 10.0f
 #define MOTOR_AUTOTUNE_LOADED_AUTO_MAX_VALID_RPM 4000.0f
@@ -1434,6 +1438,7 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 	float stable_tol_rpm = 0.0f;
 	float low_speed_rpm;
 	float high_speed_rpm;
+	float sample_speed_limit_rpm;
 	float overspeed_limit_rpm;
 	float iq_limit_a;
 	float iq_ref_a;
@@ -1443,12 +1448,16 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 	float voltage_limit_v;
 	uint32_t capture_ticks;
 	uint32_t guard_ticks;
+	uint32_t plateau_ramp_ticks;
+	uint32_t sample_guard_ticks;
+	uint32_t overspeed_grace_ticks;
 	uint32_t ramp_down_ticks;
 	float iq_track_tolerance_a;
 	float voltage_mag_v;
 	float expected_speed_sign;
 	int8_t initial_polarity;
 	int8_t commanded_polarity;
+	float plateau_ramp_fraction = 1.0f;
 	uint8_t valid_sample = 0u;
 	uint8_t plateau_stable = 0u;
 	uint8_t start_negative = 0u;
@@ -1470,12 +1479,27 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 		high_speed_rpm * 1.25f,
 		high_speed_rpm + 20.0f,
 		MOTOR_AUTOTUNE_LOADED_AUTO_MAX_VALID_RPM);
+	sample_speed_limit_rpm = high_speed_rpm * MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RATIO;
+	if (sample_speed_limit_rpm < (high_speed_rpm + MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RPM))
+	{
+		sample_speed_limit_rpm = high_speed_rpm + MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RPM;
+	}
+	if (sample_speed_limit_rpm > overspeed_limit_rpm)
+	{
+		sample_speed_limit_rpm = overspeed_limit_rpm;
+	}
 	capture_ticks = MotorAutoTune_SecondsToTicks(
 		handle,
 		handle->config.loaded_capture_hold_s);
 	guard_ticks = MotorAutoTune_SecondsToTicks(
 		handle,
 		MOTOR_AUTOTUNE_LOADED_GUARD_S);
+	plateau_ramp_ticks = MotorAutoTune_SecondsToTicks(
+		handle,
+		MOTOR_AUTOTUNE_LOADED_PLATEAU_RAMP_S);
+	overspeed_grace_ticks = MotorAutoTune_SecondsToTicks(
+		handle,
+		MOTOR_AUTOTUNE_LOADED_OVERSPEED_GRACE_S);
 	ramp_down_ticks = MotorAutoTune_SecondsToTicks(
 		handle,
 		MOTOR_AUTOTUNE_LOADED_RAMP_DOWN_S);
@@ -1486,6 +1510,19 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 	if (ramp_down_ticks < 1u)
 	{
 		ramp_down_ticks = 1u;
+	}
+	if (plateau_ramp_ticks < 1u)
+	{
+		plateau_ramp_ticks = 1u;
+	}
+	sample_guard_ticks = guard_ticks;
+	if (sample_guard_ticks < plateau_ramp_ticks)
+	{
+		sample_guard_ticks = plateau_ramp_ticks;
+	}
+	if (overspeed_grace_ticks < sample_guard_ticks)
+	{
+		overspeed_grace_ticks = sample_guard_ticks;
 	}
 
 	start_negative = ((handle->config.loaded_speed_high_rpm < 0.0f) ||
@@ -1516,7 +1553,13 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 	}
 	else
 	{
-		iq_ref_a = (float)commanded_polarity * iq_limit_a;
+		plateau_ramp_fraction =
+			(float)handle->phase_counter / (float)plateau_ramp_ticks;
+		if (plateau_ramp_fraction > 1.0f)
+		{
+			plateau_ramp_fraction = 1.0f;
+		}
+		iq_ref_a = (float)commanded_polarity * iq_limit_a * plateau_ramp_fraction;
 	}
 	voltage_limit_v = MotorAutoTune_CurrentLoopVoltageLimit(inputs);
 	if ((inputs->bus_voltage_v > 1.0f) &&
@@ -1545,9 +1588,9 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 		(inputs->vq_voltage_v * inputs->vq_voltage_v));
 
 	if ((handle->substep <= 1u) &&
-		(handle->phase_counter >= guard_ticks) &&
+		(handle->phase_counter >= sample_guard_ticks) &&
 		(speed_abs_rpm >= low_speed_rpm) &&
-		(speed_abs_rpm <= high_speed_rpm) &&
+		(speed_abs_rpm <= sample_speed_limit_rpm) &&
 		(MotorAutoTune_Abs(inputs->iq_current_a - iq_ref_a) <= iq_track_tolerance_a) &&
 		(voltage_mag_v <= (voltage_limit_v * MOTOR_AUTOTUNE_LOADED_VOLTAGE_HEADROOM)))
 	{
@@ -1650,7 +1693,8 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 
 	if (handle->substep <= 1u)
 	{
-		if (speed_abs_rpm >= overspeed_limit_rpm)
+		if ((handle->phase_counter >= overspeed_grace_ticks) &&
+			(speed_abs_rpm >= overspeed_limit_rpm))
 		{
 			MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 			return;
