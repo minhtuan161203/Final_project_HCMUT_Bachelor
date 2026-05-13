@@ -192,6 +192,10 @@ typedef struct
 	float mechanical_loaded_regression_sa1;
 	float mechanical_loaded_regression_say;
 	float mechanical_loaded_pi_integral_a;
+	float mechanical_loaded_plateau0_speed_rad_s;
+	float mechanical_loaded_plateau0_torque_nm;
+	float mechanical_loaded_plateau1_speed_rad_s;
+	float mechanical_loaded_plateau1_torque_nm;
 	uint32_t mechanical_timeout_ticks;
 	uint32_t mechanical_loaded_sample_count;
 	uint16_t mechanical_zero_cross_count;

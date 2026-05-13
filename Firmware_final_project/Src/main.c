@@ -3944,13 +3944,8 @@ static void RunMotorAutoTuneLoop(void)
 			if ((gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_J) &&
 				(gMotorAutoTune.config.mechanical_estimation_mode == MOTOR_AUTOTUNE_MECH_MODE_LOADED))
 			{
-				float commanded_speed_rpm = gMotorAutoTune.config.loaded_speed_low_rpm;
-				if ((gMotorAutoTune.substep == 2u) || (gMotorAutoTune.substep == 3u))
-				{
-					commanded_speed_rpm = gMotorAutoTune.config.loaded_speed_high_rpm;
-				}
-				gTargetSpeedRpm = commanded_speed_rpm;
-				gCommandedSpeedRpm = commanded_speed_rpm;
+				gTargetSpeedRpm = 0.0f;
+				gCommandedSpeedRpm = 0.0f;
 			}
 			RunCurrentLoopForTheta(
 				electrical_theta,

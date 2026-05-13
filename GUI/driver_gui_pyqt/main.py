@@ -4973,12 +4973,13 @@ class MainWindow(QtWidgets.QMainWindow):
             MOTOR_AUTOTUNE_MECH_MODE_LEGACY,
         )
         self.autotune_mech_mode_combo.addItem(
-            "Loaded Speed Profile",
+            "Loaded Bipolar Torque Hold",
             MOTOR_AUTOTUNE_MECH_MODE_LOADED,
         )
         self.autotune_mech_mode_combo.setToolTip(
             "Legacy mode keeps the original no-load sinusoidal J/B excitation. "
-            "Loaded mode keeps the assembly attached and estimates equivalent J/B from a one-way low/high/low speed profile."
+            "Loaded mode keeps the assembly attached, holds a positive Iq plateau until the average speed settles, "
+            "then holds a negative Iq plateau and solves the equivalent mechanical parameters from the bidirectional response."
         )
 
         self.autotune_mech_iq_spin = QtWidgets.QDoubleSpinBox()
@@ -4992,23 +4993,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "Leave at Auto to let firmware choose a conservative value from rated current and over-current threshold."
         )
 
-        self.autotune_loaded_low_speed_spin = QtWidgets.QDoubleSpinBox()
-        self.autotune_loaded_low_speed_spin.setRange(-50000.0, 50000.0)
-        self.autotune_loaded_low_speed_spin.setDecimals(1)
-        self.autotune_loaded_low_speed_spin.setValue(300.0)
-        self.autotune_loaded_low_speed_spin.setSuffix(" rpm")
-        self.autotune_loaded_low_speed_spin.setToolTip(
-            "Loaded-mode lower speed plateau. Use the same sign as the upper speed and keep a meaningful gap between them."
+        self.autotune_loaded_mode_note = QtWidgets.QLabel(
+            "Loaded mode holds +Iq until the average speed settles, then switches to -Iq and waits for the opposite "
+            "plateau to settle before ramping back down. No speed target is commanded."
         )
-
-        self.autotune_loaded_high_speed_spin = QtWidgets.QDoubleSpinBox()
-        self.autotune_loaded_high_speed_spin.setRange(-50000.0, 50000.0)
-        self.autotune_loaded_high_speed_spin.setDecimals(1)
-        self.autotune_loaded_high_speed_spin.setValue(800.0)
-        self.autotune_loaded_high_speed_spin.setSuffix(" rpm")
-        self.autotune_loaded_high_speed_spin.setToolTip(
-            "Loaded-mode upper speed plateau. The firmware will run a low -> high -> low sequence and fit equivalent J/B from the response."
-        )
+        self.autotune_loaded_mode_note.setWordWrap(True)
+        self.autotune_loaded_mode_note.setStyleSheet("color: #9fb3c8;")
 
         self.autotune_start_button = QtWidgets.QPushButton("Start Auto-Tune")
         self.autotune_stop_button = QtWidgets.QPushButton("Stop Auto-Tune")
@@ -5071,10 +5061,7 @@ class MainWindow(QtWidgets.QMainWindow):
         config_layout.addWidget(self.autotune_mech_mode_combo, 4, 3)
         config_layout.addWidget(QtWidgets.QLabel("Mechanical Iq Limit"), 5, 0)
         config_layout.addWidget(self.autotune_mech_iq_spin, 5, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Loaded Low Speed"), 5, 2)
-        config_layout.addWidget(self.autotune_loaded_low_speed_spin, 5, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Loaded High Speed"), 6, 0)
-        config_layout.addWidget(self.autotune_loaded_high_speed_spin, 6, 1)
+        config_layout.addWidget(self.autotune_loaded_mode_note, 6, 0, 1, 4)
         config_layout.addWidget(self.autotune_start_button, 7, 0)
         config_layout.addWidget(self.autotune_stop_button, 7, 1)
         config_layout.addWidget(self.autotune_apply_button, 7, 2, 1, 2)
@@ -5147,12 +5134,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "<li>First review <b>Rated Current RMS</b>, <b>Encoder Type</b>, and <b>Encoder Resolution</b> in the initial input table.</li>"
             "<li>Lock the rotor mechanically for the <b>Rs</b> and <b>Ls</b> stages.</li>"
             "<li>Choose <b>Legacy No-load Sine</b> when the shaft is free and can oscillate around zero speed.</li>"
-            "<li>Choose <b>Loaded Speed Profile</b> when the motor stays attached to its load and the mechanical ID should represent the assembled system.</li>"
+            "<li>Choose <b>Loaded Bipolar Torque Hold</b> when the motor stays attached to its load and the mechanical ID should represent the assembled system.</li>"
             "<li>The <b>Flux</b> stage still needs the mechanism to rotate cleanly in open loop before any J/B mode can succeed.</li>"
             "<li>Before Flux estimation, try the same <b>Flux Voltage</b> and <b>Flux Frequency</b> in <b>Open Loop V/F</b> first.</li>"
             "<li>The motor should spin smoothly without strong jerks, buzz, or unstable vibration before you trust the Ke / flux estimate.</li>"
             "<li>During the Flux rotation, the GUI also watches the raw encoder count and suggests <b>MOTOR_CURRENT_CTRL_DIRECTION</b>. Apply it only after the motion test is over, then verify or rerun encoder alignment before closed-loop FOC.</li>"
-            "<li>Legacy mode uses sinusoidal <b>Iq</b> excitation with zero-crossing windows. Loaded mode drives a firmware-side <b>low -&gt; high -&gt; low</b> speed sequence and fits equivalent J/B from torque, speed, and acceleration.</li>"
+            "<li>Legacy mode uses sinusoidal <b>Iq</b> excitation with zero-crossing windows. Loaded mode applies a positive <b>Iq</b> plateau until the average speed settles, then applies a negative plateau and fits equivalent J/B from torque, speed, and acceleration.</li>"
             "</ul>"
             "<b>Rs Estimation Note</b>"
             "<ul style='margin-top:6px; margin-bottom:8px; margin-left:18px;'>"
@@ -6983,10 +6970,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 int(self.autotune_mech_mode_combo.currentData() or 0)
                 == MOTOR_AUTOTUNE_MECH_MODE_LOADED
             )
-        if hasattr(self, "autotune_loaded_low_speed_spin"):
-            self.autotune_loaded_low_speed_spin.setEnabled(loaded_mode)
-        if hasattr(self, "autotune_loaded_high_speed_spin"):
-            self.autotune_loaded_high_speed_spin.setEnabled(loaded_mode)
+        if hasattr(self, "autotune_loaded_mode_note"):
+            self.autotune_loaded_mode_note.setVisible(loaded_mode)
 
     def _enqueue_motor_parameter_updates(
         self,
@@ -10132,8 +10117,8 @@ class MainWindow(QtWidgets.QMainWindow):
             0.8,
             10.0,
             float(self.autotune_mech_mode_combo.currentData() or 0),
-            float(self.autotune_loaded_low_speed_spin.value()),
-            float(self.autotune_loaded_high_speed_spin.value()),
+            0.0,
+            0.0,
             0.75,
         )
 
@@ -10459,32 +10444,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Encoder Resolution must be greater than zero before starting auto-tune.",
             )
             return
-        mechanical_mode = int(self.autotune_mech_mode_combo.currentData() or 0)
-        loaded_low_speed = float(self.autotune_loaded_low_speed_spin.value())
-        loaded_high_speed = float(self.autotune_loaded_high_speed_spin.value())
-        if mechanical_mode == MOTOR_AUTOTUNE_MECH_MODE_LOADED:
-            if (abs(loaded_low_speed) < 1.0) or (abs(loaded_high_speed) < 1.0):
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Invalid Auto-Tune Input",
-                    "Loaded Speed Profile needs two non-zero speed plateaus.",
-                )
-                return
-            if loaded_low_speed * loaded_high_speed < 0.0:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Invalid Auto-Tune Input",
-                    "Loaded Speed Profile expects the low and high speed levels to use the same sign.",
-                )
-                return
-            if abs(abs(loaded_high_speed) - abs(loaded_low_speed)) < 10.0:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Invalid Auto-Tune Input",
-                    "Loaded Speed Profile needs at least a 10 rpm gap between the low and high speed levels.",
-                )
-                return
-
         self.auto_poll_checkbox.setChecked(True)
         self._reset_autotune_direction_tracking()
         self._clear_autotune_capture()
