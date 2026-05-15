@@ -2193,48 +2193,9 @@ static float CalcIdSquareTuningReference(void)
 		IdSquareTuning.fPhase -= 1.0f;
 	}
 
-//	return (IdSquareTuning.fPhase < 0.5f) ? IdSquareTuning.fAmplitudeApplied : -IdSquareTuning.fAmplitudeApplied;
 	return (IdSquareTuning.fPhase < 0.5f) ? IdSquareTuning.fAmplitudeApplied : 0.0f;
 }
 
-//static float CalcIdSquareTuningReference(void)
-//{
-//    // 1. Gi? nguyên ph?n tính toán gi?i h?n an toàn d? b?o v? Motor/Driver
-//    float rated_limit = MotorParameter[MOTOR_RATED_CURRENT_RMS] * ID_SQUARE_TUNING_MAX_RATED_CURRENT_RATIO;
-//    float oc_limit = Current_Sensor.OverCurrentThreshold * ID_SQUARE_TUNING_MAX_OC_RATIO;
-//    float amplitude_limit = rated_limit;
-
-//    if ((oc_limit > 0.0f) && ((amplitude_limit <= 0.0f) || (oc_limit < amplitude_limit)))
-//    {
-//        amplitude_limit = oc_limit;
-//    }
-//    if (amplitude_limit < 0.1f)
-//    {
-//        amplitude_limit = 0.1f;
-//    }
-
-//    // Gán biên d? t? l?nh ngu?i dùng và Clamp l?i cho an toàn
-//    IdSquareTuning.fAmplitudeApplied = ClampFloat(
-//        fabsf(IdSquareTuning.fAmplitudeCmd),
-//        0.0f,
-//        amplitude_limit);
-
-//    // 2. Ki?m tra di?u ki?n Enable - N?u không b?t thì tr? v? 0
-//    if ((IdSquareTuning.Enable == 0u) || (IdSquareTuning.fAmplitudeApplied < 0.0001f))
-//    {
-//        IdSquareTuning.fPhase = 0.0f;
-//        return 0.0f;
-//    }
-
-//    // 3. THAY Ð?I CHÍNH ? ÐÂY: 
-//    // Không c?ng d?n fPhase n?a, ép nó b?ng 0 d? không t?o ra chu k? xung.
-//    IdSquareTuning.fPhase = 0.0f;
-//    IdSquareTuning.fFrequencyApplied = 0.0f;
-
-//    // 4. TR? V? TH?NG BIÊN Ð?:
-//    // Thay vì dùng (fPhase < 0.5f) d? b?t/t?t dòng di?n, ta tr? v? h?ng s? luôn.
-//    return IdSquareTuning.fAmplitudeApplied;
-//}
 
 static float CalcIdSquareTuningAlignmentCurrent(void)
 {
