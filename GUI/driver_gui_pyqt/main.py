@@ -4790,7 +4790,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         init_hint.setWordWrap(True)
 
-        self.autotune_init_table = QtWidgets.QTableWidget(5, 3)
+        self.autotune_init_table = QtWidgets.QTableWidget(0, 3)
         self.autotune_init_table.setHorizontalHeaderLabels(["Parameter", "Value", "Notes"])
         self.autotune_init_table.verticalHeader().setVisible(False)
         self.autotune_init_table.setAlternatingRowColors(True)
@@ -4842,11 +4842,6 @@ class MainWindow(QtWidgets.QMainWindow):
             "Required. Used for speed/position scaling and pole-pair estimation."
         )
 
-        rotor_model_value = QtWidgets.QLabel("Auto-estimate in flow")
-        rotor_model_value.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-
         init_rows: list[tuple[str, QtWidgets.QWidget, str]] = [
             (
                 "Rated Current RMS",
@@ -4868,12 +4863,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.autotune_init_encoder_resolution_spin,
                 "Required. Final value written into MOTOR_ENCODER_RESOLUTION.",
             ),
-            (
-                "Rotor Model (J / B)",
-                rotor_model_value,
-                "Optional to pre-fill manually, but the auto-tune flow now estimates both after Flux.",
-            ),
         ]
+        self.autotune_init_table.setRowCount(len(init_rows))
         for row, (label_text, value_widget, note_text) in enumerate(init_rows):
             label_item = QtWidgets.QTableWidgetItem(label_text)
             label_item.setFlags(label_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
@@ -4887,11 +4878,8 @@ class MainWindow(QtWidgets.QMainWindow):
         init_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         init_header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         init_header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.autotune_init_table.setRowHeight(0, 34)
-        self.autotune_init_table.setRowHeight(1, 34)
-        self.autotune_init_table.setRowHeight(2, 34)
-        self.autotune_init_table.setRowHeight(3, 34)
-        self.autotune_init_table.setRowHeight(4, 42)
+        for row in range(len(init_rows)):
+            self.autotune_init_table.setRowHeight(row, 34)
 
         init_toolbar = QtWidgets.QHBoxLayout()
         self.autotune_reload_init_button = QtWidgets.QPushButton("Reload From Motor Parameters")
@@ -4990,7 +4978,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_mech_iq_spin.setSuffix(" A")
         self.autotune_mech_iq_spin.setToolTip(
             "Optional current limit for the mechanical identification stages. "
-            "Leave at Auto to let firmware choose a conservative value from rated current and over-current threshold."
+            "The GUI pre-fills this at about 80% of rated current. "
+            "Set it back to Auto if you want firmware to choose a conservative value from rated current and over-current threshold."
         )
 
         self.autotune_loaded_mode_note = QtWidgets.QLabel(
@@ -6795,6 +6784,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if (
             not hasattr(self, "autotune_rs_low_spin")
             or not hasattr(self, "autotune_rs_high_spin")
+            or not hasattr(self, "autotune_mech_iq_spin")
         ):
             return
         if rated_current_a is None:
@@ -6815,8 +6805,14 @@ class MainWindow(QtWidgets.QMainWindow):
             max(low_current, self.autotune_rs_high_spin.minimum()),
             min(self.autotune_rs_high_spin.maximum(), high_current),
         )
+        mech_iq_limit = rated_current * AUTOTUNE_RS_HIGH_RATIO
+        mech_iq_limit = max(
+            self.autotune_mech_iq_spin.minimum(),
+            min(self.autotune_mech_iq_spin.maximum(), mech_iq_limit),
+        )
         self.autotune_rs_low_spin.setValue(low_current)
         self.autotune_rs_high_spin.setValue(high_current)
+        self.autotune_mech_iq_spin.setValue(mech_iq_limit)
 
     def _refresh_autotune_input_review_status(self) -> None:
         if not hasattr(self, "autotune_init_status_label"):
@@ -6833,6 +6829,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_init_status_label.setText(
             f"Encoder type: {encoder_type_text} [{encoder_id}]. {encoder_text}. "
             f"Rs current suggestions follow 0.6x / 0.8x rated current ({rated_current:.3f} A). "
+            f"Mechanical Iq Limit is prefilled at about 0.8x rated current ({rated_current * AUTOTUNE_RS_HIGH_RATIO:.3f} A). "
             "Start Auto-Tune writes Rated Current RMS, Encoder Type, and Encoder Resolution to the drive first. "
             "J/B are then estimated automatically after the electrical stages complete."
         )
