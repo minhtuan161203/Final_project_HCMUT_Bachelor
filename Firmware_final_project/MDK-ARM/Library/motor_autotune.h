@@ -196,12 +196,24 @@ typedef struct
 	float mechanical_loaded_plateau0_torque_nm;
 	float mechanical_loaded_plateau1_speed_rad_s;
 	float mechanical_loaded_plateau1_torque_nm;
+	float mechanical_loaded_accel_iq_sum_a;
+	float mechanical_loaded_decel_iq_sum_a;
+	float mechanical_loaded_accel_alpha_rad_s2;
+	float mechanical_loaded_decel_alpha_rad_s2;
+	float mechanical_loaded_accel_start_speed_rad_s;
+	float mechanical_loaded_decel_start_speed_rad_s;
 	uint32_t mechanical_timeout_ticks;
 	uint32_t mechanical_loaded_sample_count;
+	uint32_t mechanical_loaded_accel_start_tick;
+	uint32_t mechanical_loaded_decel_start_tick;
+	uint32_t mechanical_loaded_accel_sample_count;
+	uint32_t mechanical_loaded_decel_sample_count;
 	uint16_t mechanical_zero_cross_count;
 	uint16_t mechanical_window_count;
 	uint8_t mechanical_window_active;
 	uint8_t mechanical_zero_cross_armed;
+	uint8_t mechanical_loaded_accel_started;
+	uint8_t mechanical_loaded_decel_started;
 	int8_t mechanical_prev_speed_sign;
 
 	uint16_t chart_length;

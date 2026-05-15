@@ -3,7 +3,7 @@
 <title>Static Call Graph - [Firmware_final_project\Firmware_final_project.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image Firmware_final_project\Firmware_final_project.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Wed May 13 17:01:32 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Fri May 15 07:05:30 2026
 <BR><P>
 <H3>Maximum Stack Usage =        832 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -1378,7 +1378,7 @@ Global Symbols
 </UL>
 <P><STRONG><a name="[34]"></a>EXTI0_IRQHandler</STRONG> (Thumb, 6 bytes, Stack size 0 bytes, stm32f4xx_it.o(i.EXTI0_IRQHandler))
 <BR><BR>[Stack]<UL><LI>Max Depth = 400 + Unknown Stack Size
-<LI>Call Chain = EXTI0_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<LI>Call Chain = EXTI0_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[114]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_IRQHandler
 </UL>
@@ -1386,7 +1386,7 @@ Global Symbols
 </UL>
 <P><STRONG><a name="[56]"></a>EXTI15_10_IRQHandler</STRONG> (Thumb, 8 bytes, Stack size 0 bytes, stm32f4xx_it.o(i.EXTI15_10_IRQHandler))
 <BR><BR>[Stack]<UL><LI>Max Depth = 400 + Unknown Stack Size
-<LI>Call Chain = EXTI15_10_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<LI>Call Chain = EXTI15_10_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[114]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_IRQHandler
 </UL>
@@ -1394,7 +1394,7 @@ Global Symbols
 </UL>
 <P><STRONG><a name="[35]"></a>EXTI1_IRQHandler</STRONG> (Thumb, 6 bytes, Stack size 0 bytes, stm32f4xx_it.o(i.EXTI1_IRQHandler))
 <BR><BR>[Stack]<UL><LI>Max Depth = 400 + Unknown Stack Size
-<LI>Call Chain = EXTI1_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<LI>Call Chain = EXTI1_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[114]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_IRQHandler
 </UL>
@@ -1402,7 +1402,7 @@ Global Symbols
 </UL>
 <P><STRONG><a name="[36]"></a>EXTI2_IRQHandler</STRONG> (Thumb, 6 bytes, Stack size 0 bytes, stm32f4xx_it.o(i.EXTI2_IRQHandler))
 <BR><BR>[Stack]<UL><LI>Max Depth = 400 + Unknown Stack Size
-<LI>Call Chain = EXTI2_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<LI>Call Chain = EXTI2_IRQHandler &rArr; HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[114]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_IRQHandler
 </UL>
@@ -1526,7 +1526,7 @@ Global Symbols
 
 <P><STRONG><a name="[136]"></a>HAL_GPIO_EXTI_Callback</STRONG> (Thumb, 484 bytes, Stack size 32 bytes, main.o(i.HAL_GPIO_EXTI_Callback))
 <BR><BR>[Stack]<UL><LI>Max Depth = 392 + Unknown Stack Size
-<LI>Call Chain = HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<LI>Call Chain = HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[143]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateTraceCapture
 <LI><a href="#[13e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredSpeedAndTheta
@@ -1556,7 +1556,7 @@ Global Symbols
 
 <P><STRONG><a name="[114]"></a>HAL_GPIO_EXTI_IRQHandler</STRONG> (Thumb, 18 bytes, Stack size 8 bytes, stm32f4xx_hal_gpio.o(i.HAL_GPIO_EXTI_IRQHandler))
 <BR><BR>[Stack]<UL><LI>Max Depth = 400 + Unknown Stack Size
-<LI>Call Chain = HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<LI>Call Chain = HAL_GPIO_EXTI_IRQHandler &rArr; HAL_GPIO_EXTI_Callback &rArr; RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[136]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
@@ -2099,7 +2099,7 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[1d4]"></a>MotorAutoTune_Process</STRONG> (Thumb, 264 bytes, Stack size 24 bytes, motor_autotune.o(i.MotorAutoTune_Process))
-<BR><BR>[Stack]<UL><LI>Max Depth = 232<LI>Call Chain = MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<BR><BR>[Stack]<UL><LI>Max Depth = 232<LI>Call Chain = MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
 <LI><a href="#[11e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_memclr4
@@ -2108,7 +2108,7 @@ Global Symbols
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 <LI><a href="#[1d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessFlux
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[147]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
 </UL>
@@ -2133,11 +2133,11 @@ Global Symbols
 <LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Process
 <LI><a href="#[1d5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessRs
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
-<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 <LI><a href="#[1d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessFlux
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
-<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedRegression
+<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedTrajectory
 <LI><a href="#[1e3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Start
 </UL>
 
@@ -2147,8 +2147,8 @@ Global Symbols
 <BR>[Calls]<UL><LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
 <LI><a href="#[11e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_memclr4
 <LI><a href="#[c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_memcpy4
-<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 <LI><a href="#[1e2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetDefaultConfig
 </UL>
 <BR>[Called By]<UL><LI><a href="#[23f]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_HandleAutoTuneStart
@@ -2266,7 +2266,7 @@ Global Symbols
 <LI><a href="#[24c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_SendAutoTuneChunk
 </UL>
 
-<P><STRONG><a name="[207]"></a>StartFocCurrentFeedbackMapTest</STRONG> (Thumb, 256 bytes, Stack size 32 bytes, main.o(i.StartFocCurrentFeedbackMapTest))
+<P><STRONG><a name="[207]"></a>StartFocCurrentFeedbackMapTest</STRONG> (Thumb, 258 bytes, Stack size 32 bytes, main.o(i.StartFocCurrentFeedbackMapTest))
 <BR><BR>[Stack]<UL><LI>Max Depth = 184 + Unknown Stack Size
 <LI>Call Chain = StartFocCurrentFeedbackMapTest &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
@@ -3002,7 +3002,7 @@ Global Symbols
 <LI><a href="#[233]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
 
-<P><STRONG><a name="[1ae]"></a>UpdateMotorParameter</STRONG> (Thumb, 490 bytes, Stack size 32 bytes, main.o(i.UpdateMotorParameter))
+<P><STRONG><a name="[1ae]"></a>UpdateMotorParameter</STRONG> (Thumb, 530 bytes, Stack size 32 bytes, main.o(i.UpdateMotorParameter))
 <BR><BR>[Stack]<UL><LI>Max Depth = 64<LI>Call Chain = UpdateMotorParameter &rArr; UpdateDriverParameter &rArr; GetEffectiveSpeedLoopFrequency
 </UL>
 <BR>[Calls]<UL><LI><a href="#[fa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetEffectiveCurrentLoopFrequency
@@ -3138,7 +3138,6 @@ Global Symbols
 <LI><a href="#[c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;tIFClarke_albe2abc
 <LI><a href="#[9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;tFRClarke_ab2albe
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
-<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessFlux
 </UL>
 
@@ -3899,7 +3898,7 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[147]"></a>RunMotorAutoTuneLoop</STRONG> (Thumb, 550 bytes, Stack size 128 bytes, main.o(i.RunMotorAutoTuneLoop))
-<BR><BR>[Stack]<UL><LI>Max Depth = 360<LI>Call Chain = RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<BR><BR>[Stack]<UL><LI>Max Depth = 360<LI>Call Chain = RunMotorAutoTuneLoop &rArr; MotorAutoTune_Process &rArr; MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[145]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredCurrentsForTheta
 <LI><a href="#[1ee]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunCurrentLoopForTheta
@@ -4521,24 +4520,20 @@ Local Symbols
 <LI><a href="#[234]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_SendAckPacket
 </UL>
 
-<P><STRONG><a name="[1cb]"></a>MotorAutoTune_Abs</STRONG> (Thumb, 16 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_Abs))
+<P><STRONG><a name="[1ca]"></a>MotorAutoTune_Abs</STRONG> (Thumb, 16 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_Abs))
 <BR><BR>[Called By]<UL><LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Process
 <LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateMechanicalObservables
 <LI><a href="#[1da]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ResetMechanicalRuntime
 <LI><a href="#[1d5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessRs
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
-<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 <LI><a href="#[1d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessFlux
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
-<LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMinValidSpeedRpm
-<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMaxValidSpeedRpm
-<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedRegression
+<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMinValidSpeedRpm
+<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMaxValidSpeedRpm
+<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedTrajectory
 <LI><a href="#[1e3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Start
-</UL>
-
-<P><STRONG><a name="[1de]"></a>MotorAutoTune_AccumulateLoadedRegression</STRONG> (Thumb, 156 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_AccumulateLoadedRegression))
-<BR><BR>[Called By]<UL><LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 </UL>
 
 <P><STRONG><a name="[1c2]"></a>MotorAutoTune_AdvanceToStage</STRONG> (Thumb, 26 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_AdvanceToStage))
@@ -4552,16 +4547,16 @@ Local Symbols
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
 </UL>
 
-<P><STRONG><a name="[1ce]"></a>MotorAutoTune_Clamp</STRONG> (Thumb, 32 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_Clamp))
-<BR><BR>[Called By]<UL><LI><a href="#[1cf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateCurrentGains
+<P><STRONG><a name="[1d0]"></a>MotorAutoTune_Clamp</STRONG> (Thumb, 32 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_Clamp))
+<BR><BR>[Called By]<UL><LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateCurrentGains
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
-<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessFlux
 <LI><a href="#[1d2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetMechanicalSpeedLpfHz
 <LI><a href="#[1c4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetMechanicalFrequencyHz
-<LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMinValidSpeedRpm
-<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMaxValidSpeedRpm
-<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
+<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMinValidSpeedRpm
+<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMaxValidSpeedRpm
+<LI><a href="#[1cf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
 <LI><a href="#[1e3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Start
 </UL>
 
@@ -4580,7 +4575,7 @@ Local Symbols
 <P><STRONG><a name="[1c6]"></a>MotorAutoTune_CurrentLoopVoltageLimit</STRONG> (Thumb, 62 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_CurrentLoopVoltageLimit))
 <BR><BR>[Called By]<UL><LI><a href="#[1d5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessRs
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
-<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_CommandMechanicalSine
 </UL>
 
@@ -4592,46 +4587,50 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 </UL>
 
-<P><STRONG><a name="[1c9]"></a>MotorAutoTune_FinalizeLoadedRegression</STRONG> (Thumb, 426 bytes, Stack size 48 bytes, motor_autotune.o(i.MotorAutoTune_FinalizeLoadedRegression))
-<BR><BR>[Stack]<UL><LI>Max Depth = 48<LI>Call Chain = MotorAutoTune_FinalizeLoadedRegression
+<P><STRONG><a name="[1c9]"></a>MotorAutoTune_FinalizeLoadedTrajectory</STRONG> (Thumb, 470 bytes, Stack size 48 bytes, motor_autotune.o(i.MotorAutoTune_FinalizeLoadedTrajectory))
+<BR><BR>[Stack]<UL><LI>Max Depth = 80<LI>Call Chain = MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
-<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__ARM_isfinitef
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__ARM_isfinitef
+<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMinValidSpeedRpm
+<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMaxValidSpeedRpm
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
-<BR>[Called By]<UL><LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<BR>[Called By]<UL><LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 </UL>
 
-<P><STRONG><a name="[1cd]"></a>MotorAutoTune_Finish</STRONG> (Thumb, 252 bytes, Stack size 32 bytes, motor_autotune.o(i.MotorAutoTune_Finish))
+<P><STRONG><a name="[1cf]"></a>MotorAutoTune_Finish</STRONG> (Thumb, 252 bytes, Stack size 32 bytes, motor_autotune.o(i.MotorAutoTune_Finish))
 <BR><BR>[Stack]<UL><LI>Max Depth = 40<LI>Call Chain = MotorAutoTune_Finish &rArr; MotorAutoTune_UpdateCurrentGains
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1cf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateCurrentGains
-<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<BR>[Calls]<UL><LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateCurrentGains
+<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
 </UL>
-<BR>[Called By]<UL><LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<BR>[Called By]<UL><LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
 </UL>
 
-<P><STRONG><a name="[1d0]"></a>MotorAutoTune_GetLoadedMaxValidSpeedRpm</STRONG> (Thumb, 188 bytes, Stack size 32 bytes, motor_autotune.o(i.MotorAutoTune_GetLoadedMaxValidSpeedRpm))
+<P><STRONG><a name="[1ce]"></a>MotorAutoTune_GetLoadedMaxValidSpeedRpm</STRONG> (Thumb, 188 bytes, Stack size 32 bytes, motor_autotune.o(i.MotorAutoTune_GetLoadedMaxValidSpeedRpm))
 <BR><BR>[Stack]<UL><LI>Max Depth = 32<LI>Call Chain = MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<BR>[Calls]<UL><LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
-<BR>[Called By]<UL><LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<BR>[Called By]<UL><LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedTrajectory
 </UL>
 
-<P><STRONG><a name="[1d1]"></a>MotorAutoTune_GetLoadedMinValidSpeedRpm</STRONG> (Thumb, 132 bytes, Stack size 24 bytes, motor_autotune.o(i.MotorAutoTune_GetLoadedMinValidSpeedRpm))
+<P><STRONG><a name="[1cd]"></a>MotorAutoTune_GetLoadedMinValidSpeedRpm</STRONG> (Thumb, 132 bytes, Stack size 24 bytes, motor_autotune.o(i.MotorAutoTune_GetLoadedMinValidSpeedRpm))
 <BR><BR>[Stack]<UL><LI>Max Depth = 24<LI>Call Chain = MotorAutoTune_GetLoadedMinValidSpeedRpm
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<BR>[Calls]<UL><LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
-<BR>[Called By]<UL><LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<BR>[Called By]<UL><LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedTrajectory
 </UL>
 
 <P><STRONG><a name="[1c4]"></a>MotorAutoTune_GetMechanicalFrequencyHz</STRONG> (Thumb, 22 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_GetMechanicalFrequencyHz))
-<BR><BR>[Calls]<UL><LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<BR><BR>[Calls]<UL><LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateMechanicalObservables
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
@@ -4640,7 +4639,7 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[1d2]"></a>MotorAutoTune_GetMechanicalSpeedLpfHz</STRONG> (Thumb, 22 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_GetMechanicalSpeedLpfHz))
-<BR><BR>[Calls]<UL><LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<BR><BR>[Calls]<UL><LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateMechanicalObservables
 </UL>
@@ -4662,14 +4661,14 @@ Local Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 108<LI>Call Chain = MotorAutoTune_ProcessB &rArr; MotorAutoTune_CommandMechanicalSine &rArr; __hardfp_sinf &rArr; __mathlib_rredf2
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
-<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__ARM_isfinitef
+<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__ARM_isfinitef
 <LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateMechanicalObservables
 <LI><a href="#[1c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SecondsToTicks
 <LI><a href="#[1da]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ResetMechanicalRuntime
 <LI><a href="#[1c4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetMechanicalFrequencyHz
-<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
+<LI><a href="#[1cf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
 <LI><a href="#[1c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_CommandMechanicalSine
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Process
 </UL>
@@ -4681,47 +4680,47 @@ Local Symbols
 <LI><a href="#[1dc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_floorf
 <LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
 <LI><a href="#[1c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SecondsToTicks
-<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
 <LI><a href="#[1c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_AdvanceToStage
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Process
 </UL>
 
-<P><STRONG><a name="[1d8]"></a>MotorAutoTune_ProcessJ</STRONG> (Thumb, 846 bytes, Stack size 48 bytes, motor_autotune.o(i.MotorAutoTune_ProcessJ))
-<BR><BR>[Stack]<UL><LI>Max Depth = 208<LI>Call Chain = MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<P><STRONG><a name="[1d8]"></a>MotorAutoTune_ProcessJ</STRONG> (Thumb, 856 bytes, Stack size 48 bytes, motor_autotune.o(i.MotorAutoTune_ProcessJ))
+<BR><BR>[Stack]<UL><LI>Max Depth = 208<LI>Call Chain = MotorAutoTune_ProcessJ &rArr; MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
-<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__ARM_isfinitef
+<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__ARM_isfinitef
 <LI><a href="#[1c8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UseLoadedMechanicalMode
 <LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateMechanicalObservables
 <LI><a href="#[1c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SecondsToTicks
 <LI><a href="#[1da]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ResetMechanicalRuntime
-<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ResetLoadedTrajectory
+<LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1c4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetMechanicalFrequencyHz
 <LI><a href="#[1c7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_DefaultMechanicalIqAmplitude
 <LI><a href="#[1c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_CommandMechanicalSine
 <LI><a href="#[1c2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_AdvanceToStage
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Process
 </UL>
 
-<P><STRONG><a name="[1dd]"></a>MotorAutoTune_ProcessLoadedMechanical</STRONG> (Thumb, 1616 bytes, Stack size 112 bytes, motor_autotune.o(i.MotorAutoTune_ProcessLoadedMechanical))
-<BR><BR>[Stack]<UL><LI>Max Depth = 160<LI>Call Chain = MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedRegression
+<P><STRONG><a name="[1de]"></a>MotorAutoTune_ProcessLoadedMechanical</STRONG> (Thumb, 1088 bytes, Stack size 80 bytes, motor_autotune.o(i.MotorAutoTune_ProcessLoadedMechanical))
+<BR><BR>[Stack]<UL><LI>Max Depth = 160<LI>Call Chain = MotorAutoTune_ProcessLoadedMechanical &rArr; MotorAutoTune_FinalizeLoadedTrajectory &rArr; MotorAutoTune_GetLoadedMaxValidSpeedRpm
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1ac]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_sqrtf
-<LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
+<BR>[Calls]<UL><LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
 <LI><a href="#[1db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateMechanicalObservables
 <LI><a href="#[1c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SecondsToTicks
-<LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMinValidSpeedRpm
-<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMaxValidSpeedRpm
-<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
-<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedRegression
+<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ResetLoadedTrajectory
+<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMinValidSpeedRpm
+<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetLoadedMaxValidSpeedRpm
+<LI><a href="#[1cf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
+<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedTrajectory
 <LI><a href="#[1c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_CurrentLoopVoltageLimit
-<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
-<LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_AccumulateLoadedRegression
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 </UL>
@@ -4732,14 +4731,14 @@ Local Symbols
 <BR>[Calls]<UL><LI><a href="#[1ac]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_sqrtf
 <LI><a href="#[f6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_sinf
 <LI><a href="#[1cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SetError
-<LI><a href="#[1cf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateCurrentGains
+<LI><a href="#[1d1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_UpdateCurrentGains
 <LI><a href="#[1c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SecondsToTicks
 <LI><a href="#[1df]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_PushChart
 <LI><a href="#[1d3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_PrepareChart
 <LI><a href="#[1c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_CurrentLoopVoltageLimit
-<LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
 <LI><a href="#[1e0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ArmChartTransfer
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Process
 </UL>
@@ -4753,7 +4752,7 @@ Local Symbols
 <LI><a href="#[1d3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_PrepareChart
 <LI><a href="#[1c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_CurrentLoopVoltageLimit
 <LI><a href="#[1e0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ArmChartTransfer
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Process
 </UL>
@@ -4765,11 +4764,16 @@ Local Symbols
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
 </UL>
 
-<P><STRONG><a name="[1da]"></a>MotorAutoTune_ResetMechanicalRuntime</STRONG> (Thumb, 196 bytes, Stack size 24 bytes, motor_autotune.o(i.MotorAutoTune_ResetMechanicalRuntime))
+<P><STRONG><a name="[1dd]"></a>MotorAutoTune_ResetLoadedTrajectory</STRONG> (Thumb, 76 bytes, Stack size 0 bytes, motor_autotune.o(i.MotorAutoTune_ResetLoadedTrajectory))
+<BR><BR>[Called By]<UL><LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
+</UL>
+
+<P><STRONG><a name="[1da]"></a>MotorAutoTune_ResetMechanicalRuntime</STRONG> (Thumb, 242 bytes, Stack size 24 bytes, motor_autotune.o(i.MotorAutoTune_ResetMechanicalRuntime))
 <BR><BR>[Stack]<UL><LI>Max Depth = 24<LI>Call Chain = MotorAutoTune_ResetMechanicalRuntime
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_SecondsToTicks
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
@@ -4779,20 +4783,20 @@ Local Symbols
 <BR><BR>[Called By]<UL><LI><a href="#[1da]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ResetMechanicalRuntime
 <LI><a href="#[1d5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessRs
 <LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
-<LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 <LI><a href="#[1d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessFlux
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
 <LI><a href="#[1c3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_CommandMechanicalSine
 </UL>
 
-<P><STRONG><a name="[1cf]"></a>MotorAutoTune_UpdateCurrentGains</STRONG> (Thumb, 84 bytes, Stack size 8 bytes, motor_autotune.o(i.MotorAutoTune_UpdateCurrentGains))
+<P><STRONG><a name="[1d1]"></a>MotorAutoTune_UpdateCurrentGains</STRONG> (Thumb, 84 bytes, Stack size 8 bytes, motor_autotune.o(i.MotorAutoTune_UpdateCurrentGains))
 <BR><BR>[Stack]<UL><LI>Max Depth = 8<LI>Call Chain = MotorAutoTune_UpdateCurrentGains
 </UL>
-<BR>[Calls]<UL><LI><a href="#[1ce]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
+<BR>[Calls]<UL><LI><a href="#[1d0]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Clamp
 </UL>
 <BR>[Called By]<UL><LI><a href="#[1d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLs
-<LI><a href="#[1cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
+<LI><a href="#[1cf]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Finish
 </UL>
 
 <P><STRONG><a name="[1db]"></a>MotorAutoTune_UpdateMechanicalObservables</STRONG> (Thumb, 192 bytes, Stack size 16 bytes, motor_autotune.o(i.MotorAutoTune_UpdateMechanicalObservables))
@@ -4801,9 +4805,9 @@ Local Symbols
 <BR>[Calls]<UL><LI><a href="#[1e4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_LpfAlpha
 <LI><a href="#[1d2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetMechanicalSpeedLpfHz
 <LI><a href="#[1c4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_GetMechanicalFrequencyHz
-<LI><a href="#[1cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
+<LI><a href="#[1ca]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_Abs
 </UL>
-<BR>[Called By]<UL><LI><a href="#[1dd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
+<BR>[Called By]<UL><LI><a href="#[1de]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessLoadedMechanical
 <LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
 </UL>
@@ -4813,10 +4817,10 @@ Local Symbols
 <LI><a href="#[1c7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_DefaultMechanicalIqAmplitude
 </UL>
 
-<P><STRONG><a name="[1ca]"></a>__ARM_isfinitef</STRONG> (Thumb, 14 bytes, Stack size 0 bytes, motor_autotune.o(i.__ARM_isfinitef))
+<P><STRONG><a name="[1cb]"></a>__ARM_isfinitef</STRONG> (Thumb, 14 bytes, Stack size 0 bytes, motor_autotune.o(i.__ARM_isfinitef))
 <BR><BR>[Called By]<UL><LI><a href="#[1d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessJ
 <LI><a href="#[1d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_ProcessB
-<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedRegression
+<LI><a href="#[1c9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MotorAutoTune_FinalizeLoadedTrajectory
 </UL>
 
 <P><STRONG><a name="[82]"></a>_printf_input_char</STRONG> (Thumb, 10 bytes, Stack size 0 bytes, _printf_char_common.o(.text))

@@ -71,6 +71,14 @@
 #define MOTOR_AUTOTUNE_LOADED_AUTO_MAX_FROM_FLUX_RATIO 2.50f
 #define MOTOR_AUTOTUNE_LOADED_AUTO_MAX_SPEED_FLOOR_RPM 150.0f
 #define MOTOR_AUTOTUNE_LOADED_AUTO_SPEED_MARGIN_RPM 100.0f
+#define MOTOR_AUTOTUNE_LOADED_ZERO_SETTLE_S      0.15f
+#define MOTOR_AUTOTUNE_LOADED_ZERO_SPEED_MIN_RPM 3.0f
+#define MOTOR_AUTOTUNE_LOADED_ZERO_SPEED_RATIO   0.25f
+#define MOTOR_AUTOTUNE_LOADED_CAPTURE_SKIP_RATIO 0.10f
+#define MOTOR_AUTOTUNE_LOADED_MIN_PHASE_DT_S     0.02f
+#define MOTOR_AUTOTUNE_LOADED_MIN_ALPHA_RAD_S2   0.50f
+#define MOTOR_AUTOTUNE_LOADED_OVERSPEED_RATIO    1.40f
+#define MOTOR_AUTOTUNE_MANUAL_OC_LIMIT_RATIO     0.90f
 
 #define MOTOR_AUTOTUNE_DEFAULT_RS_LOW_A         0.20f
 #define MOTOR_AUTOTUNE_DEFAULT_RS_HIGH_A        0.45f
@@ -91,6 +99,14 @@
 #define MOTOR_AUTOTUNE_RS_WAIT_HOST_SUBSTEP     4u
 #define MOTOR_AUTOTUNE_LS_WAIT_HOST_SUBSTEP     3u
 
+typedef enum
+{
+	MOTOR_AUTOTUNE_LOADED_STATE_INIT = 0u,
+	MOTOR_AUTOTUNE_LOADED_STATE_ACCEL = 1u,
+	MOTOR_AUTOTUNE_LOADED_STATE_DECEL = 2u,
+	MOTOR_AUTOTUNE_LOADED_STATE_COMPUTE = 3u
+} MotorAutoTuneLoadedState_e;
+
 static float MotorAutoTune_CurrentLoopVoltageLimit(const MotorAutoTuneInputs_t *inputs);
 static void MotorAutoTune_AdvanceToStage(MotorAutoTune_t *handle, MotorAutoTuneState_e next_state);
 static void MotorAutoTune_Finish(MotorAutoTune_t *handle, const MotorAutoTuneInputs_t *inputs);
@@ -100,11 +116,11 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 	MotorAutoTune_t *handle,
 	const MotorAutoTuneInputs_t *inputs,
 	MotorAutoTuneOutputs_t *outputs);
-static void MotorAutoTune_ResetLoadedRegression(MotorAutoTune_t *handle);
-static void MotorAutoTune_AccumulateLoadedRegression(
+static void MotorAutoTune_ResetLoadedTrajectory(MotorAutoTune_t *handle);
+static void MotorAutoTune_UpdateLoadedTorqueSign(
 	MotorAutoTune_t *handle,
-	float measured_torque_nm);
-static uint8_t MotorAutoTune_FinalizeLoadedRegression(
+	const MotorAutoTuneInputs_t *inputs);
+static uint8_t MotorAutoTune_FinalizeLoadedTrajectory(
 	MotorAutoTune_t *handle,
 	const MotorAutoTuneInputs_t *inputs);
 static float MotorAutoTune_GetLoadedMinValidSpeedRpm(const MotorAutoTune_t *handle);
@@ -168,105 +184,6 @@ static uint8_t MotorAutoTune_UseLoadedMechanicalMode(const MotorAutoTune_t *hand
 {
 	return ((handle != 0) &&
 		(handle->config.mechanical_estimation_mode == MOTOR_AUTOTUNE_MECH_MODE_LOADED)) ? 1u : 0u;
-}
-
-static uint8_t MotorAutoTune_Solve3x3(
-	float a00,
-	float a01,
-	float a02,
-	float a10,
-	float a11,
-	float a12,
-	float a20,
-	float a21,
-	float a22,
-	float b0,
-	float b1,
-	float b2,
-	float *x0,
-	float *x1,
-	float *x2)
-{
-	float m[3][4];
-	uint8_t row;
-	uint8_t pivot_row;
-
-	if ((x0 == 0) || (x1 == 0) || (x2 == 0))
-	{
-		return 0u;
-	}
-
-	m[0][0] = a00; m[0][1] = a01; m[0][2] = a02; m[0][3] = b0;
-	m[1][0] = a10; m[1][1] = a11; m[1][2] = a12; m[1][3] = b1;
-	m[2][0] = a20; m[2][1] = a21; m[2][2] = a22; m[2][3] = b2;
-
-	for (pivot_row = 0u; pivot_row < 3u; pivot_row++)
-	{
-		uint8_t best_row = pivot_row;
-		float best_abs = MotorAutoTune_Abs(m[pivot_row][pivot_row]);
-
-		for (row = (uint8_t)(pivot_row + 1u); row < 3u; row++)
-		{
-			float candidate_abs = MotorAutoTune_Abs(m[row][pivot_row]);
-			if (candidate_abs > best_abs)
-			{
-				best_abs = candidate_abs;
-				best_row = row;
-			}
-		}
-
-		if (best_abs <= 1.0e-9f)
-		{
-			return 0u;
-		}
-
-		if (best_row != pivot_row)
-		{
-			uint8_t col;
-			for (col = 0u; col < 4u; col++)
-			{
-				float tmp = m[pivot_row][col];
-				m[pivot_row][col] = m[best_row][col];
-				m[best_row][col] = tmp;
-			}
-		}
-
-		{
-			float inv_pivot = 1.0f / m[pivot_row][pivot_row];
-			uint8_t col;
-			for (col = pivot_row; col < 4u; col++)
-			{
-				m[pivot_row][col] *= inv_pivot;
-			}
-		}
-
-		for (row = 0u; row < 3u; row++)
-		{
-			float factor;
-			uint8_t col;
-
-			if (row == pivot_row)
-			{
-				continue;
-			}
-
-			factor = m[row][pivot_row];
-			if (MotorAutoTune_Abs(factor) <= 1.0e-9f)
-			{
-				continue;
-			}
-
-			for (col = pivot_row; col < 4u; col++)
-			{
-				m[row][col] -= factor * m[pivot_row][col];
-			}
-		}
-	}
-
-	*x0 = m[0][3];
-	*x1 = m[1][3];
-	*x2 = m[2][3];
-	return 1u;
 }
 
 static void MotorAutoTune_UpdateCurrentGains(MotorAutoTune_t *handle)
@@ -408,7 +325,19 @@ static void MotorAutoTune_ResetMechanicalRuntime(
 	handle->mechanical_window_active = 0u;
 	handle->mechanical_zero_cross_armed = 0u;
 	handle->mechanical_prev_speed_sign = 0;
+	handle->mechanical_loaded_accel_iq_sum_a = 0.0f;
+	handle->mechanical_loaded_decel_iq_sum_a = 0.0f;
+	handle->mechanical_loaded_accel_alpha_rad_s2 = 0.0f;
+	handle->mechanical_loaded_decel_alpha_rad_s2 = 0.0f;
+	handle->mechanical_loaded_accel_start_speed_rad_s = 0.0f;
+	handle->mechanical_loaded_decel_start_speed_rad_s = 0.0f;
 	handle->mechanical_loaded_sample_count = 0u;
+	handle->mechanical_loaded_accel_start_tick = 0u;
+	handle->mechanical_loaded_decel_start_tick = 0u;
+	handle->mechanical_loaded_accel_sample_count = 0u;
+	handle->mechanical_loaded_decel_sample_count = 0u;
+	handle->mechanical_loaded_accel_started = 0u;
+	handle->mechanical_loaded_decel_started = 0u;
 	handle->counter = 0u;
 	handle->phase_counter = 0u;
 	handle->mechanical_timeout_ticks = MotorAutoTune_SecondsToTicks(
@@ -620,72 +549,76 @@ static float MotorAutoTune_GetLoadedMaxValidSpeedRpm(
 		MOTOR_AUTOTUNE_LOADED_AUTO_MAX_VALID_RPM);
 }
 
-static void MotorAutoTune_ResetLoadedRegression(MotorAutoTune_t *handle)
+static void MotorAutoTune_ResetLoadedTrajectory(MotorAutoTune_t *handle)
 {
 	if (handle == 0)
 	{
 		return;
 	}
 
-	handle->mechanical_loaded_regression_saa = 0.0f;
-	handle->mechanical_loaded_regression_saw = 0.0f;
-	handle->mechanical_loaded_regression_sa1 = 0.0f;
-	handle->mechanical_loaded_regression_say = 0.0f;
-	handle->mechanical_regression_sw2 = 0.0f;
-	handle->mechanical_regression_sw = 0.0f;
-	handle->mechanical_regression_s11 = 0.0f;
-	handle->mechanical_regression_swy = 0.0f;
-	handle->mechanical_regression_sy = 0.0f;
+	handle->mechanical_loaded_accel_iq_sum_a = 0.0f;
+	handle->mechanical_loaded_decel_iq_sum_a = 0.0f;
+	handle->mechanical_loaded_accel_alpha_rad_s2 = 0.0f;
+	handle->mechanical_loaded_decel_alpha_rad_s2 = 0.0f;
+	handle->mechanical_loaded_accel_start_speed_rad_s = 0.0f;
+	handle->mechanical_loaded_decel_start_speed_rad_s = 0.0f;
 	handle->mechanical_loaded_sample_count = 0u;
+	handle->mechanical_loaded_accel_start_tick = 0u;
+	handle->mechanical_loaded_decel_start_tick = 0u;
+	handle->mechanical_loaded_accel_sample_count = 0u;
+	handle->mechanical_loaded_decel_sample_count = 0u;
+	handle->mechanical_loaded_accel_started = 0u;
+	handle->mechanical_loaded_decel_started = 0u;
+	handle->mechanical_window_numerator = 0.0f;
+	handle->mechanical_window_denominator = 0.0f;
+	handle->mechanical_torque_sign = 0.0f;
 }
 
-static void MotorAutoTune_AccumulateLoadedRegression(
-	MotorAutoTune_t *handle,
-	float measured_torque_nm)
-{
-	if (handle == 0)
-	{
-		return;
-	}
-
-	handle->mechanical_loaded_regression_saa +=
-		handle->mechanical_accel_filtered_rad_s2 *
-		handle->mechanical_accel_filtered_rad_s2 * handle->dt_s;
-	handle->mechanical_loaded_regression_saw +=
-		handle->mechanical_accel_filtered_rad_s2 *
-		handle->mechanical_speed_filtered_rad_s * handle->dt_s;
-	handle->mechanical_loaded_regression_sa1 +=
-		handle->mechanical_accel_filtered_rad_s2 * handle->dt_s;
-	handle->mechanical_regression_sw2 +=
-		handle->mechanical_speed_filtered_rad_s *
-		handle->mechanical_speed_filtered_rad_s * handle->dt_s;
-	handle->mechanical_regression_sw +=
-		handle->mechanical_speed_filtered_rad_s * handle->dt_s;
-	handle->mechanical_regression_s11 += handle->dt_s;
-	handle->mechanical_loaded_regression_say +=
-		handle->mechanical_accel_filtered_rad_s2 *
-		measured_torque_nm * handle->dt_s;
-	handle->mechanical_regression_swy +=
-		handle->mechanical_speed_filtered_rad_s *
-		measured_torque_nm * handle->dt_s;
-	handle->mechanical_regression_sy +=
-		measured_torque_nm * handle->dt_s;
-	handle->mechanical_loaded_sample_count++;
-}
-
-static uint8_t MotorAutoTune_FinalizeLoadedRegression(
+static void MotorAutoTune_UpdateLoadedTorqueSign(
 	MotorAutoTune_t *handle,
 	const MotorAutoTuneInputs_t *inputs)
 {
-	float solved_j = 0.0f;
+	if ((handle == 0) || (inputs == 0))
+	{
+		return;
+	}
+	if (handle->mechanical_torque_sign != 0.0f)
+	{
+		return;
+	}
+
+	handle->mechanical_window_numerator +=
+		inputs->iq_current_a *
+		handle->mechanical_accel_filtered_rad_s2 * handle->dt_s;
+	handle->mechanical_window_denominator +=
+		handle->mechanical_accel_filtered_rad_s2 *
+		handle->mechanical_accel_filtered_rad_s2 * handle->dt_s;
+	if (handle->mechanical_window_denominator > 1.0e-6f)
+	{
+		handle->mechanical_torque_sign =
+			(handle->mechanical_window_numerator >= 0.0f) ? 1.0f : -1.0f;
+	}
+}
+
+static uint8_t MotorAutoTune_FinalizeLoadedTrajectory(
+	MotorAutoTune_t *handle,
+	const MotorAutoTuneInputs_t *inputs)
+{
+	float accel_avg_iq_a;
+	float decel_avg_iq_a;
+	float torque_scale_nm_per_a;
+	float tau_acc_nm;
+	float tau_dec_nm;
+	float alpha_acc_rad_s2;
+	float alpha_dec_rad_s2;
+	float alpha_delta_rad_s2;
+	float solved_j;
 	float solved_b = 0.0f;
-	float solved_load_torque = 0.0f;
-	float plateau_speed_0 = 0.0f;
-	float plateau_speed_1 = 0.0f;
-	float plateau_torque_0 = 0.0f;
-	float plateau_torque_1 = 0.0f;
-	float speed_delta = 0.0f;
-	float saa = 0.0f;
+	float residual_drag_nm;
+	float low_speed_rpm;
+	float high_speed_rpm;
+	float mean_speed_rad_s;
+	uint32_t min_phase_samples = MOTOR_AUTOTUNE_LOADED_MIN_SAMPLES / 2u;
 
 	(void)inputs;
 
@@ -693,79 +626,57 @@ static uint8_t MotorAutoTune_FinalizeLoadedRegression(
 	{
 		return 0u;
 	}
-	if (handle->mechanical_loaded_sample_count < MOTOR_AUTOTUNE_LOADED_MIN_SAMPLES)
+	if (min_phase_samples < 8u)
+	{
+		min_phase_samples = 8u;
+	}
+	if ((handle->mechanical_loaded_accel_sample_count < min_phase_samples) ||
+		(handle->mechanical_loaded_decel_sample_count < min_phase_samples))
 	{
 		MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 		return 0u;
 	}
 
-	plateau_speed_0 = handle->mechanical_loaded_plateau0_speed_rad_s;
-	plateau_speed_1 = handle->mechanical_loaded_plateau1_speed_rad_s;
-	plateau_torque_0 = handle->mechanical_loaded_plateau0_torque_nm;
-	plateau_torque_1 = handle->mechanical_loaded_plateau1_torque_nm;
-	speed_delta = plateau_speed_0 - plateau_speed_1;
-	saa = handle->mechanical_loaded_regression_saa;
-
-	if ((!isfinite(speed_delta)) || (MotorAutoTune_Abs(speed_delta) <= 1.0e-3f))
+	if (handle->mechanical_torque_sign == 0.0f)
 	{
-		solved_b = 0.0f;
-		if (handle->mechanical_regression_s11 > 1.0e-6f)
+		float torque_sign_hint =
+			handle->mechanical_loaded_accel_iq_sum_a *
+			handle->mechanical_loaded_accel_alpha_rad_s2;
+		if (MotorAutoTune_Abs(torque_sign_hint) <= 1.0e-6f)
 		{
-			solved_load_torque =
-				handle->mechanical_regression_sy /
-				handle->mechanical_regression_s11;
+			MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
+			return 0u;
 		}
-	}
-	else
-	{
-		solved_b = (plateau_torque_0 - plateau_torque_1) / speed_delta;
-		solved_load_torque = plateau_torque_0 - (solved_b * plateau_speed_0);
+		handle->mechanical_torque_sign =
+			(torque_sign_hint >= 0.0f) ? 1.0f : -1.0f;
 	}
 
-	if ((!isfinite(solved_b)) || (solved_b < -0.02f))
-	{
-		solved_b = 0.0f;
-		if (handle->mechanical_regression_s11 > 1.0e-6f)
-		{
-			solved_load_torque =
-				handle->mechanical_regression_sy /
-				handle->mechanical_regression_s11;
-		}
-	}
-	if ((solved_b < 0.0f) && (solved_b > -0.02f))
-	{
-		solved_b = 0.0f;
-	}
-
-	if ((!isfinite(solved_load_torque)) &&
-		(handle->mechanical_regression_s11 > 1.0e-6f))
-	{
-		solved_load_torque =
-			handle->mechanical_regression_sy /
-			handle->mechanical_regression_s11;
-	}
-	if (!isfinite(solved_load_torque))
-	{
-		solved_load_torque = 0.0f;
-	}
-
-	if ((!isfinite(saa)) || (saa <= 1.0e-9f))
+	alpha_acc_rad_s2 = handle->mechanical_loaded_accel_alpha_rad_s2;
+	alpha_dec_rad_s2 = handle->mechanical_loaded_decel_alpha_rad_s2;
+	alpha_delta_rad_s2 = alpha_acc_rad_s2 - alpha_dec_rad_s2;
+	if ((!isfinite(alpha_acc_rad_s2)) ||
+		(!isfinite(alpha_dec_rad_s2)) ||
+		(MotorAutoTune_Abs(alpha_acc_rad_s2) < MOTOR_AUTOTUNE_LOADED_MIN_ALPHA_RAD_S2) ||
+		(MotorAutoTune_Abs(alpha_dec_rad_s2) < MOTOR_AUTOTUNE_LOADED_MIN_ALPHA_RAD_S2) ||
+		(!isfinite(alpha_delta_rad_s2)) ||
+		(MotorAutoTune_Abs(alpha_delta_rad_s2) < MOTOR_AUTOTUNE_LOADED_MIN_ALPHA_RAD_S2))
 	{
 		MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 		return 0u;
 	}
 
-	solved_j = (
-		handle->mechanical_loaded_regression_say -
-		(solved_b * handle->mechanical_loaded_regression_saw) -
-		(solved_load_torque * handle->mechanical_loaded_regression_sa1)) / saa;
-
-	if ((!isfinite(solved_j)) || (solved_j <= 0.0f))
-	{
-		solved_j = MotorAutoTune_Abs(
-			handle->mechanical_loaded_regression_say / saa);
-	}
-
+	accel_avg_iq_a =
+		handle->mechanical_loaded_accel_iq_sum_a /
+		(float)handle->mechanical_loaded_accel_sample_count;
+	decel_avg_iq_a =
+		handle->mechanical_loaded_decel_iq_sum_a /
+		(float)handle->mechanical_loaded_decel_sample_count;
+	torque_scale_nm_per_a =
+		handle->mechanical_torque_sign *
+		handle->mechanical_torque_constant_nm_per_a;
+	tau_acc_nm = torque_scale_nm_per_a * accel_avg_iq_a;
+	tau_dec_nm = torque_scale_nm_per_a * decel_avg_iq_a;
+	solved_j = (tau_acc_nm - tau_dec_nm) / alpha_delta_rad_s2;
 	if ((!isfinite(solved_j)) ||
 		(solved_j <= 0.0f) ||
 		(solved_j > MOTOR_AUTOTUNE_MAX_J_KG_M2))
@@ -774,6 +685,30 @@ static uint8_t MotorAutoTune_FinalizeLoadedRegression(
 		return 0u;
 	}
 
+	low_speed_rpm = MotorAutoTune_GetLoadedMinValidSpeedRpm(handle);
+	high_speed_rpm = MotorAutoTune_GetLoadedMaxValidSpeedRpm(handle, low_speed_rpm);
+	mean_speed_rad_s =
+		(0.5f * (low_speed_rpm + high_speed_rpm)) * ((2.0f * PI) / 60.0f);
+	residual_drag_nm =
+		0.5f * (
+			(tau_acc_nm - (solved_j * alpha_acc_rad_s2)) +
+			(tau_dec_nm - (solved_j * alpha_dec_rad_s2)));
+	if (!isfinite(residual_drag_nm))
+	{
+		residual_drag_nm = 0.0f;
+	}
+	else
+	{
+		residual_drag_nm = MotorAutoTune_Abs(residual_drag_nm);
+	}
+
+	/* With only accel/decel segments, constant load torque and viscous drag are
+	   not independently observable. Map the positive-speed drag residual to an
+	   equivalent viscous term so downstream tuning still gets a usable B. */
+	if ((mean_speed_rad_s > 1.0e-3f) && (residual_drag_nm > 0.0f))
+	{
+		solved_b = residual_drag_nm / mean_speed_rad_s;
+	}
 	if ((!isfinite(solved_b)) || (solved_b < 0.0f))
 	{
 		solved_b = 0.0f;
@@ -785,7 +720,7 @@ static uint8_t MotorAutoTune_FinalizeLoadedRegression(
 
 	handle->measured_J = solved_j;
 	handle->measured_B = solved_b;
-	handle->estimated_LoadTorque = solved_load_torque;
+	handle->estimated_LoadTorque = 0.0f;
 	return 1u;
 }
 
@@ -1430,109 +1365,59 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 	float speed_scale = (60.0f / (2.0f * PI));
 	float current_speed_rpm;
 	float speed_abs_rpm;
-	float average_speed_rpm = 0.0f;
-	float average_speed_rad_s = 0.0f;
-	float average_torque_nm = 0.0f;
-	float previous_average_speed_rpm = 0.0f;
-	float stable_delta_rpm = 0.0f;
-	float stable_tol_rpm = 0.0f;
 	float low_speed_rpm;
 	float high_speed_rpm;
-	float sample_speed_limit_rpm;
+	float speed_span_rpm;
+	float capture_low_rpm;
+	float capture_high_rpm;
+	float zero_speed_rpm;
 	float overspeed_limit_rpm;
 	float iq_limit_a;
 	float iq_ref_a;
-	float measured_torque_nm;
-	float plateau_speed_rad_s = 0.0f;
-	float plateau_torque_nm = 0.0f;
 	float voltage_limit_v;
-	uint32_t capture_ticks;
-	uint32_t guard_ticks;
-	uint32_t plateau_ramp_ticks;
-	uint32_t sample_guard_ticks;
-	uint32_t overspeed_grace_ticks;
-	uint32_t ramp_down_ticks;
-	float iq_track_tolerance_a;
-	float voltage_mag_v;
-	float expected_speed_sign;
-	int8_t initial_polarity;
-	int8_t commanded_polarity;
-	float plateau_ramp_fraction = 1.0f;
-	uint8_t valid_sample = 0u;
-	uint8_t plateau_stable = 0u;
-	uint8_t start_negative = 0u;
+	float progress_fraction = 0.0f;
+	float phase_dt_s = 0.0f;
+	uint32_t zero_settle_ticks;
 	uint8_t progress = MOTOR_AUTOTUNE_MECH_PROGRESS_J_BASE;
+	MotorAutoTuneLoadedState_e loaded_state;
 
 	if ((handle == 0) || (inputs == 0) || (outputs == 0))
 	{
 		return;
 	}
 
-	/* Loaded mechanical mode excites the plant with two constant-Iq plateaus:
-	   hold +Iq until the average speed settles, then hold -Iq until the
-	   opposite-speed plateau settles. `loaded_speed_low_rpm` and
-	   `loaded_speed_high_rpm` remain optional overrides for the valid-speed
-	   floor and safety ceiling. */
+	/* Threshold-based loaded J tuning:
+	   1. wait near zero speed,
+	   2. apply +Iq and capture average Iq between SPEED_LOW and SPEED_HIGH,
+	   3. apply -Iq and capture average Iq while braking back to SPEED_LOW,
+	   4. solve J from the accel/decel torque difference. */
 	low_speed_rpm = MotorAutoTune_GetLoadedMinValidSpeedRpm(handle);
 	high_speed_rpm = MotorAutoTune_GetLoadedMaxValidSpeedRpm(handle, low_speed_rpm);
+	speed_span_rpm = high_speed_rpm - low_speed_rpm;
+	if (speed_span_rpm < 10.0f)
+	{
+		speed_span_rpm = 10.0f;
+	}
+	capture_low_rpm = low_speed_rpm + (speed_span_rpm * MOTOR_AUTOTUNE_LOADED_CAPTURE_SKIP_RATIO);
+	capture_high_rpm = high_speed_rpm - (speed_span_rpm * MOTOR_AUTOTUNE_LOADED_CAPTURE_SKIP_RATIO);
+	if (capture_high_rpm <= capture_low_rpm)
+	{
+		capture_low_rpm = low_speed_rpm;
+		capture_high_rpm = high_speed_rpm;
+	}
+	zero_speed_rpm = MotorAutoTune_Clamp(
+		low_speed_rpm * MOTOR_AUTOTUNE_LOADED_ZERO_SPEED_RATIO,
+		MOTOR_AUTOTUNE_LOADED_ZERO_SPEED_MIN_RPM,
+		20.0f);
 	overspeed_limit_rpm = MotorAutoTune_Clamp(
-		high_speed_rpm * 1.25f,
+		high_speed_rpm * MOTOR_AUTOTUNE_LOADED_OVERSPEED_RATIO,
 		high_speed_rpm + 20.0f,
 		MOTOR_AUTOTUNE_LOADED_AUTO_MAX_VALID_RPM);
-	sample_speed_limit_rpm = high_speed_rpm * MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RATIO;
-	if (sample_speed_limit_rpm < (high_speed_rpm + MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RPM))
-	{
-		sample_speed_limit_rpm = high_speed_rpm + MOTOR_AUTOTUNE_LOADED_SAMPLE_SPEED_MARGIN_RPM;
-	}
-	if (sample_speed_limit_rpm > overspeed_limit_rpm)
-	{
-		sample_speed_limit_rpm = overspeed_limit_rpm;
-	}
-	capture_ticks = MotorAutoTune_SecondsToTicks(
+	zero_settle_ticks = MotorAutoTune_SecondsToTicks(
 		handle,
-		handle->config.loaded_capture_hold_s);
-	guard_ticks = MotorAutoTune_SecondsToTicks(
-		handle,
-		MOTOR_AUTOTUNE_LOADED_GUARD_S);
-	plateau_ramp_ticks = MotorAutoTune_SecondsToTicks(
-		handle,
-		MOTOR_AUTOTUNE_LOADED_PLATEAU_RAMP_S);
-	overspeed_grace_ticks = MotorAutoTune_SecondsToTicks(
-		handle,
-		MOTOR_AUTOTUNE_LOADED_OVERSPEED_GRACE_S);
-	ramp_down_ticks = MotorAutoTune_SecondsToTicks(
-		handle,
-		MOTOR_AUTOTUNE_LOADED_RAMP_DOWN_S);
-	if (capture_ticks < MotorAutoTune_SecondsToTicks(handle, MOTOR_AUTOTUNE_LOADED_CAPTURE_HOLD_S))
-	{
-		capture_ticks = MotorAutoTune_SecondsToTicks(handle, MOTOR_AUTOTUNE_LOADED_CAPTURE_HOLD_S);
-	}
-	if (ramp_down_ticks < 1u)
-	{
-		ramp_down_ticks = 1u;
-	}
-	if (plateau_ramp_ticks < 1u)
-	{
-		plateau_ramp_ticks = 1u;
-	}
-	sample_guard_ticks = guard_ticks;
-	if (sample_guard_ticks < plateau_ramp_ticks)
-	{
-		sample_guard_ticks = plateau_ramp_ticks;
-	}
-	if (overspeed_grace_ticks < sample_guard_ticks)
-	{
-		overspeed_grace_ticks = sample_guard_ticks;
-	}
-
-	start_negative = ((handle->config.loaded_speed_high_rpm < 0.0f) ||
-		((handle->config.loaded_speed_high_rpm == 0.0f) &&
-		 (handle->config.loaded_speed_low_rpm < 0.0f))) ? 1u : 0u;
-	initial_polarity = (start_negative != 0u) ? -1 : 1;
-	commanded_polarity = (handle->substep == 0u) ? initial_polarity : -initial_polarity;
+		MOTOR_AUTOTUNE_LOADED_ZERO_SETTLE_S);
 
 	MotorAutoTune_UpdateMechanicalObservables(handle, inputs);
-
 	current_speed_rpm = handle->mechanical_speed_filtered_rad_s * speed_scale;
 	speed_abs_rpm = MotorAutoTune_Abs(current_speed_rpm);
 
@@ -1541,26 +1426,7 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 	{
 		iq_limit_a = 0.08f;
 	}
-
-	if (handle->substep == 2u)
-	{
-		float ramp_fraction = 1.0f - ((float)handle->phase_counter / (float)ramp_down_ticks);
-		if (ramp_fraction < 0.0f)
-		{
-			ramp_fraction = 0.0f;
-		}
-		iq_ref_a = (float)commanded_polarity * iq_limit_a * ramp_fraction;
-	}
-	else
-	{
-		plateau_ramp_fraction =
-			(float)handle->phase_counter / (float)plateau_ramp_ticks;
-		if (plateau_ramp_fraction > 1.0f)
-		{
-			plateau_ramp_fraction = 1.0f;
-		}
-		iq_ref_a = (float)commanded_polarity * iq_limit_a * plateau_ramp_fraction;
-	}
+	iq_ref_a = 0.0f;
 	voltage_limit_v = MotorAutoTune_CurrentLoopVoltageLimit(inputs);
 	if ((inputs->bus_voltage_v > 1.0f) &&
 		((inputs->bus_voltage_v * 0.50f) > voltage_limit_v))
@@ -1574,211 +1440,135 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 
 	outputs->mode = MOTOR_AUTOTUNE_OUTPUT_CURRENT_LOOP;
 	outputs->id_ref_a = 0.0f;
-	outputs->iq_ref_a = iq_ref_a;
 	outputs->voltage_limit_v = voltage_limit_v;
 	outputs->isolate_q_axis = 0u;
+	outputs->iq_ref_a = 0.0f;
 
-	iq_track_tolerance_a = iq_limit_a * MOTOR_AUTOTUNE_LOADED_IQ_TRACK_RATIO;
-	if (iq_track_tolerance_a < MOTOR_AUTOTUNE_LOADED_IQ_TRACK_MIN_A)
+	if (speed_abs_rpm >= overspeed_limit_rpm)
 	{
-		iq_track_tolerance_a = MOTOR_AUTOTUNE_LOADED_IQ_TRACK_MIN_A;
-	}
-	voltage_mag_v = sqrtf(
-		(inputs->vd_voltage_v * inputs->vd_voltage_v) +
-		(inputs->vq_voltage_v * inputs->vq_voltage_v));
-
-	if ((handle->substep <= 1u) &&
-		(handle->phase_counter >= sample_guard_ticks) &&
-		(speed_abs_rpm >= low_speed_rpm) &&
-		(speed_abs_rpm <= sample_speed_limit_rpm) &&
-		(MotorAutoTune_Abs(inputs->iq_current_a - iq_ref_a) <= iq_track_tolerance_a) &&
-		(voltage_mag_v <= (voltage_limit_v * MOTOR_AUTOTUNE_LOADED_VOLTAGE_HEADROOM)))
-	{
-		valid_sample = 1u;
+		/* Reuse SIGNAL because the public error enum has no dedicated overspeed code. */
+		MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
+		return;
 	}
 
-	if (valid_sample != 0u)
+	loaded_state = (MotorAutoTuneLoadedState_e)handle->substep;
+	switch (loaded_state)
 	{
-		if (handle->mechanical_torque_sign == 0.0f)
-		{
-			handle->mechanical_window_numerator +=
-				inputs->iq_current_a *
-				handle->mechanical_accel_filtered_rad_s2 * handle->dt_s;
-			handle->mechanical_window_denominator +=
-				handle->mechanical_accel_filtered_rad_s2 *
-				handle->mechanical_accel_filtered_rad_s2 * handle->dt_s;
-			if (handle->mechanical_window_denominator > 1.0e-6f)
+		case MOTOR_AUTOTUNE_LOADED_STATE_INIT:
+			progress = MOTOR_AUTOTUNE_MECH_PROGRESS_J_BASE;
+			if (speed_abs_rpm <= zero_speed_rpm)
 			{
-				handle->mechanical_torque_sign =
-					(handle->mechanical_window_numerator >= 0.0f) ? 1.0f : -1.0f;
-				handle->mechanical_window_count = 0u;
-				handle->mechanical_window_active = 0u;
-				handle->mechanical_window_estimate_sum = 0.0f;
-				handle->mechanical_loaded_pi_integral_a = 0.0f;
-				handle->mechanical_window_numerator = 0.0f;
-				handle->mechanical_window_denominator = 0.0f;
-				MotorAutoTune_ResetLoadedRegression(handle);
-			}
-		}
-
-		if (handle->mechanical_torque_sign != 0.0f)
-		{
-			measured_torque_nm =
-				handle->mechanical_torque_sign *
-				handle->mechanical_torque_constant_nm_per_a *
-				inputs->iq_current_a;
-			MotorAutoTune_AccumulateLoadedRegression(handle, measured_torque_nm);
-			handle->mechanical_window_estimate_sum +=
-				handle->mechanical_speed_filtered_rad_s;
-			handle->mechanical_loaded_pi_integral_a += measured_torque_nm;
-			if (handle->mechanical_window_count < 0xFFFFu)
-			{
-				handle->mechanical_window_count++;
-			}
-			if ((uint32_t)handle->mechanical_window_count >= capture_ticks)
-			{
-				average_speed_rad_s =
-					handle->mechanical_window_estimate_sum /
-					(float)handle->mechanical_window_count;
-				average_speed_rpm = average_speed_rad_s * speed_scale;
-				average_torque_nm =
-					handle->mechanical_loaded_pi_integral_a /
-					(float)handle->mechanical_window_count;
-				expected_speed_sign = (float)commanded_polarity;
-				expected_speed_sign *= handle->mechanical_torque_sign;
-				if ((average_speed_rpm * expected_speed_sign) >= low_speed_rpm)
+				if (handle->mechanical_window_count < 0xFFFFu)
 				{
-					if (handle->mechanical_window_active != 0u)
+					handle->mechanical_window_count++;
+				}
+				if ((uint32_t)handle->mechanical_window_count >= zero_settle_ticks)
+				{
+					MotorAutoTune_ResetLoadedTrajectory(handle);
+					handle->mechanical_window_count = 0u;
+					handle->substep = (uint8_t)MOTOR_AUTOTUNE_LOADED_STATE_ACCEL;
+					handle->phase_counter = 0u;
+				}
+			}
+			else
+			{
+				handle->mechanical_window_count = 0u;
+			}
+			break;
+
+		case MOTOR_AUTOTUNE_LOADED_STATE_ACCEL:
+			iq_ref_a = iq_limit_a;
+			outputs->iq_ref_a = iq_ref_a;
+			progress_fraction = (speed_abs_rpm - low_speed_rpm) / speed_span_rpm;
+			progress_fraction = MotorAutoTune_Clamp(progress_fraction, 0.0f, 1.0f);
+			progress = (uint8_t)(MOTOR_AUTOTUNE_MECH_PROGRESS_J_BASE + 1u + (progress_fraction * 6.0f));
+
+			if (handle->mechanical_loaded_accel_started == 0u)
+			{
+				if (speed_abs_rpm >= low_speed_rpm)
+				{
+					handle->mechanical_loaded_accel_started = 1u;
+					handle->mechanical_loaded_accel_start_tick = handle->counter;
+					handle->mechanical_loaded_accel_start_speed_rad_s =
+						handle->mechanical_speed_filtered_rad_s;
+				}
+			}
+			else
+			{
+				MotorAutoTune_UpdateLoadedTorqueSign(handle, inputs);
+				if ((speed_abs_rpm >= capture_low_rpm) &&
+					(speed_abs_rpm <= capture_high_rpm))
+				{
+					handle->mechanical_loaded_accel_iq_sum_a += inputs->iq_current_a;
+					handle->mechanical_loaded_accel_sample_count++;
+					handle->mechanical_loaded_sample_count++;
+				}
+				if (speed_abs_rpm >= high_speed_rpm)
+				{
+					phase_dt_s =
+						((float)(handle->counter - handle->mechanical_loaded_accel_start_tick)) *
+						handle->dt_s;
+					if (phase_dt_s < MOTOR_AUTOTUNE_LOADED_MIN_PHASE_DT_S)
 					{
-						previous_average_speed_rpm =
-							handle->mechanical_window_denominator * speed_scale;
-						stable_tol_rpm = MotorAutoTune_Abs(average_speed_rpm) * MOTOR_AUTOTUNE_LOADED_SETTLE_TOL_RATIO;
-						if (MotorAutoTune_Abs(previous_average_speed_rpm) > MotorAutoTune_Abs(average_speed_rpm))
-						{
-							stable_tol_rpm =
-								MotorAutoTune_Abs(previous_average_speed_rpm) *
-								MOTOR_AUTOTUNE_LOADED_SETTLE_TOL_RATIO;
-						}
-						if (stable_tol_rpm < MOTOR_AUTOTUNE_LOADED_SETTLE_TOL_MIN_RPM)
-						{
-							stable_tol_rpm = MOTOR_AUTOTUNE_LOADED_SETTLE_TOL_MIN_RPM;
-						}
-						stable_delta_rpm = MotorAutoTune_Abs(
-							average_speed_rpm - previous_average_speed_rpm);
-						if (stable_delta_rpm <= stable_tol_rpm)
-						{
-							plateau_speed_rad_s =
-								0.5f * (average_speed_rad_s + handle->mechanical_window_denominator);
-							plateau_torque_nm =
-								0.5f * (average_torque_nm + handle->mechanical_window_numerator);
-							plateau_stable = 1u;
-						}
+						MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
+						return;
 					}
-					handle->mechanical_window_denominator = average_speed_rad_s;
-					handle->mechanical_window_numerator = average_torque_nm;
-					handle->mechanical_window_active = 1u;
+					handle->mechanical_loaded_accel_alpha_rad_s2 =
+						(handle->mechanical_speed_filtered_rad_s -
+						 handle->mechanical_loaded_accel_start_speed_rad_s) / phase_dt_s;
+					handle->substep = (uint8_t)MOTOR_AUTOTUNE_LOADED_STATE_DECEL;
+					handle->phase_counter = 0u;
 				}
-				else
+			}
+			break;
+
+		case MOTOR_AUTOTUNE_LOADED_STATE_DECEL:
+			iq_ref_a = -iq_limit_a;
+			outputs->iq_ref_a = iq_ref_a;
+			progress_fraction = (high_speed_rpm - speed_abs_rpm) / speed_span_rpm;
+			progress_fraction = MotorAutoTune_Clamp(progress_fraction, 0.0f, 1.0f);
+			progress = (uint8_t)(MOTOR_AUTOTUNE_MECH_PROGRESS_J_BASE + 8u + (progress_fraction * 8.0f));
+
+			if (handle->mechanical_loaded_decel_started == 0u)
+			{
+				handle->mechanical_loaded_decel_started = 1u;
+				handle->mechanical_loaded_decel_start_tick = handle->counter;
+				handle->mechanical_loaded_decel_start_speed_rad_s =
+					handle->mechanical_speed_filtered_rad_s;
+			}
+			if ((speed_abs_rpm >= capture_low_rpm) &&
+				(speed_abs_rpm <= capture_high_rpm))
+			{
+				handle->mechanical_loaded_decel_iq_sum_a += inputs->iq_current_a;
+				handle->mechanical_loaded_decel_sample_count++;
+				handle->mechanical_loaded_sample_count++;
+			}
+			if (speed_abs_rpm <= low_speed_rpm)
+			{
+				phase_dt_s =
+					((float)(handle->counter - handle->mechanical_loaded_decel_start_tick)) *
+					handle->dt_s;
+				if (phase_dt_s < MOTOR_AUTOTUNE_LOADED_MIN_PHASE_DT_S)
 				{
-					handle->mechanical_window_active = 0u;
-					handle->mechanical_window_denominator = 0.0f;
-					handle->mechanical_window_numerator = 0.0f;
-				}
-				handle->mechanical_window_estimate_sum = 0.0f;
-				handle->mechanical_loaded_pi_integral_a = 0.0f;
-				handle->mechanical_window_count = 0u;
-			}
-		}
-	}
-
-	if (handle->substep <= 1u)
-	{
-		if ((handle->phase_counter >= overspeed_grace_ticks) &&
-			(speed_abs_rpm >= overspeed_limit_rpm))
-		{
-			MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
-			return;
-		}
-
-		if ((plateau_stable != 0u) &&
-			(handle->mechanical_torque_sign != 0.0f))
-		{
-			if (handle->mechanical_zero_cross_count < 0xFFFFu)
-			{
-				handle->mechanical_zero_cross_count++;
-			}
-			if (handle->mechanical_zero_cross_count == 1u)
-			{
-				handle->mechanical_loaded_plateau0_speed_rad_s = plateau_speed_rad_s;
-				handle->mechanical_loaded_plateau0_torque_nm = plateau_torque_nm;
-			}
-			else if (handle->mechanical_zero_cross_count == 2u)
-			{
-				handle->mechanical_loaded_plateau1_speed_rad_s = plateau_speed_rad_s;
-				handle->mechanical_loaded_plateau1_torque_nm = plateau_torque_nm;
-			}
-			handle->mechanical_window_active = 0u;
-			handle->mechanical_window_count = 0u;
-			handle->mechanical_window_estimate_sum = 0.0f;
-			handle->mechanical_loaded_pi_integral_a = 0.0f;
-			handle->mechanical_window_denominator = 0.0f;
-			handle->mechanical_window_numerator = 0.0f;
-			handle->phase_counter = 0u;
-
-			if (handle->substep == 0u)
-			{
-				handle->substep = 1u;
-			}
-			else if ((handle->mechanical_zero_cross_count >= MOTOR_AUTOTUNE_LOADED_REQUIRED_PLATEAUS) &&
-				(handle->mechanical_torque_sign != 0.0f) &&
-				(handle->mechanical_loaded_sample_count >= MOTOR_AUTOTUNE_LOADED_MIN_SAMPLES))
-			{
-				if (MotorAutoTune_FinalizeLoadedRegression(handle, inputs) == 0u)
-				{
+					MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 					return;
 				}
-				handle->substep = 2u;
-				handle->progress_percent = (uint8_t)(MOTOR_AUTOTUNE_MECH_PROGRESS_B_BASE + 2u);
+				handle->mechanical_loaded_decel_alpha_rad_s2 =
+					(handle->mechanical_speed_filtered_rad_s -
+					 handle->mechanical_loaded_decel_start_speed_rad_s) / phase_dt_s;
+				handle->substep = (uint8_t)MOTOR_AUTOTUNE_LOADED_STATE_COMPUTE;
+				handle->phase_counter = 0u;
 			}
-		}
-	}
+			break;
 
-	if (handle->substep == 2u)
-	{
-		if (handle->phase_counter >= ramp_down_ticks)
-		{
+		case MOTOR_AUTOTUNE_LOADED_STATE_COMPUTE:
+		default:
+			if (MotorAutoTune_FinalizeLoadedTrajectory(handle, inputs) == 0u)
+			{
+				return;
+			}
 			MotorAutoTune_Finish(handle, inputs);
 			return;
-		}
-		progress = (uint8_t)(MOTOR_AUTOTUNE_MECH_PROGRESS_B_BASE + 4u);
-	}
-	else if (handle->mechanical_torque_sign != 0.0f)
-	{
-		uint32_t capture_progress = handle->mechanical_loaded_sample_count;
-		uint8_t plateau_progress = handle->mechanical_zero_cross_count;
-
-		if (capture_progress > capture_ticks)
-		{
-			capture_progress = capture_ticks;
-		}
-		if (plateau_progress > MOTOR_AUTOTUNE_LOADED_REQUIRED_PLATEAUS)
-		{
-			plateau_progress = MOTOR_AUTOTUNE_LOADED_REQUIRED_PLATEAUS;
-		}
-
-		progress = (uint8_t)(
-			MOTOR_AUTOTUNE_MECH_PROGRESS_J_BASE +
-			2u +
-			((capture_progress * 6u) / capture_ticks) +
-			(plateau_progress * 2u));
-		if (progress > MOTOR_AUTOTUNE_MECH_PROGRESS_B_BASE)
-		{
-			progress = MOTOR_AUTOTUNE_MECH_PROGRESS_B_BASE;
-		}
-	}
-	else if (valid_sample != 0u)
-	{
-		progress = (uint8_t)(MOTOR_AUTOTUNE_MECH_PROGRESS_J_BASE + 1u);
 	}
 	handle->progress_percent = progress;
 
@@ -1841,16 +1631,21 @@ static void MotorAutoTune_ProcessJ(
 		{
 			if (MotorAutoTune_UseLoadedMechanicalMode(handle) != 0u)
 			{
-				manual_iq_limit_a = rated_current_a * 1.20f;
+				manual_iq_limit_a = rated_current_a * 0.80f;
 				if ((handle->overcurrent_threshold_a > 0.0f) &&
-					((handle->overcurrent_threshold_a * 0.60f) < manual_iq_limit_a))
+					((handle->overcurrent_threshold_a * MOTOR_AUTOTUNE_MANUAL_OC_LIMIT_RATIO) < manual_iq_limit_a))
 				{
-					manual_iq_limit_a = handle->overcurrent_threshold_a * 0.60f;
+					manual_iq_limit_a = handle->overcurrent_threshold_a * MOTOR_AUTOTUNE_MANUAL_OC_LIMIT_RATIO;
 				}
 			}
 			else
 			{
-				manual_iq_limit_a = iq_amplitude_limit_a;
+				manual_iq_limit_a = rated_current_a * 0.80f;
+				if ((handle->overcurrent_threshold_a > 0.0f) &&
+					((handle->overcurrent_threshold_a * MOTOR_AUTOTUNE_MANUAL_OC_LIMIT_RATIO) < manual_iq_limit_a))
+				{
+					manual_iq_limit_a = handle->overcurrent_threshold_a * MOTOR_AUTOTUNE_MANUAL_OC_LIMIT_RATIO;
+				}
 			}
 			if (manual_iq_limit_a < 0.08f)
 			{
@@ -1874,6 +1669,7 @@ static void MotorAutoTune_ProcessJ(
 		handle->progress_percent = MOTOR_AUTOTUNE_MECH_PROGRESS_J_BASE;
 		if (MotorAutoTune_UseLoadedMechanicalMode(handle) != 0u)
 		{
+			MotorAutoTune_ResetLoadedTrajectory(handle);
 			handle->mechanical_timeout_ticks = MotorAutoTune_SecondsToTicks(
 				handle,
 				MOTOR_AUTOTUNE_LOADED_TIMEOUT_S);

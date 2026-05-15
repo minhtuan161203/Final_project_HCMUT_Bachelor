@@ -313,8 +313,8 @@ uint8_t SaveUerrorLutToFlash(void);
 #define FOC_DEBUG_PRINTF(...) ((void)0)
 #endif
 
-#define ID_SQUARE_TUNING_MAX_RATED_CURRENT_RATIO 0.20f
-#define ID_SQUARE_TUNING_MAX_OC_RATIO 0.20f
+#define ID_SQUARE_TUNING_MAX_RATED_CURRENT_RATIO 0.50f
+#define ID_SQUARE_TUNING_MAX_OC_RATIO 0.50f
 #define ID_SQUARE_TUNING_ALIGN_VOLTAGE_RATIO 0.20f
 #define ID_SQUARE_TUNING_SQUARE_VOLTAGE_RATIO 0.35f
 #define ID_SQUARE_TUNING_MAX_FREQUENCY_HZ 50.0f
@@ -2991,6 +2991,7 @@ void UpdateDriverParameter(float *driver_parameter)
 void UpdateMotorParameter(float *motor_parameter)
 {
 	float rated_current;
+	float peak_current;
 	float current_kp;
 	float current_ki;
 
@@ -3017,7 +3018,10 @@ void UpdateMotorParameter(float *motor_parameter)
 	}
 	if (motor_parameter[MOTOR_PEAK_CURRENT_RMS] <= 0.0f)
 	{
-		motor_parameter[MOTOR_PEAK_CURRENT_RMS] = DEFAULT_MOTOR_PEAK_CURRENT_RMS;
+		float peak_current_ratio = DEFAULT_MOTOR_PEAK_CURRENT_RMS /
+			DEFAULT_MOTOR_RATED_CURRENT_RMS;
+		motor_parameter[MOTOR_PEAK_CURRENT_RMS] =
+			motor_parameter[MOTOR_RATED_CURRENT_RMS] * peak_current_ratio;
 	}
 	if (motor_parameter[MOTOR_MAXIMUM_POWER] <= 0.0f)
 	{
@@ -3041,12 +3045,26 @@ void UpdateMotorParameter(float *motor_parameter)
 	}
 
 	rated_current = motor_parameter[MOTOR_RATED_CURRENT_RMS];
+	peak_current = motor_parameter[MOTOR_PEAK_CURRENT_RMS];
 	current_kp = motor_parameter[MOTOR_CURRENT_P_GAIN];
 	current_ki = motor_parameter[MOTOR_CURRENT_I_GAIN];
 
 	Parameter.EncRes = (uint32_t)motor_parameter[MOTOR_ENCODER_RESOLUTION];
 	Parameter.u8PolePair = (uint8_t)motor_parameter[MOTOR_NUMBER_POLE_PAIRS];
 	Parameter.Offset_Enc = (int32_t)motor_parameter[MOTOR_HALL_OFFSET];
+	/* Prefer rated current for software OC protection because that is the
+	   value most consistently available from the motor label. Fall back to
+	   peak-current capability only when rated current is missing. */
+	if (peak_current <= 0.0f)
+	{
+		float peak_current_ratio = DEFAULT_MOTOR_PEAK_CURRENT_RMS /
+			DEFAULT_MOTOR_RATED_CURRENT_RMS;
+		peak_current = rated_current * peak_current_ratio;
+	}
+	if (rated_current <= 0.0f)
+	{
+		rated_current = peak_current;
+	}
 	Current_Sensor.OverCurrentThreshold = ClampFloat(
 		rated_current,
 		0.5f,
@@ -3091,7 +3109,9 @@ static void LoadDefaultParameters(void)
 	DriverParameter[POSITION_TRACKING_MODE] = (float)POSITION_TRACKING_MODE_SINGLE_TURN;
 
 	MotorParameter[MOTOR_RATED_CURRENT_RMS] = DEFAULT_MOTOR_RATED_CURRENT_RMS;
-	MotorParameter[MOTOR_PEAK_CURRENT_RMS] = DEFAULT_MOTOR_PEAK_CURRENT_RMS;
+	MotorParameter[MOTOR_PEAK_CURRENT_RMS] =
+		MotorParameter[MOTOR_RATED_CURRENT_RMS] *
+		(DEFAULT_MOTOR_PEAK_CURRENT_RMS / DEFAULT_MOTOR_RATED_CURRENT_RMS);
 	MotorParameter[MOTOR_ENCODER_ID] = (float)DEFAULT_MOTOR_ENCODER_ID;
 	MotorParameter[MOTOR_ENCODER_RESOLUTION] = (float)MOTOR_ENC_RES;
 	MotorParameter[MOTOR_MAXIMUM_POWER] = DEFAULT_MOTOR_MAXIMUM_POWER_W;
