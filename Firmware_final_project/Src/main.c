@@ -3838,7 +3838,7 @@ static void RunFocLoop(void)
 			gIqRefA = -ClampFloat(gSpeedPi.fOut, gSpeedPi.fLowOutLim, gSpeedPi.fUpOutLim); //Get Iq ref for current loop
 		}
 
-		voltage_limit = Parameter.fVdc * 0.45f;
+		voltage_limit = Parameter.fVdc * 0.51f;
 	}
 
 	gIdPi.fUpOutLim = voltage_limit;
