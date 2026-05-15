@@ -1,13 +1,12 @@
 #include "PWM.h"
 #include "define.h"
 #include "stm32f4xx_hal.h"
-#include <math.h> // Required for sinf()
+#include <math.h>
 
 extern TIM_HandleTypeDef htim8;
 
 // --- V/f Control Constants ---
 #define NOMINAL_V       0.90f    // Max duty cycle limit (0.0 to 1.0)
-#define V_OFFSET        0.05f    // Voltage boost for low-speed torque
 #define TWO_PI_F  (2.0f * PI)
 #define SQRT3_BY_2_F 0.86602540378f
 
