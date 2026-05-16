@@ -117,6 +117,7 @@ KNOWN_DEVICE_PID = 22336
 TREND_BUFFER_CAPACITY = 4000
 TREND_REFRESH_INTERVAL_MS = 20
 TRACE_CAPTURE_REFRESH_INTERVAL_MS = 100
+AUTO_MONITOR_INTERVAL_MS = 25
 SPEED_TEST_TIMER_INTERVAL_MS = 20
 MOTOR_AUTOTUNE_MECH_MODE_LEGACY = 0
 MOTOR_AUTOTUNE_MECH_MODE_LOADED = 1
@@ -333,6 +334,7 @@ DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
 DRIVER_PARAM_POSITION_TRACKING_MODE = 16
 MOTOR_PARAM_RATED_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_RATED_CURRENT_RMS")
+MOTOR_PARAM_PEAK_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_PEAK_CURRENT_RMS")
 MOTOR_PARAM_RESISTANCE = MOTOR_PARAMETER_NAMES.index("MOTOR_RESISTANCE")
 MOTOR_PARAM_INDUCTANCE = MOTOR_PARAMETER_NAMES.index("MOTOR_INDUCTANCE")
 MOTOR_PARAM_ENCODER_ID = MOTOR_PARAMETER_NAMES.index("MOTOR_ENCODER_ID")
@@ -4261,8 +4263,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._uerror_lut_preview_current_max_a = 0.0
         self._active_trace_target: str | None = None
         self._mechanical_zero_valid = False
+        self._mechanical_zero_stale = False
         self._mechanical_zero_single_turn_counts = 0.0
         self._mechanical_zero_multi_turn_counts = 0.0
+        self._mechanical_zero_encoder_id = 0
+        self._mechanical_zero_encoder_resolution = 0
+        self._mechanical_zero_direction = 0
         self._alarm_history: list[AlarmHistoryEntry] = []
         self._active_fault_code = 0
         self._active_alarm_summary_text = "No active alarms"
@@ -4280,7 +4286,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._ack_timer.timeout.connect(self._on_ack_timeout)
 
         self._monitor_timer = QtCore.QTimer(self)
-        self._monitor_timer.setInterval(250)
+        self._monitor_timer.setInterval(AUTO_MONITOR_INTERVAL_MS)
         self._monitor_timer.timeout.connect(self._queue_monitor_poll)
 
         self._trend_refresh_timer = QtCore.QTimer(self)
@@ -4361,13 +4367,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.connect_button.setStyleSheet("background-color: #2e7d32; color: white; font-weight: 600;")
 
         self.auto_poll_checkbox = QtWidgets.QCheckBox("Auto Monitor")
-        self.auto_poll_checkbox.setChecked(False)
+        self.auto_poll_checkbox.setChecked(True)
+        self.auto_poll_checkbox.setEnabled(False)
+        self.auto_poll_checkbox.setToolTip("Monitor polling is always on while connected.")
         self.monitor_rate_combo = QtWidgets.QComboBox()
-        self.monitor_rate_combo.addItem("4 Hz", 250)
-        self.monitor_rate_combo.addItem("10 Hz", 100)
-        self.monitor_rate_combo.addItem("20 Hz", 50)
-        self.monitor_rate_combo.addItem("40 Hz", 25)
-        self.monitor_rate_combo.setCurrentIndex(2)
+        self.monitor_rate_combo.addItem("40 Hz", AUTO_MONITOR_INTERVAL_MS)
+        self.monitor_rate_combo.setCurrentIndex(0)
+        self.monitor_rate_combo.setEnabled(False)
+        self.monitor_rate_combo.setToolTip("Monitor polling is fixed at 40 Hz while connected.")
 
         self.device_hint_label = QtWidgets.QLabel(
             f"Known device VID:PID = {KNOWN_DEVICE_VID:04X}:{KNOWN_DEVICE_PID:04X}"
@@ -5466,73 +5473,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vf_layout.addWidget(vf_note, 3, 0, 1, 2)
         vf_layout.setColumnStretch(1, 1)
 
-        vf_guide_group = QtWidgets.QGroupBox("V/f Guide")
-        vf_guide_layout = QtWidgets.QVBoxLayout(vf_guide_group)
-        vf_guide_form = QtWidgets.QGridLayout()
-        self.vf_guide_load_motor_button = QtWidgets.QPushButton("Load From Motor Params")
-        self.vf_guide_rs_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_guide_rs_spin.setRange(0.0, 1000.0)
-        self.vf_guide_rs_spin.setDecimals(4)
-        self.vf_guide_rs_spin.setSingleStep(0.1000)
-        self.vf_guide_rs_spin.setSuffix(" ohm")
-        self.vf_guide_ls_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_guide_ls_spin.setRange(0.0, 1000000.0)
-        self.vf_guide_ls_spin.setDecimals(1)
-        self.vf_guide_ls_spin.setSingleStep(10.0)
-        self.vf_guide_ls_spin.setSuffix(" uH")
-        self.vf_guide_rated_current_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_guide_rated_current_spin.setRange(0.0, 1000.0)
-        self.vf_guide_rated_current_spin.setDecimals(3)
-        self.vf_guide_rated_current_spin.setSingleStep(0.1)
-        self.vf_guide_rated_current_spin.setSuffix(" A")
-        self.vf_guide_rated_freq_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_guide_rated_freq_spin.setRange(0.0, 5000.0)
-        self.vf_guide_rated_freq_spin.setDecimals(2)
-        self.vf_guide_rated_freq_spin.setSingleStep(1.0)
-        self.vf_guide_rated_freq_spin.setSuffix(" Hz")
-        self.vf_guide_rated_voltage_spin = QtWidgets.QDoubleSpinBox()
-        self.vf_guide_rated_voltage_spin.setRange(0.0, 1000.0)
-        self.vf_guide_rated_voltage_spin.setDecimals(2)
-        self.vf_guide_rated_voltage_spin.setSingleStep(1.0)
-        self.vf_guide_rated_voltage_spin.setSuffix(" V")
-        self.vf_guide_boost_value_label = QtWidgets.QLabel("-")
-        self.vf_guide_slope_value_label = QtWidgets.QLabel("-")
-        self.vf_guide_rl_value_label = QtWidgets.QLabel("-")
-        self.vf_guide_suggested_voltage_value_label = QtWidgets.QLabel("-")
-        self.vf_guide_formula_value_label = QtWidgets.QLabel("Waiting for inputs...")
-        self.vf_guide_formula_value_label.setWordWrap(True)
-        self.vf_guide_formula_value_label.setStyleSheet("color: #d7e3fc; font-weight: 600;")
-        self.vf_guide_plot = XyPlotView()
-        self.vf_guide_plot.setMinimumHeight(360)
-
-        vf_guide_form.addWidget(self.vf_guide_load_motor_button, 0, 0, 1, 2)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Rs"), 1, 0)
-        vf_guide_form.addWidget(self.vf_guide_rs_spin, 1, 1)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Ls"), 1, 2)
-        vf_guide_form.addWidget(self.vf_guide_ls_spin, 1, 3)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Rated Current"), 1, 4)
-        vf_guide_form.addWidget(self.vf_guide_rated_current_spin, 1, 5)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Rated Elec Freq"), 2, 0)
-        vf_guide_form.addWidget(self.vf_guide_rated_freq_spin, 2, 1)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Rated Voltage"), 2, 2)
-        vf_guide_form.addWidget(self.vf_guide_rated_voltage_spin, 2, 3)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Suggested @ Cmd F"), 2, 4)
-        vf_guide_form.addWidget(self.vf_guide_suggested_voltage_value_label, 2, 5)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Voltage Boost"), 3, 0)
-        vf_guide_form.addWidget(self.vf_guide_boost_value_label, 3, 1)
-        vf_guide_form.addWidget(QtWidgets.QLabel("Linear Slope"), 3, 2)
-        vf_guide_form.addWidget(self.vf_guide_slope_value_label, 3, 3)
-        vf_guide_form.addWidget(QtWidgets.QLabel("RL @ Rated F"), 3, 4)
-        vf_guide_form.addWidget(self.vf_guide_rl_value_label, 3, 5)
-        vf_guide_form.addWidget(self.vf_guide_formula_value_label, 4, 0, 1, 6)
-        for column in range(6):
-            vf_guide_form.setColumnStretch(column, 1)
-
-        vf_guide_layout.addLayout(vf_guide_form)
-        vf_guide_layout.addWidget(self.vf_guide_plot, 1)
-
         vf_tab_layout.addWidget(vf_control_group)
-        vf_tab_layout.addWidget(vf_guide_group, 1)
         vf_tab_layout.addStretch(1)
 
         self.quick_command_tabs.addTab(drive_tab, "Drive")
@@ -5540,8 +5481,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.quick_command_tabs.addTab(test_tab, "Test Mode")
         self.quick_command_tabs.addTab(self._wrap_tuning_tab_scroll_area(vf_tab), "Open Loop V/F")
         layout.addWidget(self.quick_command_tabs)
-        self._load_vf_guide_from_motor_table()
-        self._refresh_vf_guide_plot()
         return box
 
     def _build_foc_control_tab(self) -> QtWidgets.QWidget:
@@ -6343,6 +6282,8 @@ class MainWindow(QtWidgets.QMainWindow):
         filter_row.addWidget(status_label)
         filter_row.addStretch(1)
         layout.addLayout(filter_row)
+        if table is getattr(self, "motor_table", None):
+            layout.addWidget(self._build_motor_encoder_setup_group())
         layout.addWidget(table, 1)
 
         self._style_parameter_table_groups(table, names, group_map)
@@ -6362,7 +6303,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
         self.driver_table = self._create_parameter_table(DRIVER_PARAMETER_NAMES)
         self.motor_table = self._create_parameter_table(MOTOR_PARAMETER_NAMES)
-        self.motor_table.itemChanged.connect(lambda _item: self._load_vf_guide_from_motor_table())
+        self.motor_table.itemChanged.connect(self._on_motor_table_item_changed)
         tabs.addTab(
             self._build_parameter_table_page(
                 self.driver_table,
@@ -6381,6 +6322,70 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._populate_default_parameter_tables()
         return tabs
+
+    def _build_motor_encoder_setup_group(self) -> QtWidgets.QGroupBox:
+        box = QtWidgets.QGroupBox("Motor Encoder Setup")
+        layout = QtWidgets.QGridLayout(box)
+
+        self.motor_encoder_type_combo = QtWidgets.QComboBox()
+        self.motor_encoder_type_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.motor_encoder_type_combo.setToolTip(
+            "Writes the selected encoder ID into MOTOR_ENCODER_ID."
+        )
+        for encoder_value, encoder_names in AUTOTUNE_ENCODER_ID_ALIASES:
+            option_label = _format_encoder_id_option_label(encoder_value, encoder_names)
+            self.motor_encoder_type_combo.addItem(option_label, int(encoder_value))
+            self.motor_encoder_type_combo.setItemData(
+                self.motor_encoder_type_combo.count() - 1,
+                "\n".join(encoder_names),
+                QtCore.Qt.ItemDataRole.ToolTipRole,
+            )
+
+        self.motor_encoder_bits_spin = QtWidgets.QSpinBox()
+        self.motor_encoder_bits_spin.setRange(
+            AUTOTUNE_ENCODER_BITS_CUSTOM,
+            AUTOTUNE_ENCODER_BITS_MAX,
+        )
+        self.motor_encoder_bits_spin.setSpecialValueText("Custom")
+        self.motor_encoder_bits_spin.setToolTip(
+            "Pick a standard encoder bit-depth. For power-of-two resolutions, the GUI fills MOTOR_ENCODER_RESOLUTION automatically."
+        )
+
+        self.motor_encoder_resolution_spin = QtWidgets.QSpinBox()
+        self.motor_encoder_resolution_spin.setRange(1, 2147483647)
+        self.motor_encoder_resolution_spin.setToolTip(
+            "Final counts/rev written into MOTOR_ENCODER_RESOLUTION."
+        )
+
+        helper_label = QtWidgets.QLabel(
+            "Choose encoder ID here, then enter the bit-depth. Power-of-two bit settings fill the resolution automatically."
+        )
+        helper_label.setWordWrap(True)
+        helper_label.setStyleSheet("color: #9aa0a6;")
+
+        layout.addWidget(QtWidgets.QLabel("Encoder Type"), 0, 0)
+        layout.addWidget(self.motor_encoder_type_combo, 0, 1)
+        layout.addWidget(QtWidgets.QLabel("Bits"), 0, 2)
+        layout.addWidget(self.motor_encoder_bits_spin, 0, 3)
+        layout.addWidget(QtWidgets.QLabel("Resolution"), 0, 4)
+        layout.addWidget(self.motor_encoder_resolution_spin, 0, 5)
+        layout.addWidget(helper_label, 1, 0, 1, 6)
+        for column in range(6):
+            layout.setColumnStretch(column, 1 if column in (1, 5) else 0)
+
+        self.motor_encoder_type_combo.currentIndexChanged.connect(
+            self._on_motor_encoder_panel_type_changed
+        )
+        self.motor_encoder_bits_spin.valueChanged.connect(
+            self._on_motor_encoder_panel_bits_changed
+        )
+        self.motor_encoder_resolution_spin.valueChanged.connect(
+            self._on_motor_encoder_panel_resolution_changed
+        )
+        self._refresh_motor_encoder_panel_from_table()
+        return box
 
     def _build_parameter_panel(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
@@ -6503,7 +6508,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.refresh_debug_terminal_button.clicked.connect(self._request_monitor_once)
         self.copy_debug_terminal_button.clicked.connect(self._copy_debug_terminal_text)
-        self.monitor_rate_combo.currentIndexChanged.connect(self._update_monitor_poll_interval)
         self.foc_mode_combo.currentIndexChanged.connect(self._update_foc_mode_ui)
         self.foc_target_speed_spin.valueChanged.connect(self._on_foc_target_speed_value_changed)
         self.speed_test_profile_combo.currentIndexChanged.connect(self._update_speed_test_profile_ui)
@@ -6516,14 +6520,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_foc_button.clicked.connect(self._start_foc_control)
         self.stop_foc_button.clicked.connect(self._stop_foc_control)
         self.vf_toggle_button.clicked.connect(self._toggle_open_loop_vf)
-        self.vf_guide_load_motor_button.clicked.connect(self._load_vf_guide_from_motor_table)
-        self.vf_frequency_spin.valueChanged.connect(self._refresh_vf_guide_plot)
-        self.vf_voltage_spin.valueChanged.connect(self._refresh_vf_guide_plot)
-        self.vf_guide_rs_spin.valueChanged.connect(self._refresh_vf_guide_plot)
-        self.vf_guide_ls_spin.valueChanged.connect(self._refresh_vf_guide_plot)
-        self.vf_guide_rated_current_spin.valueChanged.connect(self._refresh_vf_guide_plot)
-        self.vf_guide_rated_freq_spin.valueChanged.connect(self._refresh_vf_guide_plot)
-        self.vf_guide_rated_voltage_spin.valueChanged.connect(self._refresh_vf_guide_plot)
         self.servo_on_button.clicked.connect(self._handle_servo_on)
         self.servo_off_button.clicked.connect(self._handle_servo_off)
         self.ack_fault_button.clicked.connect(self._reset_alarm)
@@ -6735,8 +6731,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self._refresh_capture_rate_combos()
 
     def _update_monitor_poll_interval(self) -> None:
-        interval_ms = int(self.monitor_rate_combo.currentData() or 250)
-        self._monitor_timer.setInterval(interval_ms)
+        if hasattr(self, "monitor_rate_combo"):
+            blocker = QtCore.QSignalBlocker(self.monitor_rate_combo)
+            index = self.monitor_rate_combo.findData(AUTO_MONITOR_INTERVAL_MS)
+            if index >= 0:
+                self.monitor_rate_combo.setCurrentIndex(index)
+            del blocker
+        if hasattr(self, "auto_poll_checkbox"):
+            blocker = QtCore.QSignalBlocker(self.auto_poll_checkbox)
+            self.auto_poll_checkbox.setChecked(True)
+            del blocker
+        self._monitor_timer.setInterval(AUTO_MONITOR_INTERVAL_MS)
 
     def _trace_sample_period_s(self) -> float:
         decimation = int(self.trace_rate_combo.currentData() or 0)
@@ -6768,6 +6773,16 @@ class MainWindow(QtWidgets.QMainWindow):
             table.setItem(row, 2, item)
         item.setText(f"{float(value):.6f}")
 
+    def _set_motor_encoder_panel_type_value(self, encoder_id: int) -> None:
+        if not hasattr(self, "motor_encoder_type_combo"):
+            return
+        combo = self.motor_encoder_type_combo
+        index = combo.findData(int(encoder_id))
+        if index < 0:
+            combo.addItem(f"{int(encoder_id)} - UNKNOWN_ENCODER_ID", int(encoder_id))
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+
     @staticmethod
     def _autotune_encoder_bits_from_resolution(resolution: int) -> int:
         if resolution <= 0 or (resolution & (resolution - 1)) != 0:
@@ -6776,6 +6791,103 @@ class MainWindow(QtWidgets.QMainWindow):
         if bits < 1 or bits > AUTOTUNE_ENCODER_BITS_MAX:
             return AUTOTUNE_ENCODER_BITS_CUSTOM
         return bits
+
+    def _refresh_motor_encoder_panel_from_table(self) -> None:
+        if (
+            not hasattr(self, "motor_table")
+            or not hasattr(self, "motor_encoder_type_combo")
+            or not hasattr(self, "motor_encoder_bits_spin")
+            or not hasattr(self, "motor_encoder_resolution_spin")
+        ):
+            return
+        encoder_id = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_ENCODER_ID,
+                    float(AUTOTUNE_DEFAULT_ENCODER_ID),
+                )
+            )
+        )
+        encoder_resolution = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_ENCODER_RESOLUTION,
+                    float(1 << 20),
+                )
+            )
+        )
+        if encoder_id <= 0:
+            encoder_id = AUTOTUNE_DEFAULT_ENCODER_ID
+        if encoder_resolution <= 0:
+            encoder_resolution = 1 << 20
+        encoder_bits = self._autotune_encoder_bits_from_resolution(encoder_resolution)
+        blockers = [
+            QtCore.QSignalBlocker(self.motor_encoder_type_combo),
+            QtCore.QSignalBlocker(self.motor_encoder_bits_spin),
+            QtCore.QSignalBlocker(self.motor_encoder_resolution_spin),
+        ]
+        self._set_motor_encoder_panel_type_value(int(encoder_id))
+        self.motor_encoder_bits_spin.setValue(int(encoder_bits))
+        self.motor_encoder_resolution_spin.setValue(int(encoder_resolution))
+        del blockers
+
+    def _sync_motor_encoder_panel_to_table(self) -> None:
+        if (
+            not hasattr(self, "motor_table")
+            or not hasattr(self, "motor_encoder_type_combo")
+            or not hasattr(self, "motor_encoder_resolution_spin")
+        ):
+            return
+        encoder_id = int(self.motor_encoder_type_combo.currentData() or AUTOTUNE_DEFAULT_ENCODER_ID)
+        encoder_resolution = max(1, int(self.motor_encoder_resolution_spin.value()))
+        self._set_table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_ENCODER_ID,
+            float(encoder_id),
+        )
+        self._set_table_float_value(
+            self.motor_table,
+            MOTOR_PARAM_ENCODER_RESOLUTION,
+            float(encoder_resolution),
+        )
+
+    def _on_motor_encoder_panel_type_changed(self, _index: int) -> None:
+        self._sync_motor_encoder_panel_to_table()
+
+    def _on_motor_encoder_panel_bits_changed(self, bits: int) -> None:
+        if not hasattr(self, "motor_encoder_resolution_spin"):
+            return
+        if int(bits) > AUTOTUNE_ENCODER_BITS_CUSTOM:
+            resolution = 1 << int(bits)
+            blocker = QtCore.QSignalBlocker(self.motor_encoder_resolution_spin)
+            self.motor_encoder_resolution_spin.setValue(int(resolution))
+            del blocker
+        self._sync_motor_encoder_panel_to_table()
+
+    def _on_motor_encoder_panel_resolution_changed(self, resolution: int) -> None:
+        if not hasattr(self, "motor_encoder_bits_spin"):
+            return
+        encoder_bits = self._autotune_encoder_bits_from_resolution(int(resolution))
+        blocker = QtCore.QSignalBlocker(self.motor_encoder_bits_spin)
+        self.motor_encoder_bits_spin.setValue(int(encoder_bits))
+        del blocker
+        self._sync_motor_encoder_panel_to_table()
+
+    def _on_motor_table_item_changed(self, item: QtWidgets.QTableWidgetItem) -> None:
+        if item is None or item.column() != 2:
+            return
+        if item.row() in (
+            MOTOR_PARAM_RATED_CURRENT_RMS,
+            MOTOR_PARAM_ENCODER_ID,
+            MOTOR_PARAM_ENCODER_RESOLUTION,
+            MOTOR_PARAM_CURRENT_CTRL_DIRECTION,
+        ):
+            self._refresh_motor_encoder_panel_from_table()
+            self._refresh_autotune_input_review_from_motor_table()
+            self._update_mechanical_zero_stale_state(announce=True)
+            self._refresh_mechanical_zero_panel()
 
     def _apply_autotune_safe_current_suggestions(
         self,
@@ -7344,9 +7456,29 @@ class MainWindow(QtWidgets.QMainWindow):
             0.0,
             type=float,
         )
+        encoder_id = self._settings.value(
+            "mechanical_zero/encoder_id",
+            0,
+            type=int,
+        )
+        encoder_resolution = self._settings.value(
+            "mechanical_zero/encoder_resolution",
+            0,
+            type=int,
+        )
+        encoder_direction = self._settings.value(
+            "mechanical_zero/direction",
+            0,
+            type=int,
+        )
         self._mechanical_zero_valid = bool(valid)
+        self._mechanical_zero_stale = False
         self._mechanical_zero_single_turn_counts = float(single_turn_counts)
         self._mechanical_zero_multi_turn_counts = float(multi_turn_counts)
+        self._mechanical_zero_encoder_id = int(encoder_id)
+        self._mechanical_zero_encoder_resolution = int(encoder_resolution)
+        self._mechanical_zero_direction = int(encoder_direction)
+        self._update_mechanical_zero_stale_state()
         self._refresh_mechanical_zero_panel()
 
     def _save_mechanical_zero_settings(self) -> None:
@@ -7359,22 +7491,94 @@ class MainWindow(QtWidgets.QMainWindow):
             "mechanical_zero/multi_turn_counts",
             float(self._mechanical_zero_multi_turn_counts),
         )
+        self._settings.setValue(
+            "mechanical_zero/encoder_id",
+            int(self._mechanical_zero_encoder_id),
+        )
+        self._settings.setValue(
+            "mechanical_zero/encoder_resolution",
+            int(self._mechanical_zero_encoder_resolution),
+        )
+        self._settings.setValue(
+            "mechanical_zero/direction",
+            int(self._mechanical_zero_direction),
+        )
         self._settings.sync()
 
+    def _current_mechanical_zero_encoder_signature(self) -> tuple[int, int, int]:
+        if not hasattr(self, "motor_table"):
+            return (0, 0, 0)
+        encoder_id = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_ENCODER_ID,
+                    float(AUTOTUNE_DEFAULT_ENCODER_ID),
+                )
+            )
+        )
+        encoder_resolution = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_ENCODER_RESOLUTION,
+                    float(1 << 20),
+                )
+            )
+        )
+        encoder_direction = int(
+            round(
+                self._table_float_value(
+                    self.motor_table,
+                    MOTOR_PARAM_CURRENT_CTRL_DIRECTION,
+                    0.0,
+                )
+            )
+        )
+        return (encoder_id, max(1, encoder_resolution), encoder_direction)
+
+    def _saved_mechanical_zero_encoder_signature(self) -> tuple[int, int, int]:
+        return (
+            int(self._mechanical_zero_encoder_id),
+            int(self._mechanical_zero_encoder_resolution),
+            int(self._mechanical_zero_direction),
+        )
+
+    def _update_mechanical_zero_stale_state(self, announce: bool = False) -> None:
+        was_stale = bool(self._mechanical_zero_stale)
+        if not self._mechanical_zero_valid:
+            self._mechanical_zero_stale = False
+        else:
+            current_signature = self._current_mechanical_zero_encoder_signature()
+            saved_signature = self._saved_mechanical_zero_encoder_signature()
+            self._mechanical_zero_stale = (
+                saved_signature == (0, 0, 0) or current_signature != saved_signature
+            )
+        if (
+            announce
+            and self._mechanical_zero_stale
+            and not was_stale
+            and hasattr(self, "foc_live_summary_label")
+        ):
+            self.foc_live_summary_label.setText(
+                "Mechanical zero is now stale because encoder ID, resolution, or direction changed. "
+                "Capture mechanical zero again before relying on GUI 0 deg / position display."
+            )
+
     def _raw_multi_turn_counts_to_display_counts(self, counts: float) -> float:
-        if self._mechanical_zero_valid:
+        if self._mechanical_zero_valid and not self._mechanical_zero_stale:
             return float(counts) - float(self._mechanical_zero_multi_turn_counts)
         return float(counts)
 
     def _display_multi_turn_counts_to_raw_counts(self, counts: float) -> float:
-        if self._mechanical_zero_valid:
+        if self._mechanical_zero_valid and not self._mechanical_zero_stale:
             return float(counts) + float(self._mechanical_zero_multi_turn_counts)
         return float(counts)
 
     def _raw_single_turn_counts_to_display_counts(self, counts: float) -> float:
         encoder_resolution = self._encoder_resolution_counts()
         display_counts = self._normalize_single_turn_counts(float(counts))
-        if self._mechanical_zero_valid:
+        if self._mechanical_zero_valid and not self._mechanical_zero_stale:
             display_counts -= float(self._mechanical_zero_single_turn_counts)
         display_counts = self._normalize_single_turn_counts(display_counts)
         if encoder_resolution > 1.0:
@@ -7387,7 +7591,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _display_single_turn_counts_to_raw_counts(self, counts: float) -> float:
         raw_counts = self._normalize_single_turn_counts(float(counts))
-        if self._mechanical_zero_valid:
+        if self._mechanical_zero_valid and not self._mechanical_zero_stale:
             raw_counts += float(self._mechanical_zero_single_turn_counts)
         return self._normalize_single_turn_counts(raw_counts)
 
@@ -7414,6 +7618,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _mechanical_zero_status_text(self) -> str:
+        if self._mechanical_zero_valid and self._mechanical_zero_stale:
+            return "Stale (recapture required)"
         if self._mechanical_zero_valid:
             return "Saved (GUI local)"
         return "Not set"
@@ -7434,6 +7640,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "mech_zero_status_value_label"):
             return
         self.mech_zero_status_value_label.setText(self._mechanical_zero_status_text())
+        if self._mechanical_zero_valid and self._mechanical_zero_stale:
+            self.mech_zero_status_value_label.setStyleSheet("color: #f0ad4e; font-weight: 600;")
+        else:
+            self.mech_zero_status_value_label.setStyleSheet("font-weight: 600;")
         self.mech_zero_single_turn_value_label.setText(
             f"{self._mechanical_zero_single_turn_counts:.1f} cnt"
         )
@@ -7467,6 +7677,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._mechanical_zero_multi_turn_counts = float(getattr(snapshot, "act_position", 0.0))
         self._mechanical_zero_valid = True
+        self._mechanical_zero_stale = False
+        (
+            self._mechanical_zero_encoder_id,
+            self._mechanical_zero_encoder_resolution,
+            self._mechanical_zero_direction,
+        ) = self._current_mechanical_zero_encoder_signature()
         self._save_mechanical_zero_settings()
         self._refresh_mechanical_zero_panel()
         tracking_mode = self._position_tracking_mode()
@@ -7485,8 +7701,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _clear_mechanical_zero(self) -> None:
         self._mechanical_zero_valid = False
+        self._mechanical_zero_stale = False
         self._mechanical_zero_single_turn_counts = 0.0
         self._mechanical_zero_multi_turn_counts = 0.0
+        self._mechanical_zero_encoder_id = 0
+        self._mechanical_zero_encoder_resolution = 0
+        self._mechanical_zero_direction = 0
         self._save_mechanical_zero_settings()
         self._refresh_mechanical_zero_panel()
         if self._latest_monitor_snapshot is not None:
@@ -7893,6 +8113,20 @@ class MainWindow(QtWidgets.QMainWindow):
         for index, payload in enumerate(chunks, start=1):
             self._enqueue_command(
                 Command.CMD_WRITE_DRIVER,
+                payload,
+                f"{description_prefix} chunk {index}/{total_chunks}",
+            )
+
+    def _queue_motor_parameter_write_chunks(
+        self,
+        values: list[float],
+        description_prefix: str = "Write Motor Parameters",
+    ) -> None:
+        chunks = build_parameter_write_chunks(values, chunk_size=20)
+        total_chunks = len(chunks)
+        for index, payload in enumerate(chunks, start=1):
+            self._enqueue_command(
+                Command.CMD_WRITE_MOTOR,
                 payload,
                 f"{description_prefix} chunk {index}/{total_chunks}",
             )
@@ -10493,6 +10727,18 @@ class MainWindow(QtWidgets.QMainWindow):
             "Apply Auto-Tune Estimates",
         )
 
+    def _show_autotune_apply_servo_on_reminder(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self,
+            "Auto-Tune Gains Applied",
+            "Estimated gains have been applied to the runtime tables.\n\n"
+            "Before testing FOC / Speed Mode, run the Servo ON sequence one more time so the drive can capture encoder alignment / offset again with the current motor configuration.\n\n"
+            "Recommended next step:\n"
+            "- If the drive is already armed: Servo OFF -> Servo ON\n"
+            "- If the drive is idle: Servo ON\n\n"
+            "Wait for Cal Status and Align Status to reach Done before testing.",
+        )
+
     def _sync_parameter_tables_from_autotune_snapshot(self) -> bool:
         snapshot = self._latest_monitor_snapshot
         if snapshot is None:
@@ -11117,6 +11363,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.connect_button.blockSignals(False)
 
         if connected:
+            self._update_monitor_poll_interval()
             self.connection_state_label.setText(f"Connected: {port_name}")
             self.connection_state_label.setStyleSheet("color: #2e7d32; font-weight: 600;")
             self.connect_button.setText("Disconnect")
@@ -11127,8 +11374,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._clear_trend_history()
             self._clear_current_tuning_capture()
             self._clear_trace_capture()
+            self._read_all_parameters()
+            self._request_monitor_once()
             self._try_send_next()
         else:
+            self._update_monitor_poll_interval()
             self.connection_state_label.setText("Disconnected")
             self.connection_state_label.setStyleSheet("color: #c62828; font-weight: 600;")
             self.connect_button.setText("Connect")
@@ -11244,7 +11494,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._try_send_next()
 
     def _queue_monitor_poll(self) -> None:
-        if not self._connected or not self.auto_poll_checkbox.isChecked():
+        if not self._connected:
             return
         if self._awaiting_ack or self._pending_frames:
             return
@@ -11346,14 +11596,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_parameter_status("Motor parameter write cancelled.", "warn")
             return
 
-        chunks = build_parameter_write_chunks(values, chunk_size=20)
         self._set_parameter_status("Writing motor parameters...", "info")
-        for index, payload in enumerate(chunks, start=1):
-            self._enqueue_command(
-                Command.CMD_WRITE_MOTOR,
-                payload,
-                f"Write Motor Parameters chunk {index}/{len(chunks)}",
-            )
+        self._queue_motor_parameter_write_chunks(values)
 
     def _apply_control_timing_mode(self) -> None:
         selected_mode = CONTROL_TIMING_MODE_16KHZ
@@ -11401,185 +11645,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "vf_toggle_button"):
             self.vf_toggle_button.setText("Start V/F")
 
-    def _load_vf_guide_from_motor_table(self) -> None:
-        if not hasattr(self, "motor_table"):
-            return
-        updates: list[tuple[QtWidgets.QDoubleSpinBox, float]] = []
-
-        rs_mohm = self._table_float_value(self.motor_table, MOTOR_PARAM_RESISTANCE, 0.0)
-        if rs_mohm > 0.0 and hasattr(self, "vf_guide_rs_spin"):
-            updates.append((self.vf_guide_rs_spin, rs_mohm / 1000.0))
-
-        ls_uh = self._table_float_value(self.motor_table, MOTOR_PARAM_INDUCTANCE, 0.0)
-        if ls_uh > 0.0 and hasattr(self, "vf_guide_ls_spin"):
-            updates.append((self.vf_guide_ls_spin, ls_uh))
-
-        rated_current = self._table_float_value(self.motor_table, MOTOR_PARAM_RATED_CURRENT_RMS, 0.0)
-        if rated_current > 0.0 and hasattr(self, "vf_guide_rated_current_spin"):
-            updates.append((self.vf_guide_rated_current_spin, rated_current))
-
-        rated_voltage = self._table_float_value(self.motor_table, MOTOR_PARAM_MAXIMUM_VOLTAGE, 0.0)
-        if rated_voltage > 0.0 and hasattr(self, "vf_guide_rated_voltage_spin"):
-            updates.append((self.vf_guide_rated_voltage_spin, rated_voltage))
-
-        pole_pairs = self._table_float_value(self.motor_table, MOTOR_PARAM_POLE_PAIRS, 0.0)
-        maximum_speed_rpm = self._table_float_value(self.motor_table, MOTOR_PARAM_MAXIMUM_SPEED, 0.0)
-        rated_freq_hz = 0.0
-        if pole_pairs > 0.0 and maximum_speed_rpm > 0.0:
-            rated_freq_hz = abs(pole_pairs * maximum_speed_rpm / 60.0)
-        if rated_freq_hz <= 0.0:
-            rated_freq_hz = DEFAULT_MOTOR_RATED_ELECTRICAL_FREQUENCY_HZ
-        if hasattr(self, "vf_guide_rated_freq_spin"):
-            updates.append((self.vf_guide_rated_freq_spin, rated_freq_hz))
-
-        for spin, value in updates:
-            spin.blockSignals(True)
-            spin.setValue(float(value))
-            spin.blockSignals(False)
-
-        self._refresh_vf_guide_plot()
-
-    def _refresh_vf_guide_plot(self) -> None:
-        if not hasattr(self, "vf_guide_plot"):
-            return
-
-        rs_ohm = float(self.vf_guide_rs_spin.value()) if hasattr(self, "vf_guide_rs_spin") else 0.0
-        ls_uh = float(self.vf_guide_ls_spin.value()) if hasattr(self, "vf_guide_ls_spin") else 0.0
-        rated_current_a = (
-            float(self.vf_guide_rated_current_spin.value())
-            if hasattr(self, "vf_guide_rated_current_spin")
-            else 0.0
-        )
-        rated_freq_hz = (
-            float(self.vf_guide_rated_freq_spin.value())
-            if hasattr(self, "vf_guide_rated_freq_spin")
-            else 0.0
-        )
-        rated_voltage_v = (
-            float(self.vf_guide_rated_voltage_spin.value())
-            if hasattr(self, "vf_guide_rated_voltage_spin")
-            else 0.0
-        )
-        command_freq_hz = abs(float(self.vf_frequency_spin.value())) if hasattr(self, "vf_frequency_spin") else 0.0
-        command_voltage_v = float(self.vf_voltage_spin.value()) if hasattr(self, "vf_voltage_spin") else 0.0
-
-        voltage_boost_v = max(0.0, rated_current_a * rs_ohm)
-        slope_v_per_hz = 0.0
-        if rated_freq_hz > 1.0e-6:
-            slope_v_per_hz = max(0.0, rated_voltage_v - voltage_boost_v) / rated_freq_hz
-
-        def linear_vf_voltage(freq_hz: float) -> float:
-            freq_abs = max(0.0, float(freq_hz))
-            if rated_freq_hz > 1.0e-6 and freq_abs > rated_freq_hz:
-                return max(rated_voltage_v, 0.0)
-            return voltage_boost_v + (slope_v_per_hz * freq_abs)
-
-        suggested_voltage_v = linear_vf_voltage(command_freq_hz)
-        ls_h = max(0.0, ls_uh * 1.0e-6)
-        rl_rated_voltage_v = 0.0
-        if rated_current_a > 0.0 and rated_freq_hz > 0.0:
-            rl_rated_voltage_v = rated_current_a * math.sqrt(
-                (rs_ohm * rs_ohm) + ((2.0 * math.pi * rated_freq_hz * ls_h) ** 2)
-            )
-
-        if hasattr(self, "vf_guide_boost_value_label"):
-            self.vf_guide_boost_value_label.setText(f"{voltage_boost_v:.3f} V")
-        if hasattr(self, "vf_guide_slope_value_label"):
-            self.vf_guide_slope_value_label.setText(f"{slope_v_per_hz:.4f} V/Hz")
-        if hasattr(self, "vf_guide_rl_value_label"):
-            self.vf_guide_rl_value_label.setText(f"{rl_rated_voltage_v:.3f} V")
-        if hasattr(self, "vf_guide_suggested_voltage_value_label"):
-            self.vf_guide_suggested_voltage_value_label.setText(f"{suggested_voltage_v:.3f} V")
-
-        if rated_freq_hz <= 0.0 or rated_voltage_v <= 0.0:
-            if hasattr(self, "vf_guide_formula_value_label"):
-                self.vf_guide_formula_value_label.setText(
-                    "Enter rated electrical frequency and rated voltage to generate the V/f guide."
-                )
-            self.vf_guide_plot.clear("Waiting for V/f guide inputs...")
-            return
-
-        formula_text = (
-            f"Guide: V = {voltage_boost_v:.3f} + {slope_v_per_hz:.4f} * f "
-            f"for 0..{rated_freq_hz:.2f} Hz, then clamp near {rated_voltage_v:.2f} V."
-        )
-        if hasattr(self, "vf_guide_formula_value_label"):
-            self.vf_guide_formula_value_label.setText(formula_text)
-
-        chart_max_freq_hz = max(rated_freq_hz, command_freq_hz, 1.0)
-        sample_count = 49
-        guide_series: list[tuple[float, float]] = []
-        rl_series: list[tuple[float, float]] = []
-        for index in range(sample_count):
-            freq_hz = chart_max_freq_hz * index / float(sample_count - 1)
-            guide_series.append((freq_hz, linear_vf_voltage(freq_hz)))
-            if rated_current_a > 0.0 and ls_h > 0.0:
-                rl_voltage = rated_current_a * math.sqrt(
-                    (rs_ohm * rs_ohm) + ((2.0 * math.pi * freq_hz * ls_h) ** 2)
-                )
-                rl_series.append((freq_hz, rl_voltage))
-
-        series_defs = [
-            {
-                "label": "Linear V/f guide",
-                "color": "#4dabf7",
-                "mode": "line",
-                "line_width": 2.2,
-            }
-        ]
-        series_data: list[list[tuple[float, float]]] = [guide_series]
-
-        if rl_series:
-            series_defs.append(
-                {
-                    "label": "RL estimate @ I rated",
-                    "color": "#f59f00",
-                    "mode": "line",
-                    "line_width": 1.8,
-                    "alpha": 220,
-                }
-            )
-            series_data.append(rl_series)
-
-        series_defs.extend(
-            [
-                {
-                    "label": "Suggested @ cmd f",
-                    "color": "#51cf66",
-                    "mode": "scatter",
-                    "marker_radius": 3.4,
-                },
-                {
-                    "label": "Current command",
-                    "color": "#ff6b6b",
-                    "mode": "scatter",
-                    "marker_radius": 3.4,
-                },
-            ]
-        )
-        series_data.extend(
-            [
-                [(command_freq_hz, suggested_voltage_v)],
-                [(command_freq_hz, command_voltage_v)],
-            ]
-        )
-
-        self.vf_guide_plot.set_plot(
-            title="Open-loop V/f Suggestion",
-            x_label="Electrical Frequency",
-            x_unit="Hz",
-            y_label="Voltage",
-            y_unit="V",
-            series_defs=series_defs,
-            series_data=series_data,
-            status_text=(
-                f"Boost {voltage_boost_v:.3f} V | Slope {slope_v_per_hz:.4f} V/Hz | "
-                f"Suggested @ {command_freq_hz:.2f} Hz = {suggested_voltage_v:.3f} V"
-            ),
-            x_min_floor=0.0,
-            y_min_floor=0.0,
-        )
-
     def _handle_frame(self, frame: ParsedFrame) -> None:
         if frame.code == ACK_NOERROR:
             sent_command = self._last_sent.command if self._last_sent is not None else None
@@ -11619,7 +11684,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._set_uerror_status("LUT saved to flash.", self.uerror_progress_bar.value())
             elif should_resync_after_autotune_apply:
                 self._set_parameter_status(
-                    "Auto-tune estimates acknowledged. Refreshing GUI and parameter tables...",
+                    "Auto-tune estimates acknowledged. Refreshing GUI and parameter tables; Servo ON again before closed-loop testing.",
                     "info",
                 )
             self._ack_timer.stop()
@@ -11629,15 +11694,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 synced_from_snapshot = self._sync_parameter_tables_from_autotune_snapshot()
                 if synced_from_snapshot:
                     self.statusBar().showMessage(
-                        "Auto-tune gains applied and pushed into FOC/Test controls. Reading back parameters...",
+                        "Auto-tune gains applied. Servo ON again before FOC testing. Reading back parameters...",
                         5000,
                     )
                 else:
                     self.statusBar().showMessage(
-                        "Auto-tune gains applied. Reading back parameters from firmware...",
+                        "Auto-tune gains applied. Servo ON again before FOC testing. Reading back parameters from firmware...",
                         5000,
                     )
                 self._queue_autotune_parameter_resync()
+                self._show_autotune_apply_servo_on_reminder()
             elif should_resync_after_direction_apply:
                 self.statusBar().showMessage(
                     "Runtime motor direction applied. Verify or rerun encoder alignment before closed-loop FOC. Save to flash separately if needed.",
@@ -11836,7 +11902,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 item.setText(f"{value:.6f}")
         if table is getattr(self, "motor_table", None):
             self._refresh_autotune_input_review_from_motor_table()
-            self._load_vf_guide_from_motor_table()
+            self._refresh_motor_encoder_panel_from_table()
+            self._update_mechanical_zero_stale_state()
+            self._refresh_mechanical_zero_panel()
 
     def _clear_trend_history(self) -> None:
         self._trend_buffer.clear()
@@ -12595,7 +12663,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "control_timing_mode",
             self._current_loop_display_text(
                 self._active_control_loop_hz,
-                snapshot.debug_isr_frequency_hz,
+                float(getattr(snapshot, "debug_isr_frequency_hz", 0.0)),
             ),
         )
         self._set_monitor_value("vdc", f"{snapshot.vdc:.3f} V")
