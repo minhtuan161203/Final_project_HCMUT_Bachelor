@@ -3,7 +3,7 @@
 <title>Static Call Graph - [Firmware_final_project\Firmware_final_project.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image Firmware_final_project\Firmware_final_project.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sat May 16 11:00:54 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sat May 16 22:38:19 2026
 <BR><P>
 <H3>Maximum Stack Usage =        832 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -3089,9 +3089,9 @@ Global Symbols
 <LI><a href="#[cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__set_errno
 </UL>
 <BR>[Called By]<UL><LI><a href="#[128]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapPositionErrorCounts
-<LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[13e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredSpeedAndTheta
-<LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
+<LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
 <LI><a href="#[f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAlignedSingleTurnPositionCounts
 </UL>
 
@@ -3531,25 +3531,25 @@ Local Symbols
 </UL>
 <BR>[Calls]<UL><LI><a href="#[121]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_fmodf
 </UL>
-<BR>[Called By]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
+<BR>[Called By]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
 <LI><a href="#[110]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;CalcAveragedAlignedEncoderOffset
 <LI><a href="#[f4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;AccumulateEncoderAlignmentSample
 </UL>
 
-<P><STRONG><a name="[122]"></a>GetAutoTuneControlTheta</STRONG> (Thumb, 118 bytes, Stack size 16 bytes, main.o(i.GetAutoTuneControlTheta))
+<P><STRONG><a name="[122]"></a>GetAutoTuneControlTheta</STRONG> (Thumb, 104 bytes, Stack size 16 bytes, main.o(i.GetAutoTuneControlTheta))
 <BR><BR>[Stack]<UL><LI>Max Depth = 88<LI>Call Chain = GetAutoTuneControlTheta &rArr; GetAutoTuneEncoderMechanicalAngle &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[123]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetRuntimeFocControlTheta
-<LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
+<LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
 </UL>
 <BR>[Called By]<UL><LI><a href="#[147]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
 </UL>
 
-<P><STRONG><a name="[124]"></a>GetAutoTuneEncoderMechanicalAngle</STRONG> (Thumb, 124 bytes, Stack size 16 bytes, main.o(i.GetAutoTuneEncoderMechanicalAngle))
+<P><STRONG><a name="[125]"></a>GetAutoTuneEncoderMechanicalAngle</STRONG> (Thumb, 124 bytes, Stack size 16 bytes, main.o(i.GetAutoTuneEncoderMechanicalAngle))
 <BR><BR>[Stack]<UL><LI>Max Depth = 72<LI>Call Chain = GetAutoTuneEncoderMechanicalAngle &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAlignedSingleTurnPositionCounts
 <LI><a href="#[121]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_fmodf
 </UL>
@@ -3610,7 +3610,7 @@ Local Symbols
 <P><STRONG><a name="[123]"></a>GetRuntimeFocControlTheta</STRONG> (Thumb, 18 bytes, Stack size 0 bytes, main.o(i.GetRuntimeFocControlTheta))
 <BR><BR>[Stack]<UL><LI>Max Depth = 56<LI>Call Chain = GetRuntimeFocControlTheta &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 </UL>
 <BR>[Called By]<UL><LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 <LI><a href="#[122]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneControlTheta
@@ -3752,7 +3752,7 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[136]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[11a]"></a>ResetControlLoops</STRONG> (Thumb, 142 bytes, Stack size 8 bytes, main.o(i.ResetControlLoops))
+<P><STRONG><a name="[11a]"></a>ResetControlLoops</STRONG> (Thumb, 140 bytes, Stack size 8 bytes, main.o(i.ResetControlLoops))
 <BR><BR>[Stack]<UL><LI>Max Depth = 8<LI>Call Chain = ResetControlLoops
 </UL>
 <BR>[Calls]<UL><LI><a href="#[fb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetDebugAveraging
@@ -3812,7 +3812,7 @@ Local Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 264 + Unknown Stack Size
 <LI>Call Chain = RunFocCurrentFeedbackMapTestLoop &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[145]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredCurrentsForTheta
 <LI><a href="#[1ee]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunCurrentLoopForTheta
 <LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ResetControlLoops
@@ -3828,11 +3828,11 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 </UL>
 
-<P><STRONG><a name="[142]"></a>RunFocLoop</STRONG> (Thumb, 1592 bytes, Stack size 80 bytes, main.o(i.RunFocLoop))
+<P><STRONG><a name="[142]"></a>RunFocLoop</STRONG> (Thumb, 1576 bytes, Stack size 80 bytes, main.o(i.RunFocLoop))
 <BR><BR>[Stack]<UL><LI>Max Depth = 344 + Unknown Stack Size
 <LI>Call Chain = RunFocLoop &rArr; RunFocRotatingThetaVoltageTestLoop &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[1f8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdatePositionSetpointVelocityRpm
 <LI><a href="#[1ef]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ShouldHoldCurrentLoopAtZero
 <LI><a href="#[1f5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocRotatingThetaVoltageTestLoop
@@ -3868,7 +3868,7 @@ Local Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 248 + Unknown Stack Size
 <LI>Call Chain = RunFocRotatingThetaTestLoop &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[145]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredCurrentsForTheta
 <LI><a href="#[1ee]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunCurrentLoopForTheta
 <LI><a href="#[1f2]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;LoadDiagnosticCurrentPiGains
@@ -3885,7 +3885,7 @@ Local Symbols
 <BR><BR>[Stack]<UL><LI>Max Depth = 264 + Unknown Stack Size
 <LI>Call Chain = RunFocRotatingThetaVoltageTestLoop &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[145]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;UpdateMeasuredCurrentsForTheta
 <LI><a href="#[fa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetEffectiveCurrentLoopFrequency
 <LI><a href="#[ff]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ClampFloat
@@ -3979,10 +3979,10 @@ Local Symbols
 <LI><a href="#[136]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[13e]"></a>UpdateMeasuredSpeedAndTheta</STRONG> (Thumb, 478 bytes, Stack size 40 bytes, main.o(i.UpdateMeasuredSpeedAndTheta))
-<BR><BR>[Stack]<UL><LI>Max Depth = 96<LI>Call Chain = UpdateMeasuredSpeedAndTheta &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
+<P><STRONG><a name="[13e]"></a>UpdateMeasuredSpeedAndTheta</STRONG> (Thumb, 474 bytes, Stack size 32 bytes, main.o(i.UpdateMeasuredSpeedAndTheta))
+<BR><BR>[Stack]<UL><LI>Max Depth = 88<LI>Call Chain = UpdateMeasuredSpeedAndTheta &rArr; WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
+<BR>[Calls]<UL><LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapAngle
 <LI><a href="#[fa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetEffectiveCurrentLoopFrequency
 <LI><a href="#[ff]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;ClampFloat
 <LI><a href="#[1e7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_fmaxf
@@ -3991,8 +3991,8 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[136]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[1f8]"></a>UpdatePositionSetpointVelocityRpm</STRONG> (Thumb, 200 bytes, Stack size 24 bytes, main.o(i.UpdatePositionSetpointVelocityRpm))
-<BR><BR>[Stack]<UL><LI>Max Depth = 80<LI>Call Chain = UpdatePositionSetpointVelocityRpm &rArr; WrapPositionErrorCounts &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
+<P><STRONG><a name="[1f8]"></a>UpdatePositionSetpointVelocityRpm</STRONG> (Thumb, 204 bytes, Stack size 32 bytes, main.o(i.UpdatePositionSetpointVelocityRpm))
+<BR><BR>[Stack]<UL><LI>Max Depth = 88<LI>Call Chain = UpdatePositionSetpointVelocityRpm &rArr; WrapPositionErrorCounts &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[128]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;WrapPositionErrorCounts
 <LI><a href="#[127]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetConfiguredPositionTrackingMode
@@ -4005,7 +4005,7 @@ Local Symbols
 <BR><BR>[Called By]<UL><LI><a href="#[136]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_EXTI_Callback
 </UL>
 
-<P><STRONG><a name="[125]"></a>WrapAngle</STRONG> (Thumb, 38 bytes, Stack size 16 bytes, main.o(i.WrapAngle))
+<P><STRONG><a name="[124]"></a>WrapAngle</STRONG> (Thumb, 38 bytes, Stack size 16 bytes, main.o(i.WrapAngle))
 <BR><BR>[Stack]<UL><LI>Max Depth = 56<LI>Call Chain = WrapAngle &rArr; __hardfp_fmodf &rArr; _frem &rArr; __fpl_fnaninf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[121]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__hardfp_fmodf
@@ -4016,7 +4016,7 @@ Local Symbols
 <LI><a href="#[142]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocLoop
 <LI><a href="#[1f1]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunFocCurrentFeedbackMapTestLoop
 <LI><a href="#[123]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetRuntimeFocControlTheta
-<LI><a href="#[124]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
+<LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneEncoderMechanicalAngle
 <LI><a href="#[122]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetAutoTuneControlTheta
 </UL>
 

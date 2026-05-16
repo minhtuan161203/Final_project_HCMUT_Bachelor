@@ -83,7 +83,6 @@ SRAM_HandleTypeDef hsram2;
 float DriverParameter[DRIVER_PARAMETER_COUNT];
 float MotorParameter[MOTOR_PARAMETER_COUNT];
 uint16_t FaultCode = NO_ERROR;
-float globalcontrolthetatune = -0.05f;
 uint8_t system_on = 0;
 volatile float gTargetSpeedRpm = 0.0f;
 volatile uint8_t gRunMode = RUN_MODE_FOC;
@@ -530,7 +529,7 @@ static float GetRuntimeFocControlTheta(void)
 
 static float GetIdSquareLockedControlTheta(void)
 {
-	return WrapAngle(-90.0f + globalcontrolthetatune);
+	return WrapAngle((DEFAULT_RUNTIME_FOC_FRAME_DEG * PI) / 180.0f);
 }
 
 static float GetAutoTuneEncoderMechanicalAngle(void)
