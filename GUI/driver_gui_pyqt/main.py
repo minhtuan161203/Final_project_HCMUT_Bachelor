@@ -121,6 +121,7 @@ AUTO_MONITOR_INTERVAL_MS = 25
 SPEED_TEST_TIMER_INTERVAL_MS = 20
 MOTOR_AUTOTUNE_MECH_MODE_LEGACY = 0
 MOTOR_AUTOTUNE_MECH_MODE_LOADED = 1
+ADC_OFFSET_IDEAL = 0x7FFF
 SPEED_TEST_TRAPEZOID_UPDATE_INTERVAL_MS = 20
 SPEED_TEST_PROFILE_STEP = "step_response"
 SPEED_TEST_PROFILE_REVERSE = "reversing"
@@ -136,12 +137,6 @@ POSITION_TEST_SETTLE_SPEED_TOLERANCE_RPM = 3.0
 POSITION_TARGET_COUNT_GUI_LIMIT = 1.0e15
 DEFAULT_CTUNING_CURRENT_KP = 5.0
 DEFAULT_CTUNING_CURRENT_KI = 10.0
-DEFAULT_SPEED_METRIC_SETTLE_BAND_RATIO = 0.05
-DEFAULT_SPEED_METRIC_SETTLE_BAND_MIN_RPM = 5.0
-DEFAULT_SPEED_METRIC_SETTLE_HOLD_S = 0.20
-DEFAULT_POSITION_METRIC_SETTLE_BAND_RATIO = 0.05
-DEFAULT_POSITION_METRIC_SETTLE_BAND_MIN_DEG = 0.10
-DEFAULT_POSITION_METRIC_SETTLE_HOLD_S = 0.20
 
 TREND_SERIES_META = {
     "phase_u": {"label": "Iu", "unit": "A", "color": "#1f77b4"},
@@ -512,14 +507,12 @@ class ChartReportCapture:
 
 @dataclass(slots=True)
 class MetricSummary:
-    avg_settling_time_s: float | None = None
-    max_settling_time_s: float | None = None
     mean_error: float | None = None
     mean_abs_error: float | None = None
     std_dev: float | None = None
     mean_abs_percent: float | None = None
-    settled_segments: int = 0
-    total_segments: int = 0
+    sample_count: int = 0
+    percent_sample_count: int = 0
 
 
 @dataclass(slots=True)
@@ -720,9 +713,6 @@ def _window_metric_summary(
     actual_values: list[float],
     error_values: list[float],
     *,
-    settle_band_ratio: float,
-    settle_band_min: float,
-    settle_hold_s: float,
     command_epsilon: float,
 ) -> MetricSummary:
     summary = MetricSummary()
@@ -737,6 +727,7 @@ def _window_metric_summary(
     command_values = command_values[:usable_count]
     actual_values = actual_values[:usable_count]
     error_values = error_values[:usable_count]
+    summary.sample_count = usable_count
 
     summary.mean_error = _mean(error_values)
     summary.mean_abs_error = _mean([abs(value) for value in error_values])
@@ -747,52 +738,8 @@ def _window_metric_summary(
         for command_value, error_value in zip(command_values, error_values)
         if abs(command_value) >= command_epsilon
     ]
+    summary.percent_sample_count = len(percent_errors)
     summary.mean_abs_percent = _mean(percent_errors)
-
-    command_span = max(command_values) - min(command_values)
-    if command_span < command_epsilon:
-        return summary
-
-    step_threshold = max(command_epsilon, command_span * 0.05)
-    step_index: int | None = None
-    for index in range(1, usable_count):
-        if abs(command_values[index] - command_values[index - 1]) >= step_threshold:
-            step_index = index
-
-    if step_index is None or step_index >= usable_count:
-        return summary
-
-    target_value = command_values[step_index]
-    previous_value = command_values[max(0, step_index - 1)]
-    step_magnitude = max(abs(target_value - previous_value), command_epsilon)
-    tolerance_value = max(settle_band_min, step_magnitude * settle_band_ratio)
-    hold_s = max(0.0, settle_hold_s)
-
-    for index in range(step_index, usable_count):
-        if abs(actual_values[index] - target_value) > tolerance_value:
-            continue
-        settle_start_s = times[index]
-        settle_end_s = settle_start_s + hold_s
-        if times[-1] < settle_end_s:
-            break
-
-        stable = True
-        probe_index = index
-        while probe_index < usable_count and times[probe_index] <= settle_end_s:
-            if abs(actual_values[probe_index] - target_value) > tolerance_value:
-                stable = False
-                break
-            probe_index += 1
-
-        if stable:
-            settling_time_s = settle_end_s - times[step_index]
-            summary.avg_settling_time_s = settling_time_s
-            summary.max_settling_time_s = settling_time_s
-            summary.total_segments = 1
-            summary.settled_segments = 1
-            return summary
-
-    summary.total_segments = 1
     return summary
 
 
@@ -2956,27 +2903,74 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         layout.addLayout(toolbar)
 
         self._stats_text = ""
-        self.stats_text_edit = QtWidgets.QPlainTextEdit()
-        self.stats_text_edit.setReadOnly(True)
-        self.stats_text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
-        self.stats_text_edit.setMinimumHeight(92)
-        self.stats_text_edit.setMaximumHeight(118)
-        self.stats_text_edit.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        self.stats_text_edit.setStyleSheet(
-            "color: #e2e8f0; background-color: #1f2937; border: 1px solid #334155; "
-            "border-radius: 6px; padding: 8px; font-size: 13px;"
-        )
+        self._stats_value_labels: dict[str, QtWidgets.QLabel] = {}
         self.copy_stats_button = QtWidgets.QPushButton("Copy Stats")
         self.copy_stats_button.setEnabled(False)
         self.copy_stats_button.setToolTip("Copy the current window statistics to the clipboard.")
-        stats_layout = QtWidgets.QHBoxLayout()
-        stats_layout.addWidget(self.stats_text_edit, 1)
-        stats_layout.addWidget(self.copy_stats_button, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+
+        self.stats_card = QtWidgets.QFrame()
+        self.stats_card.setStyleSheet(
+            "QFrame {"
+            "background-color: #1f2937; border: 1px solid #334155; border-radius: 8px;"
+            "}"
+            "QLabel[statsHeading=\"true\"] { color: #e5e7eb; font-weight: 600; }"
+            "QLabel[statsCaption=\"true\"] { color: #94a3b8; font-size: 11px; }"
+            "QLabel[statsValue=\"true\"] { color: #f8fafc; font-size: 14px; font-weight: 600; }"
+        )
+        stats_card_layout = QtWidgets.QVBoxLayout(self.stats_card)
+        stats_card_layout.setContentsMargins(12, 10, 12, 10)
+        stats_card_layout.setSpacing(10)
+
+        stats_header_layout = QtWidgets.QHBoxLayout()
+        self.stats_heading_label = QtWidgets.QLabel("Window Statistics")
+        self.stats_heading_label.setProperty("statsHeading", True)
+        self.stats_context_label = QtWidgets.QLabel("Waiting for monitor data...")
+        self.stats_context_label.setProperty("statsCaption", True)
+        self.stats_context_label.setWordWrap(True)
+        stats_header_layout.addWidget(self.stats_heading_label)
+        stats_header_layout.addStretch(1)
+        stats_header_layout.addWidget(self.copy_stats_button, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        stats_card_layout.addLayout(stats_header_layout)
+        stats_card_layout.addWidget(self.stats_context_label)
+
+        metrics_grid = QtWidgets.QGridLayout()
+        metrics_grid.setHorizontalSpacing(18)
+        metrics_grid.setVerticalSpacing(10)
+
+        stats_metric_specs = [
+            ("sample_count", "Samples"),
+            ("mean_error", "Mean Error"),
+            ("mean_abs_error", "Mean |Error|"),
+            ("percent_sample_count", "Percent Basis"),
+            ("std_dev", "Std Dev"),
+            ("mean_abs_percent", "Mean |Error| %"),
+        ]
+        for index, (key, label_text) in enumerate(stats_metric_specs):
+            metric_widget = QtWidgets.QWidget()
+            metric_layout = QtWidgets.QVBoxLayout(metric_widget)
+            metric_layout.setContentsMargins(0, 0, 0, 0)
+            metric_layout.setSpacing(2)
+            caption_label = QtWidgets.QLabel(label_text)
+            caption_label.setProperty("statsCaption", True)
+            value_label = QtWidgets.QLabel("-")
+            value_label.setProperty("statsValue", True)
+            value_label.setTextInteractionFlags(
+                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            metric_layout.addWidget(caption_label)
+            metric_layout.addWidget(value_label)
+            self._stats_value_labels[key] = value_label
+            metrics_grid.addWidget(metric_widget, index // 3, index % 3)
+
+        self.stats_footer_label = QtWidgets.QLabel("")
+        self.stats_footer_label.setProperty("statsCaption", True)
+        self.stats_footer_label.setWordWrap(True)
+
+        stats_card_layout.addLayout(metrics_grid)
+        stats_card_layout.addWidget(self.stats_footer_label)
+
         if stats_mode is not None:
-            layout.addLayout(stats_layout)
+            layout.addWidget(self.stats_card)
 
         self.plot_view = ScadaTrendView(title, trend_buffer, series_keys, self)
         layout.addWidget(self.plot_view, 1)
@@ -3014,7 +3008,6 @@ class ScadaTrendPanel(QtWidgets.QWidget):
 
     def _set_stats_text(self, text: str) -> None:
         self._stats_text = str(text)
-        self.stats_text_edit.setPlainText(self._stats_text)
         self.copy_stats_button.setEnabled(bool(self._stats_text.strip()))
 
     def _copy_stats_to_clipboard(self) -> None:
@@ -3022,11 +3015,64 @@ class ScadaTrendPanel(QtWidgets.QWidget):
             return
         QtWidgets.QApplication.clipboard().setText(self._stats_text)
 
+    def _stats_format_value(
+        self,
+        value: float | int | None,
+        suffix: str = "",
+        *,
+        decimals: int = 3,
+    ) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, int):
+            return f"{value:d}{suffix}"
+        return f"{value:.{decimals}f}{suffix}"
+
+    def _set_stats_waiting(self, message: str) -> None:
+        self.stats_context_label.setText(message)
+        self.stats_footer_label.setText("")
+        for label in self._stats_value_labels.values():
+            label.setText("-")
+        self._set_stats_text("")
+
+    def _update_stats_card(
+        self,
+        summary: MetricSummary,
+        *,
+        unit: str,
+        command_epsilon: float,
+    ) -> None:
+        self.stats_context_label.setText(
+            f"Computed over the visible {self.plot_view._time_window_s:.0f} s window."
+        )
+        self._stats_value_labels["sample_count"].setText(
+            self._stats_format_value(summary.sample_count)
+        )
+        self._stats_value_labels["percent_sample_count"].setText(
+            self._stats_format_value(summary.percent_sample_count)
+        )
+        self._stats_value_labels["mean_error"].setText(
+            self._stats_format_value(summary.mean_error, f" {unit}")
+        )
+        self._stats_value_labels["mean_abs_error"].setText(
+            self._stats_format_value(summary.mean_abs_error, f" {unit}")
+        )
+        self._stats_value_labels["std_dev"].setText(
+            self._stats_format_value(summary.std_dev, f" {unit}")
+        )
+        self._stats_value_labels["mean_abs_percent"].setText(
+            self._stats_format_value(summary.mean_abs_percent, " %", decimals=2)
+        )
+        self.stats_footer_label.setText(
+            f"Percent error uses only samples where |command| >= {command_epsilon:.3f} {unit}."
+        )
+
     def _render_stat_text(
         self,
         summary: MetricSummary,
         *,
         unit: str,
+        command_epsilon: float,
         percent_suffix: str = "%",
     ) -> str:
         def format_value(value: float | None, suffix: str, decimals: int = 3) -> str:
@@ -3034,14 +3080,11 @@ class ScadaTrendPanel(QtWidgets.QWidget):
                 return "-"
             return f"{value:.{decimals}f} {suffix}".strip()
 
-        settling_text = (
-            format_value(summary.avg_settling_time_s, "s", 3)
-            if summary.settled_segments > 0
-            else "Not settled in window"
-        )
         return (
             "Window Stats\n"
-            f"Settling: {settling_text}\n"
+            f"Window: {self.plot_view._time_window_s:.1f} s\n"
+            f"Samples: {summary.sample_count:d}\n"
+            f"Percent basis: {summary.percent_sample_count:d} samples (|command| >= {command_epsilon:.3f} {unit})\n"
             f"Mean error: {format_value(summary.mean_error, unit)}\n"
             f"Mean |error|: {format_value(summary.mean_abs_error, unit)}\n"
             f"Std dev: {format_value(summary.std_dev, unit)}\n"
@@ -3054,29 +3097,35 @@ class ScadaTrendPanel(QtWidgets.QWidget):
 
         render_times = list(self.plot_view._render_times)
         if not render_times:
-            self._set_stats_text("Window Stats\nWaiting for monitor data...")
+            self._set_stats_waiting("Waiting for monitor data...")
             return
 
         start_time_s = self.plot_view._render_anchor_s - self.plot_view._time_window_s
         end_time_s = self.plot_view._render_anchor_s
 
+        command_epsilon = 0.0
         if self._stats_mode == "speed_error":
             times, values = self._trend_buffer.windowed_series(
                 ["cmd_speed", "act_speed", "speed_error"],
                 start_time_s,
                 end_time_s,
             )
+            command_epsilon = 1.0
             summary = _window_metric_summary(
                 times,
                 values["cmd_speed"],
                 values["act_speed"],
                 values["speed_error"],
-                settle_band_ratio=DEFAULT_SPEED_METRIC_SETTLE_BAND_RATIO,
-                settle_band_min=DEFAULT_SPEED_METRIC_SETTLE_BAND_MIN_RPM,
-                settle_hold_s=DEFAULT_SPEED_METRIC_SETTLE_HOLD_S,
-                command_epsilon=1.0,
+                command_epsilon=command_epsilon,
             )
-            self._set_stats_text(self._render_stat_text(summary, unit="rpm"))
+            self._update_stats_card(summary, unit="rpm", command_epsilon=command_epsilon)
+            self._set_stats_text(
+                self._render_stat_text(
+                    summary,
+                    unit="rpm",
+                    command_epsilon=command_epsilon,
+                )
+            )
             return
 
         if self._stats_mode == "position_error":
@@ -3085,20 +3134,25 @@ class ScadaTrendPanel(QtWidgets.QWidget):
                 start_time_s,
                 end_time_s,
             )
+            command_epsilon = 0.1
             summary = _window_metric_summary(
                 times,
                 values["cmd_position_deg"],
                 values["act_position_deg"],
                 values["position_error_deg"],
-                settle_band_ratio=DEFAULT_POSITION_METRIC_SETTLE_BAND_RATIO,
-                settle_band_min=DEFAULT_POSITION_METRIC_SETTLE_BAND_MIN_DEG,
-                settle_hold_s=DEFAULT_POSITION_METRIC_SETTLE_HOLD_S,
-                command_epsilon=0.1,
+                command_epsilon=command_epsilon,
             )
-            self._set_stats_text(self._render_stat_text(summary, unit="deg"))
+            self._update_stats_card(summary, unit="deg", command_epsilon=command_epsilon)
+            self._set_stats_text(
+                self._render_stat_text(
+                    summary,
+                    unit="deg",
+                    command_epsilon=command_epsilon,
+                )
+            )
             return
 
-        self._set_stats_text("")
+        self._set_stats_waiting("Statistics are not configured for this chart.")
 
 
 class ScopeCaptureView(QtWidgets.QWidget):
@@ -4415,8 +4469,8 @@ class MainWindow(QtWidgets.QMainWindow):
         electrical_fields = [
             ("vdc", "Vdc"),
             ("temperature", "Temp"),
-            ("adc_offset_ia", "ADC Offset Ia"),
-            ("adc_offset_ib", "ADC Offset Ib"),
+            ("adc_offset_ia", "ADC Zero Ia"),
+            ("adc_offset_ib", "ADC Zero Ib"),
         ]
         alignment_fields = [
             ("calibration_status", "Cal Status"),
@@ -4560,7 +4614,7 @@ class MainWindow(QtWidgets.QMainWindow):
         clear_trend_button = QtWidgets.QPushButton("Clear History")
         clear_trend_button.clicked.connect(self._clear_trend_history)
         trend_hint = QtWidgets.QLabel(
-            "Use Pause to inspect data, Auto-scale Y to freeze the range, and hover to read point values. The Speed Error and Position Error tabs now show settling time plus windowed mean/std/% error statistics."
+            "Use Pause to inspect data, Auto-scale Y to freeze the range, and hover to read point values. The Speed Error and Position Error tabs show windowed error statistics across the visible time range."
         )
         trend_hint.setWordWrap(True)
         toolbar.addWidget(clear_trend_button)
@@ -4899,8 +4953,32 @@ class MainWindow(QtWidgets.QMainWindow):
         init_layout.addWidget(self.autotune_init_table)
         init_layout.addLayout(init_toolbar)
 
+        def make_autotune_pair_row(
+            left_label: str,
+            left_widget: QtWidgets.QWidget,
+            right_label: str,
+            right_widget: QtWidgets.QWidget,
+        ) -> QtWidgets.QWidget:
+            row_widget = QtWidgets.QWidget()
+            row_layout = QtWidgets.QGridLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setHorizontalSpacing(8)
+            row_layout.setVerticalSpacing(0)
+            left_caption = QtWidgets.QLabel(left_label)
+            right_caption = QtWidgets.QLabel(right_label)
+            left_caption.setStyleSheet("color: #9fb3c8;")
+            right_caption.setStyleSheet("color: #9fb3c8;")
+            row_layout.addWidget(left_caption, 0, 0)
+            row_layout.addWidget(left_widget, 0, 1)
+            row_layout.addWidget(right_caption, 0, 2)
+            row_layout.addWidget(right_widget, 0, 3)
+            row_layout.setColumnStretch(1, 1)
+            row_layout.setColumnStretch(3, 1)
+            return row_widget
+
         config_group = QtWidgets.QGroupBox("PMSM Auto-Tuning")
-        config_layout = QtWidgets.QGridLayout(config_group)
+        config_layout = QtWidgets.QVBoxLayout(config_group)
+        config_layout.setSpacing(12)
 
         self.autotune_rs_low_spin = QtWidgets.QDoubleSpinBox()
         self.autotune_rs_low_spin.setRange(0.05, 20.0)
@@ -5039,34 +5117,83 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_result_status_label = QtWidgets.QLabel("Idle")
         self.autotune_result_status_label.setStyleSheet("font-weight: 600;")
 
-        config_layout.addWidget(QtWidgets.QLabel("Rs Low Current"), 0, 0)
-        config_layout.addWidget(self.autotune_rs_low_spin, 0, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Rs High Current"), 0, 2)
-        config_layout.addWidget(self.autotune_rs_high_spin, 0, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Ls Sine Voltage"), 1, 0)
-        config_layout.addWidget(self.autotune_ls_voltage_spin, 1, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Ls Frequency"), 1, 2)
-        config_layout.addWidget(self.autotune_ls_frequency_spin, 1, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Flux Frequency"), 2, 0)
-        config_layout.addWidget(self.autotune_flux_frequency_spin, 2, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Flux Voltage"), 2, 2)
-        config_layout.addWidget(self.autotune_flux_voltage_spin, 2, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Current Bandwidth"), 3, 0)
-        config_layout.addWidget(self.autotune_current_bw_spin, 3, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Speed Bandwidth"), 3, 2)
-        config_layout.addWidget(self.autotune_speed_bw_spin, 3, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Position Bandwidth"), 4, 0)
-        config_layout.addWidget(self.autotune_position_bw_spin, 4, 1)
-        config_layout.addWidget(QtWidgets.QLabel("Mechanical Mode"), 4, 2)
-        config_layout.addWidget(self.autotune_mech_mode_combo, 4, 3)
-        config_layout.addWidget(QtWidgets.QLabel("Mechanical Iq Limit"), 5, 0)
-        config_layout.addWidget(self.autotune_mech_iq_spin, 5, 1)
-        config_layout.addWidget(self.autotune_loaded_mode_note, 6, 0, 1, 4)
-        config_layout.addWidget(self.autotune_start_button, 7, 0)
-        config_layout.addWidget(self.autotune_stop_button, 7, 1)
-        config_layout.addWidget(self.autotune_apply_button, 7, 2, 1, 2)
-        config_layout.addWidget(QtWidgets.QLabel("Progress"), 8, 0)
-        config_layout.addWidget(self.autotune_progress_bar, 8, 1, 1, 3)
+        config_intro = QtWidgets.QLabel(
+            "Set the identification levels here, then run the electrical stages first and the mechanical stage that matches the assembly."
+        )
+        config_intro.setWordWrap(True)
+        config_intro.setStyleSheet("color: #9aa0a6;")
+        config_layout.addWidget(config_intro)
+
+        electrical_group = QtWidgets.QGroupBox("Electrical Identification")
+        electrical_layout = QtWidgets.QFormLayout(electrical_group)
+        electrical_layout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        electrical_layout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
+        electrical_layout.addRow(
+            "Rs Window",
+            make_autotune_pair_row(
+                "Low",
+                self.autotune_rs_low_spin,
+                "High",
+                self.autotune_rs_high_spin,
+            ),
+        )
+        electrical_layout.addRow(
+            "Ls Sweep",
+            make_autotune_pair_row(
+                "Voltage",
+                self.autotune_ls_voltage_spin,
+                "Frequency",
+                self.autotune_ls_frequency_spin,
+            ),
+        )
+        electrical_layout.addRow(
+            "Flux Spin",
+            make_autotune_pair_row(
+                "Frequency",
+                self.autotune_flux_frequency_spin,
+                "Voltage",
+                self.autotune_flux_voltage_spin,
+            ),
+        )
+
+        controller_group = QtWidgets.QGroupBox("Loop Targets")
+        controller_layout = QtWidgets.QFormLayout(controller_group)
+        controller_layout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        controller_layout.addRow("Current Bandwidth", self.autotune_current_bw_spin)
+        controller_layout.addRow("Speed Bandwidth", self.autotune_speed_bw_spin)
+        controller_layout.addRow("Position Bandwidth", self.autotune_position_bw_spin)
+
+        mechanical_group = QtWidgets.QGroupBox("Mechanical Identification")
+        mechanical_layout = QtWidgets.QFormLayout(mechanical_group)
+        mechanical_layout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        mechanical_layout.addRow("Mechanical Mode", self.autotune_mech_mode_combo)
+        mechanical_layout.addRow("Mechanical Iq Limit", self.autotune_mech_iq_spin)
+        mechanical_layout.addRow("", self.autotune_loaded_mode_note)
+
+        settings_split_layout = QtWidgets.QGridLayout()
+        settings_split_layout.setHorizontalSpacing(12)
+        settings_split_layout.setVerticalSpacing(12)
+        settings_split_layout.addWidget(electrical_group, 0, 0, 1, 2)
+        settings_split_layout.addWidget(controller_group, 1, 0)
+        settings_split_layout.addWidget(mechanical_group, 1, 1)
+        settings_split_layout.setColumnStretch(0, 1)
+        settings_split_layout.setColumnStretch(1, 1)
+        config_layout.addLayout(settings_split_layout)
+
+        run_group = QtWidgets.QGroupBox("Run Controls")
+        run_layout = QtWidgets.QVBoxLayout(run_group)
+        run_button_row = QtWidgets.QHBoxLayout()
+        run_button_row.addWidget(self.autotune_start_button)
+        run_button_row.addWidget(self.autotune_stop_button)
+        run_button_row.addWidget(self.autotune_apply_button, 1)
+        run_layout.addLayout(run_button_row)
+
+        progress_row = QtWidgets.QGridLayout()
+        progress_row.addWidget(QtWidgets.QLabel("Progress"), 0, 0)
+        progress_row.addWidget(self.autotune_progress_bar, 0, 1)
+        progress_row.setColumnStretch(1, 1)
+        run_layout.addLayout(progress_row)
+        config_layout.addWidget(run_group)
 
         results_group = QtWidgets.QGroupBox("Measured Results")
         results_layout = QtWidgets.QVBoxLayout(results_group)
@@ -10119,15 +10246,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _adc_offset_text(self, raw_offset: int) -> str:
         value = int(raw_offset) & 0xFFFF
-        if value == 0x7FFF:
-            return "0x7FFF (default)"
-        return f"{value:d}"
+        delta = value - ADC_OFFSET_IDEAL
+        return f"{delta:+d} cnt vs 0x7FFF" if delta != 0 else "0 cnt vs 0x7FFF"
 
     def _adc_offset_tooltip(self, raw_offset: int) -> str:
         value = int(raw_offset) & 0xFFFF
-        if value == 0x7FFF:
-            return "Default sentinel. Current-sensor offset calibration has not completed yet."
-        return f"Raw ADC zero-current offset: {value:d} (0x{value:04X})"
+        delta = value - ADC_OFFSET_IDEAL
+        if value == ADC_OFFSET_IDEAL:
+            return (
+                "Current-sensor zero is sitting exactly at the ideal midpoint 0x7FFF "
+                f"({ADC_OFFSET_IDEAL:d} counts). This may also be the default sentinel before calibration completes."
+            )
+        return (
+            f"Raw ADC zero-current offset: {value:d} (0x{value:04X}). "
+            f"Delta from the ideal midpoint 0x7FFF: {delta:+d} counts."
+        )
 
     def _calibration_status_text(self, status: int) -> str:
         code = int(status)
@@ -12235,7 +12368,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Servo: {'ON' if snapshot.enable_run else 'OFF'}",
             f"Fault: {format_fault_text(snapshot.fault_occurred)}",
             f"Timing: {self._timing_mode_text(snapshot.control_timing_mode)} | Control {snapshot.control_loop_frequency_hz:.1f} Hz | Speed {snapshot.speed_loop_frequency_hz:.1f} Hz",
-            f"ADC Offset Ia / Ib: {self._adc_offset_text(snapshot.adc_offset_ia)} / {self._adc_offset_text(snapshot.adc_offset_ib)}",
+            f"ADC Zero Ia / Ib: {self._adc_offset_text(snapshot.adc_offset_ia)} / {self._adc_offset_text(snapshot.adc_offset_ib)}",
             f"Calibration Status: {self._calibration_status_text(snapshot.calibration_status)}",
             "",
             "[Encoder Alignment]",
@@ -12351,8 +12484,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self._current_loop_display_text(self._active_control_loop_hz),
         )
         self._set_monitor_value("calibration_status", "Idle")
-        self._set_monitor_value("adc_offset_ia", "0x7FFF (default)")
-        self._set_monitor_value("adc_offset_ib", "0x7FFF (default)")
+        self._set_monitor_value(
+            "adc_offset_ia",
+            self._adc_offset_text(ADC_OFFSET_IDEAL),
+            self._adc_offset_tooltip(ADC_OFFSET_IDEAL),
+        )
+        self._set_monitor_value(
+            "adc_offset_ib",
+            self._adc_offset_text(ADC_OFFSET_IDEAL),
+            self._adc_offset_tooltip(ADC_OFFSET_IDEAL),
+        )
         self._set_monitor_value("alignment_status", "Idle")
         self._set_monitor_value("alignment_offset", "0 counts")
         self._set_monitor_value("alignment_save", "No pending save")
