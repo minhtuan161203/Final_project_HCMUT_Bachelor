@@ -377,6 +377,17 @@ class ScopeCaptureState:
 
 
 @dataclass(slots=True)
+class ScopeMetricMark:
+    series_label: str
+    sample_index: int
+    title: str
+    detail: str
+    color: str
+    offset_dx: float = 16.0
+    offset_dy: float = -28.0
+
+
+@dataclass(slots=True)
 class AlarmHistoryEntry:
     timestamp_text: str
     severity_text: str
@@ -3168,6 +3179,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._auto_scale = True
         self._frozen_ranges: dict[str, tuple[float, float]] = {}
         self._status_text = "Waiting for capture..."
+        self._metric_marks: list[ScopeMetricMark] = []
         self._report_mode = False
         self._report_font_point_size = 14
         self._stack_units = False
@@ -3186,7 +3198,16 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._hover_index = None
         self._frozen_ranges = {}
         self._status_text = "Waiting for capture..."
+        self._metric_marks = []
         self._update_preferred_height()
+        self.update()
+
+    def clear_metric_marks(self) -> None:
+        self._metric_marks = []
+        self.update()
+
+    def set_metric_marks(self, marks: list[ScopeMetricMark]) -> None:
+        self._metric_marks = list(marks)
         self.update()
 
     def set_auto_scale(self, enabled: bool) -> None:
@@ -3563,6 +3584,139 @@ class ScopeCaptureView(QtWidgets.QWidget):
             endpoint_map[series_def["label"]] = QtCore.QPointF(x * scale_factor, y * scale_factor)
         return endpoint_map
 
+    def _series_index_for_label(self, label: str) -> int | None:
+        for index, series_def in enumerate(self._series_defs):
+            if str(series_def.get("label", "")) == str(label):
+                return index
+        return None
+
+    def _sample_point_for_series(
+        self,
+        series_index: int,
+        sample_index: int,
+        axis_ranges: dict[str, tuple[float, float]],
+        *,
+        panel_layouts: list[dict[str, object]] | None = None,
+    ) -> QtCore.QPointF | None:
+        if not (0 <= series_index < len(self._series_data)):
+            return None
+        series = self._series_data[series_index]
+        if not series:
+            return None
+        bounded_index = max(0, min(int(sample_index), len(series) - 1))
+        sample_count = len(series)
+        if self._stack_units:
+            if panel_layouts is None:
+                return None
+            plot_rect = self._stacked_plot_rect_for_series(series_index, panel_layouts)
+        else:
+            plot_rect = QtCore.QRectF(self._plot_rect)
+        if plot_rect.isNull() or plot_rect.width() <= 0.0 or plot_rect.height() <= 0.0:
+            return None
+        ratio = bounded_index / max(sample_count - 1, 1)
+        x = plot_rect.left() + plot_rect.width() * ratio
+        y = self._series_y_position(series_index, series[bounded_index], plot_rect, axis_ranges)
+        return QtCore.QPointF(x, y)
+
+    def _draw_metric_marks(
+        self,
+        painter: QtGui.QPainter,
+        colors: dict[str, QtGui.QColor],
+        axis_ranges: dict[str, tuple[float, float]],
+        *,
+        panel_layouts: list[dict[str, object]] | None = None,
+    ) -> None:
+        if not self._metric_marks:
+            return
+
+        caption_font = self._tick_font()
+        title_font = QtGui.QFont(caption_font)
+        title_font.setBold(True)
+        scale = self._render_scale()
+        viewport_rect = QtCore.QRectF(self.rect().adjusted(8, 8, -8, -8))
+
+        for mark in self._metric_marks:
+            series_index = self._series_index_for_label(mark.series_label)
+            if series_index is None:
+                continue
+            point = self._sample_point_for_series(
+                series_index,
+                mark.sample_index,
+                axis_ranges,
+                panel_layouts=panel_layouts,
+            )
+            if point is None:
+                continue
+
+            marker_color = QtGui.QColor(mark.color)
+            line_end = QtCore.QPointF(
+                point.x() + (mark.offset_dx * scale),
+                point.y() + (mark.offset_dy * scale),
+            )
+
+            painter.save()
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            painter.setPen(QtGui.QPen(marker_color, 1.6))
+            painter.setBrush(QtGui.QBrush(marker_color))
+            painter.drawEllipse(point, 4.0 * scale, 4.0 * scale)
+            painter.drawLine(point, line_end)
+
+            title_metrics = QtGui.QFontMetrics(title_font)
+            detail_metrics = QtGui.QFontMetrics(caption_font)
+            title_width = title_metrics.horizontalAdvance(mark.title)
+            detail_width = detail_metrics.horizontalAdvance(mark.detail)
+            bubble_width = max(title_width, detail_width) + int(18 * scale)
+            bubble_height = title_metrics.height() + detail_metrics.height() + int(14 * scale)
+            bubble_left = line_end.x()
+            bubble_top = line_end.y() - bubble_height
+            if mark.offset_dy > 0:
+                bubble_top = line_end.y()
+            if bubble_left + bubble_width > viewport_rect.right():
+                bubble_left = viewport_rect.right() - bubble_width
+            if bubble_left < viewport_rect.left():
+                bubble_left = viewport_rect.left()
+            if bubble_top < viewport_rect.top():
+                bubble_top = viewport_rect.top()
+            if bubble_top + bubble_height > viewport_rect.bottom():
+                bubble_top = viewport_rect.bottom() - bubble_height
+
+            bubble_rect = QtCore.QRectF(
+                bubble_left,
+                bubble_top,
+                bubble_width,
+                bubble_height,
+            )
+            bubble_fill = QtGui.QColor("#ffffff") if self._report_mode else QtGui.QColor("#111827")
+            bubble_text = QtGui.QColor("#000000") if self._report_mode else QtGui.QColor("#f8fafc")
+            painter.setPen(QtGui.QPen(marker_color, 1.2))
+            painter.setBrush(QtGui.QBrush(bubble_fill))
+            painter.drawRoundedRect(bubble_rect, 7.0 * scale, 7.0 * scale)
+
+            painter.setPen(bubble_text)
+            painter.setFont(title_font)
+            painter.drawText(
+                QtCore.QRectF(
+                    bubble_rect.left() + (8 * scale),
+                    bubble_rect.top() + (5 * scale),
+                    bubble_rect.width() - (16 * scale),
+                    title_metrics.height(),
+                ),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                mark.title,
+            )
+            painter.setFont(caption_font)
+            painter.drawText(
+                QtCore.QRectF(
+                    bubble_rect.left() + (8 * scale),
+                    bubble_rect.top() + title_metrics.height() + (6 * scale),
+                    bubble_rect.width() - (16 * scale),
+                    detail_metrics.height() + (4 * scale),
+                ),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                mark.detail,
+            )
+            painter.restore()
+
     def _series_point_map(
         self,
         *,
@@ -3814,6 +3968,8 @@ class ScopeCaptureView(QtWidgets.QWidget):
             painter.setPen(cursor_pen)
             painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
 
+        self._draw_metric_marks(painter, colors, axis_ranges)
+
     def _paint_stacked_charts(
         self,
         painter: QtGui.QPainter,
@@ -3964,6 +4120,13 @@ class ScopeCaptureView(QtWidgets.QWidget):
             for plot_rect in self._plot_rects:
                 x = plot_rect.left() + plot_rect.width() * ratio
                 painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
+
+        self._draw_metric_marks(
+            painter,
+            colors,
+            axis_ranges,
+            panel_layouts=panel_layouts,
+        )
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -5362,9 +5525,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_start_button = QtWidgets.QPushButton("Start Scope Capture")
         self.trace_stop_button = QtWidgets.QPushButton("Stop Scope Capture")
         self.trace_clear_button = QtWidgets.QPushButton("Clear Capture")
+        self.trace_mark_metrics_button = QtWidgets.QPushButton("Mark Metrics")
+        self.trace_clear_metrics_button = QtWidgets.QPushButton("Clear Marks")
+        self.trace_mark_metrics_button.setEnabled(False)
+        self.trace_clear_metrics_button.setEnabled(False)
+        self.trace_mark_metrics_button.setToolTip(
+            "Analyze the frozen trace capture and annotate step metrics directly on the chart."
+        )
+        self.trace_clear_metrics_button.setToolTip(
+            "Remove metric annotations from the current trace capture."
+        )
         self.trace_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
         self.trace_auto_scale_checkbox.setChecked(True)
         self.trace_status_label = QtWidgets.QLabel("Idle")
+        self.trace_status_label.setWordWrap(True)
         self.trace_scope_view = ScopeCaptureView()
         self.trace_scope_view.set_stack_units(True)
         self.trace_scope_scroll = QtWidgets.QScrollArea()
@@ -5393,8 +5567,16 @@ class MainWindow(QtWidgets.QMainWindow):
         control_layout.addWidget(self.trace_stop_button, 4, 1)
         control_layout.addWidget(self.trace_clear_button, 4, 2)
         control_layout.addWidget(self.trace_auto_scale_checkbox, 4, 3)
-        control_layout.addWidget(QtWidgets.QLabel("Status"), 5, 0)
-        control_layout.addWidget(self.trace_status_label, 5, 1, 1, 3)
+        control_layout.addWidget(self.trace_mark_metrics_button, 5, 0)
+        control_layout.addWidget(self.trace_clear_metrics_button, 5, 1)
+        trace_metrics_hint = QtWidgets.QLabel(
+            "Metrics work on frozen captures only. Use Single Shot, or stop a Continuous capture first."
+        )
+        trace_metrics_hint.setWordWrap(True)
+        trace_metrics_hint.setStyleSheet("color: #9aa0a6;")
+        control_layout.addWidget(trace_metrics_hint, 5, 2, 1, 2)
+        control_layout.addWidget(QtWidgets.QLabel("Status"), 6, 0)
+        control_layout.addWidget(self.trace_status_label, 6, 1, 1, 3)
         report_toolbar = QtWidgets.QHBoxLayout()
         self._append_report_controls(
             report_toolbar,
@@ -6701,6 +6883,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_start_button.clicked.connect(self._start_trace_capture)
         self.trace_stop_button.clicked.connect(self._stop_trace_capture)
         self.trace_clear_button.clicked.connect(self._clear_trace_capture)
+        self.trace_mark_metrics_button.clicked.connect(self._mark_trace_metrics)
+        self.trace_clear_metrics_button.clicked.connect(self._clear_trace_metric_marks)
         self.trace_auto_scale_checkbox.toggled.connect(self.trace_scope_view.set_auto_scale)
         self.uerror_start_button.clicked.connect(self._start_uerror_characterization)
         self.uerror_stop_button.clicked.connect(self._stop_uerror_characterization)
@@ -10339,6 +10523,181 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_status_label.setText("Idle")
         if self._active_trace_target == "trace":
             self._active_trace_target = None
+        self._refresh_trace_metric_buttons()
+
+    def _trace_capture_is_frozen(self) -> bool:
+        capture = self._trace_capture
+        return (
+            bool(capture.series_defs)
+            and bool(capture.series_data)
+            and any(len(series) > 0 for series in capture.series_data)
+            and not bool(capture.active)
+        )
+
+    def _refresh_trace_metric_buttons(self) -> None:
+        frozen = self._trace_capture_is_frozen()
+        has_marks = bool(getattr(self.trace_scope_view, "_metric_marks", []))
+        if hasattr(self, "trace_mark_metrics_button"):
+            self.trace_mark_metrics_button.setEnabled(frozen)
+        if hasattr(self, "trace_clear_metrics_button"):
+            self.trace_clear_metrics_button.setEnabled(has_marks)
+
+    def _clear_trace_metric_marks(self) -> None:
+        self.trace_scope_view.clear_metric_marks()
+        if self._trace_capture_is_frozen():
+            self.trace_status_label.setText("Capture ready for metric analysis")
+        self._refresh_trace_metric_buttons()
+
+    @staticmethod
+    def _trace_series_index_by_label(capture: ScopeCaptureState, label: str) -> int | None:
+        for index, series_def in enumerate(capture.series_defs):
+            if str(series_def.get("label", "")) == str(label):
+                return index
+        return None
+
+    def _analyze_trace_speed_metrics(
+        self,
+        capture: ScopeCaptureState,
+    ) -> tuple[list[ScopeMetricMark], str] | tuple[None, str]:
+        cmd_index = self._trace_series_index_by_label(capture, "Cmd Speed")
+        act_index = self._trace_series_index_by_label(capture, "Act Speed")
+        if cmd_index is None or act_index is None:
+            return None, (
+                "Trace metrics currently support captures that include both Cmd Speed and Act Speed. "
+                "Use the Speed Loop or Speed Debug preset."
+            )
+
+        command = list(capture.series_data[cmd_index])
+        actual = list(capture.series_data[act_index])
+        usable_count = min(len(command), len(actual))
+        if usable_count < 12:
+            return None, "Not enough samples were captured to compute speed metrics."
+        command = command[:usable_count]
+        actual = actual[:usable_count]
+
+        command_deltas = [
+            command[index] - command[index - 1]
+            for index in range(1, usable_count)
+        ]
+        if not command_deltas:
+            return None, "Command trace is too short to detect a speed step."
+
+        command_span = max(command) - min(command)
+        step_threshold = max(1.0, abs(command_span) * 0.05)
+        best_step_index: int | None = None
+        best_step_delta = 0.0
+        for index, delta in enumerate(command_deltas, start=1):
+            if abs(delta) < step_threshold:
+                continue
+            if abs(delta) > abs(best_step_delta):
+                best_step_delta = delta
+                best_step_index = index
+
+        if best_step_index is None:
+            return None, (
+                f"No command step larger than {step_threshold:.2f} rpm was found in the captured trace."
+            )
+
+        pre_window = max(5, min(30, best_step_index))
+        tail_window = max(8, min(60, usable_count - best_step_index))
+        initial_command = _mean(command[max(0, best_step_index - pre_window):best_step_index])
+        target_command = _mean(command[max(best_step_index, usable_count - tail_window):usable_count])
+        if initial_command is None or target_command is None:
+            return None, "Could not estimate the pre-step and post-step command levels."
+
+        step_magnitude = target_command - initial_command
+        if abs(step_magnitude) < 1.0:
+            return None, "Detected command step is too small to score trace metrics reliably."
+
+        positive_step = step_magnitude >= 0.0
+        analysis_slice = actual[best_step_index:]
+        if positive_step:
+            peak_local_index = max(range(len(analysis_slice)), key=lambda idx: analysis_slice[idx])
+            peak_value = analysis_slice[peak_local_index]
+            overshoot = max(0.0, peak_value - target_command)
+        else:
+            peak_local_index = min(range(len(analysis_slice)), key=lambda idx: analysis_slice[idx])
+            peak_value = analysis_slice[peak_local_index]
+            overshoot = max(0.0, target_command - peak_value)
+        peak_index = best_step_index + peak_local_index
+        overshoot_percent = (overshoot / max(abs(step_magnitude), 1.0)) * 100.0
+
+        tolerance_rpm = max(1.0, abs(step_magnitude) * 0.02)
+        settle_index: int | None = None
+        for index in range(best_step_index, usable_count):
+            if all(abs(value - target_command) <= tolerance_rpm for value in actual[index:]):
+                settle_index = index
+                break
+
+        steady_window = max(8, min(60, usable_count // 5 if usable_count >= 5 else usable_count))
+        steady_actual = actual[usable_count - steady_window:usable_count]
+        steady_actual_mean = _mean(steady_actual)
+        if steady_actual_mean is None:
+            return None, "Could not estimate steady-state error from the end of the trace."
+        steady_error = steady_actual_mean - target_command
+
+        marks: list[ScopeMetricMark] = [
+            ScopeMetricMark(
+                series_label="Act Speed",
+                sample_index=peak_index,
+                title="Overshoot",
+                detail=f"{overshoot:.2f} rpm ({overshoot_percent:.2f}%)",
+                color="#f97316",
+                offset_dx=18.0,
+                offset_dy=-30.0,
+            ),
+            ScopeMetricMark(
+                series_label="Act Speed",
+                sample_index=usable_count - 1,
+                title="Steady Error",
+                detail=f"{steady_error:+.2f} rpm",
+                color="#22c55e",
+                offset_dx=-170.0,
+                offset_dy=-18.0,
+            ),
+        ]
+
+        settling_text = "Not settled"
+        if settle_index is not None:
+            settling_time_ms = (settle_index - best_step_index) * capture.sample_period_s * 1000.0
+            settling_text = f"{settling_time_ms:.2f} ms"
+            marks.append(
+                ScopeMetricMark(
+                    series_label="Act Speed",
+                    sample_index=settle_index,
+                    title="Settling Time",
+                    detail=settling_text,
+                    color="#60a5fa",
+                    offset_dx=18.0,
+                    offset_dy=28.0,
+                )
+            )
+
+        summary_text = (
+            f"Trace metrics: step {step_magnitude:+.1f} rpm | "
+            f"Overshoot {overshoot:.2f} rpm ({overshoot_percent:.2f}%) | "
+            f"Settling {settling_text} | "
+            f"Steady error {steady_error:+.2f} rpm"
+        )
+        return marks, summary_text
+
+    def _mark_trace_metrics(self) -> None:
+        if not self._trace_capture_is_frozen():
+            QtWidgets.QMessageBox.information(
+                self,
+                "Trace Metrics",
+                "Freeze the trace first. Use Single Shot, or stop a Continuous capture before marking metrics.",
+            )
+            return
+
+        marks, message = self._analyze_trace_speed_metrics(self._trace_capture)
+        if marks is None:
+            QtWidgets.QMessageBox.information(self, "Trace Metrics", message)
+            return
+
+        self.trace_scope_view.set_metric_marks(marks)
+        self.trace_status_label.setText(message)
+        self._refresh_trace_metric_buttons()
 
     def _queue_current_tuning_setup(
         self,
@@ -11047,6 +11406,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_status_label.setText(
             f"Capturing {self.trace_capture_rate_text()} for ~{duration_ms:.1f} ms"
         )
+        self._refresh_trace_metric_buttons()
         self._enqueue_command(Command.CMD_APPLY_TRACE, payload, "Start Firmware Trace")
 
     def trace_capture_rate_text(self) -> str:
@@ -11055,9 +11415,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _stop_trace_capture(self) -> None:
         self._enqueue_command(Command.CMD_APPLY_TRACE, bytes([0, 0, 0, 0, 0, 0, 0]), "Stop Firmware Trace")
         self._trace_capture.active = False
-        self.trace_status_label.setText("Stopped")
+        self.trace_status_label.setText("Stopped. Capture is frozen and ready for metric analysis.")
         if self._active_trace_target == "trace":
             self._active_trace_target = None
+        self._refresh_trace_metric_buttons()
 
     def _uerror_state_text(self, state: int) -> str:
         return {
@@ -12155,6 +12516,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if chunk.chunk_index == 0:
             capture.series_data = [[] for _ in range(active_series_count)]
             capture.received_samples = 0
+            if capture_kind == "trace":
+                self.trace_scope_view.clear_metric_marks()
 
         for series_index, source_index in enumerate(source_indices):
             capture.series_data[series_index].extend(chunk.channels[source_index])
@@ -12178,6 +12541,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_current_tuning_scope_views()
         else:
             self._update_scope_view(view, capture, prefix)
+            self._refresh_trace_metric_buttons()
 
     def _handle_uerror_chunk(self, chunk: UerrorSweepChunk) -> None:
         self._uerror_state = int(chunk.state)
