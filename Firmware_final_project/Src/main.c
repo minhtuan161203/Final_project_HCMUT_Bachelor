@@ -210,8 +210,6 @@ static void RunMotorAutoTuneLoop(void);
 static float CalcIdSquareTuningVoltageLimit(void);
 static float CalcIdSquareTuningReference(void);
 static float CalcIdSquareTuningAlignmentCurrent(void);
-static int32_t CalcAlignedEncoderOffset(float encoder_resolution);
-static float *ResolveTraceChannelPointer(uint8_t channel_code);
 static void UpdateTraceCapture(void);
 static void ResetDebugAveraging(void);
 static void InitIsrDebugCounter(void);
@@ -258,14 +256,10 @@ static int32_t CalcAlignedEncoderOffsetFromCounts(float single_turn_position, fl
 static void AccumulateEncoderAlignmentSample(float encoder_resolution);
 static int32_t CalcAveragedAlignedEncoderOffset(float encoder_resolution);
 static void RestoreIdSquareTuningOffsetGuard(void);
-static float GetAngleTestModeOffsetRad(uint8_t electrical_angle_test_mode);
-static float GetAngleTestModeOffsetDeg(uint8_t electrical_angle_test_mode);
 static float GetRuntimeFocControlTheta(void);
 static float GetIdSquareLockedControlTheta(void);
 static float GetAutoTuneEncoderMechanicalAngle(void);
 static float GetAutoTuneControlTheta(void);
-static int32_t ElectricalAngleDegToEncoderCounts(float electrical_deg, float encoder_resolution, uint8_t pole_pairs);
-static void ApplyEncoderOffsetElectricalDelta(float electrical_deg, float encoder_resolution);
 static void FinalizeEncoderAlignment(uint8_t alignment_successful);
 static void RunFocRotatingThetaTestLoop(void);
 static void RunFocRotatingThetaVoltageTestLoop(void);
@@ -491,38 +485,6 @@ static float WrapAngle(float angle)
     return angle;
 }
 
-static float GetAngleTestModeOffsetRad(uint8_t electrical_angle_test_mode)
-{
-	switch (electrical_angle_test_mode)
-	{
-		case ID_SQUARE_ANGLE_TEST_PLUS_90:
-			return 0.5f * PI;
-		case ID_SQUARE_ANGLE_TEST_MINUS_90:
-			return -0.5f * PI;
-		case ID_SQUARE_ANGLE_TEST_PLUS_180:
-			return PI;
-		case ID_SQUARE_ANGLE_TEST_NONE:
-		default:
-			return 0.0f;
-	}
-}
-
-static float GetAngleTestModeOffsetDeg(uint8_t electrical_angle_test_mode)
-{
-	switch (electrical_angle_test_mode)
-	{
-		case ID_SQUARE_ANGLE_TEST_PLUS_90:
-			return 90.0f;
-		case ID_SQUARE_ANGLE_TEST_MINUS_90:
-			return -90.0f;
-		case ID_SQUARE_ANGLE_TEST_PLUS_180:
-			return 180.0f;
-		case ID_SQUARE_ANGLE_TEST_NONE:
-		default:
-			return 0.0f;
-	}
-}
-
 static float GetRuntimeFocControlTheta(void)
 {
 	return WrapAngle(
@@ -588,57 +550,6 @@ static float GetAutoTuneControlTheta(void)
 	}
 
 	return GetRuntimeFocControlTheta();
-}
-
-static int32_t ElectricalAngleDegToEncoderCounts(float electrical_deg, float encoder_resolution, uint8_t pole_pairs)
-{
-	if ((encoder_resolution <= 1.0f) || (pole_pairs == 0u))
-	{
-		return 0;
-	}
-	return (int32_t)lroundf(
-		(electrical_deg * encoder_resolution) /
-		(360.0f * (float)pole_pairs));
-}
-
-static void ApplyEncoderOffsetElectricalDelta(float electrical_deg, float encoder_resolution)
-{
-	float wrapped_offset;
-	int32_t offset_delta_counts;
-
-	if ((encoder_resolution <= 1.0f) || (Parameter.u8PolePair == 0u))
-	{
-		return;
-	}
-
-	offset_delta_counts = ElectricalAngleDegToEncoderCounts(
-		electrical_deg,
-		encoder_resolution,
-		Parameter.u8PolePair);
-	wrapped_offset = (float)Parameter.Offset_Enc + (float)offset_delta_counts;
-	wrapped_offset = fmodf(wrapped_offset, encoder_resolution);
-	if (wrapped_offset < 0.0f)
-	{
-		wrapped_offset += encoder_resolution;
-	}
-	if (wrapped_offset > (0.5f * encoder_resolution))
-	{
-		wrapped_offset -= encoder_resolution;
-	}
-
-	Parameter.Offset_Enc = (int32_t)lroundf(wrapped_offset);
-	MotorParameter[MOTOR_HALL_OFFSET] = (float)Parameter.Offset_Enc;
-	UpdateMotorParameter(MotorParameter);
-	gEncoderAlignmentLastCapturedOffset = Parameter.Offset_Enc;
-	gEncoderAlignmentStatus = ENCODER_ALIGNMENT_STATUS_DONE;
-	if (gEncoderAlignmentPolicy == ENCODER_ALIGNMENT_POLICY_MANUAL_SAVE)
-	{
-		gEncoderAlignmentNeedsFlashSave = 1u;
-	}
-	else
-	{
-		gEncoderAlignmentNeedsFlashSave = 0u;
-	}
 }
 
 static void RestoreIdSquareTuningOffsetGuard(void)
@@ -773,6 +684,7 @@ void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode)
 	float rated_current = MotorParameter[MOTOR_RATED_CURRENT_RMS];
 	float align_current;
 
+	// Alignment reuses the current loop, so we sanitize boot/default gains first.
 	if (current_kp <= 0.0f)
 	{
 		current_kp = 1.0f;
@@ -785,12 +697,14 @@ void PrepareEncoderAlignment(uint8_t continue_to_run, uint8_t resume_run_mode)
 	{
 		rated_current = DEFAULT_MOTOR_RATED_CURRENT_RMS;
 	}
+	// Scale the pull-in force from rated current so larger motors get a stronger hold.
 	align_current = rated_current * ID_SQUARE_TUNING_ALIGN_CURRENT_RATIO;
 	if (align_current < ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A)
 	{
 		align_current = ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A;
 	}
 
+	// Servo ON enters a temporary alignment-only mode before normal FOC is allowed to run.
 	gEncoderAlignmentRequested = 1u;
 	gEncoderAlignmentContinueToRun = (continue_to_run != 0u) ? 1u : 0u;
 	gEncoderAlignmentResumeRunMode = resume_run_mode;
@@ -826,6 +740,7 @@ static void FinalizeEncoderAlignment(uint8_t alignment_successful)
 	uint8_t continue_to_run = gEncoderAlignmentContinueToRun;
 	uint8_t resume_run_mode = gEncoderAlignmentResumeRunMode;
 
+	// Tear down the temporary alignment state before we hand control back to the state machine.
 	gEncoderAlignmentRequested = 0u;
 	gEncoderAlignmentContinueToRun = 0u;
 	gEncoderAlignmentResumeRunMode = RUN_MODE_FOC;
@@ -1914,6 +1829,7 @@ static float UpdatePositionSetpointVelocityRpm(float target_position_counts, flo
 	float filter_tau_sec;
 	float filter_alpha;
 
+	// Differentiate the incoming setpoint so position mode can use feed-forward speed cleanly.
 	if ((encoder_resolution <= 1.0f) || (dt_sec <= 0.0f))
 	{
 		sPositionSetpointPrevCounts = target_position_counts;
@@ -2036,6 +1952,7 @@ static float PlanPositionSpeedReferenceRpm(
 	float decel_rps2;
 	float target_speed_rpm;
 
+	// Position mode is planned online as a bounded speed command, not as a raw PI jump.
 	if ((encoder_resolution <= 1.0f) || (max_speed_rpm <= 0.0f) || (dt_sec <= 0.0f))
 	{
 		return 0.0f;
@@ -2164,6 +2081,7 @@ static float CalcIdSquareTuningReference(void)
 	float oc_limit = Current_Sensor.OverCurrentThreshold * ID_SQUARE_TUNING_MAX_OC_RATIO;
 	float amplitude_limit = rated_limit;
 
+	// Clamp the square-wave experiment so it stays inside both rated-current and OC limits.
 	if ((oc_limit > 0.0f) && ((amplitude_limit <= 0.0f) || (oc_limit < amplitude_limit)))
 	{
 		amplitude_limit = oc_limit;
@@ -2205,6 +2123,7 @@ static float CalcIdSquareTuningAlignmentCurrent(void)
 	float amplitude_limit = rated_limit;
 	float align_current;
 
+	// Alignment gets its own clamp so we can pull the rotor firmly without hitting protection.
 	if ((oc_limit > 0.0f) && ((amplitude_limit <= 0.0f) || (oc_limit < amplitude_limit)))
 	{
 		amplitude_limit = oc_limit;
@@ -2340,13 +2259,6 @@ static int32_t CalcAveragedAlignedEncoderOffset(float encoder_resolution)
 	}
 	average_single_turn_position = (average_angle * encoder_resolution) / (2.0f * PI);
 	return CalcAlignedEncoderOffsetFromCounts(average_single_turn_position, encoder_resolution);
-}
-
-static int32_t CalcAlignedEncoderOffset(float encoder_resolution)
-{
-	return CalcAlignedEncoderOffsetFromCounts(
-		GetAlignedSingleTurnPositionCounts(encoder_resolution),
-		encoder_resolution);
 }
 
 uint8_t StartFocRotatingThetaTest(void)
@@ -2806,45 +2718,6 @@ static void RunFocCurrentFeedbackMapTestLoop(void)
 		(unsigned int)gFocCurrentUvSwapTest,
 		(unsigned int)gFocCurrentPolarityInvertTest);
 }
-static float *ResolveTraceChannelPointer(uint8_t channel_code)
-{
-	switch (channel_code)
-	{
-		case 1u:
-			return (float *)&gTargetSpeedRpm;
-		case 2u:
-			return &Parameter.fActSpeed;
-		case 3u:
-			return &gIqRefA;
-		case 4u:
-			return &Parameter.fIdq[1];
-		case 5u:
-			return &Parameter.fIabc[0];
-		case 6u:
-			return &Parameter.fIabc[1];
-		case 7u:
-			return &Parameter.fIabc[2];
-		case 8u:
-			return &Parameter.fVdc;
-		case 9u:
-			return &Parameter.fTemparature;
-		case 10u:
-			return &gTracePosError;
-		case 11u:
-			return &Parameter.fIdq[0];
-		case 12u:
-			return &gIdRefA;
-		case 13u:
-			return &Parameter.fVdq[0];
-		case 14u:
-			return &Parameter.fVdq[1];
-		case 15u:
-			return (float *)&gDebugSpeedRawRpm;
-		default:
-			return 0;
-	}
-}
-
 static void UpdateTraceCapture(void)
 {
 	uint16_t index;
@@ -3552,6 +3425,7 @@ static void RunFocLoop(void)
 	uint8_t alignment_active = 0u;
 	uint8_t alignment_hold_mode = 0u;
 
+	// The FOC loop always follows the same order: choose theta, read currents, build refs, then drive PWM.
 	if (Parameter.fVdc < 1.0f)
 	{
 		GeneratePWM(0.5f, 0.5f, 0.5f);
@@ -3602,6 +3476,7 @@ static void RunFocLoop(void)
 
 	if (IdSquareTuning.Enable != 0u)
 	{
+		// Commissioning modes borrow their own PI gains so tuning/alignment stays repeatable.
 		gIdPi.fKp = IdSquareTuning.fCurrentKpCmd;
 		gIdPi.fKi = IdSquareTuning.fCurrentKiCmd;
 		gIqPi.fKp = IdSquareTuning.fCurrentKpCmd;
@@ -3619,6 +3494,7 @@ static void RunFocLoop(void)
 	
 	if (alignment_active != 0u)
 	{
+		// Alignment pins the stator field to a fixed frame and lets the rotor settle onto it.
 		control_theta = 0.0f;
 	}
 	else if ((IdSquareTuning.Enable != 0u) &&
@@ -3689,6 +3565,7 @@ static void RunFocLoop(void)
 	gPark.fCosAng = cos_theta;
 	gPark.m_albe2dq(&gPark);
 
+	// From here on, all control decisions happen in dq rather than raw phase currents.
 	Parameter.fIdq[0] = gPark.fD;
 	Parameter.fIdq[1] = gPark.fQ;
 
@@ -3701,12 +3578,12 @@ static void RunFocLoop(void)
 		gIqRefA = 0.0f;
 		if ((alignment_active != 0u) || (alignment_hold_mode != 0u))
 		{
-			// Clamp safety for encoder alignment (inject Id to align zero point)
+			// Alignment only injects d-axis current; q-axis torque stays at zero on purpose.
 			gIdRefA = CalcIdSquareTuningAlignmentCurrent();
 			IdSquareTuning.fFrequencyApplied = 0.0f;
 			IdSquareTuning.fPhase = 0.0f;
 		}
-			// If align zero point of encoder is DONE --> run tunning Id square wave
+		// Once zero capture is done, the same commissioning path can switch over to the square-wave test.
 		else
 		{
 			gIdRefA = CalcIdSquareTuningReference();
@@ -3727,6 +3604,7 @@ static void RunFocLoop(void)
 			gSpeedLoopDivider = 0u;
 			if (GetActiveFocControlMode() == POSITION_CONTROL_MODE)
 			{
+				// Position mode first turns distance error into a planned speed target, then hands that to the speed PI.
 				float position_raw_error_counts = GetPositionControlErrorCounts(
 					gTargetPositionCounts,
 					Parameter.fPosition,
@@ -3783,6 +3661,7 @@ static void RunFocLoop(void)
 				float speed_limit_rpm = GetConfiguredSpeedLimitRpm();
 				float target_speed_rpm;
 				gTracePosError = 0.0f;
+				// Speed mode just tracks the commanded RPM while respecting the configured ramp.
 				target_speed_rpm = ClampFloat(
 					gTargetSpeedRpm,
 					-speed_limit_rpm,
@@ -3890,6 +3769,7 @@ static void RunFocLoop(void)
 
 	if (alignment_active != 0u)
 	{
+		// Hold first, then average encoder counts; that makes the captured offset less sensitive to transient wobble.
 		if (IdSquareTuning.AlignmentCounter <
 			(uint16_t)(GetEffectiveCurrentLoopFrequency() * ID_SQUARE_TUNING_ALIGN_TIME_S))
 		{
@@ -3921,6 +3801,7 @@ static void RunMotorAutoTuneLoop(void)
 	float voltage_limit;
 	float pole_pairs;
 
+	// Autotune packages the live FOC signals into a clean snapshot, then lets the autotune state machine pick the next actuation mode.
 	if (Parameter.fVdc < 1.0f)
 	{
 		GeneratePWM(0.5f, 0.5f, 0.5f);
@@ -3956,6 +3837,7 @@ static void RunMotorAutoTuneLoop(void)
 
 	MotorAutoTune_Process(&gMotorAutoTune, &inputs, &outputs);
 
+	// Start from a neutral command each tick, then let the autotune output mode claim only what it needs.
 	gIdRefA = 0.0f;
 	gIqRefA = 0.0f;
 	gTargetSpeedRpm = 0.0f;
@@ -3966,6 +3848,7 @@ static void RunMotorAutoTuneLoop(void)
 	switch (outputs.mode)
 	{
 		case MOTOR_AUTOTUNE_OUTPUT_CURRENT_LOOP:
+			// Electrical ID and legacy mechanical ID both drive the standard current loop.
 			voltage_limit = outputs.voltage_limit_v;
 			if (voltage_limit <= 0.0f)
 			{
@@ -3988,10 +3871,12 @@ static void RunMotorAutoTuneLoop(void)
 			break;
 
 		case MOTOR_AUTOTUNE_OUTPUT_DIRECT_D_VOLTAGE:
+			// Rs/Ls stages can request a raw dq voltage vector when they want the plant without PI dynamics.
 			ApplyVoltageVectorForTheta(electrical_theta, outputs.vd_voltage_v, outputs.vq_voltage_v);
 			break;
 
 		case MOTOR_AUTOTUNE_OUTPUT_OPEN_LOOP_VF:
+			// Flux and pole-pair discovery use a plain open-loop rotating field instead of closed-loop FOC.
 			gVfFrequencyHz = outputs.vf_frequency_hz;
 			gVfVoltageV = outputs.vf_voltage_v;
 			pole_pairs = (Parameter.u8PolePair > 0u) ? (float)Parameter.u8PolePair : 1.0f;
@@ -4032,7 +3917,7 @@ int main(void)
 
   /* MCU Configuration----------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  /* Bring up clocks/peripherals first; everything else in this project assumes HAL is already alive. */
    HAL_Init();
 
   /* USER CODE BEGIN Init */
@@ -4041,7 +3926,7 @@ int main(void)
 	
   /* USER CODE END Init */
 
-  /* Configure the system clock */
+  /* Clock setup has to land before any timing-sensitive loop or serial transport starts. */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */

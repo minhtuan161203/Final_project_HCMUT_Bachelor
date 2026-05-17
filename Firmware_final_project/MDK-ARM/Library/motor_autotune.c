@@ -190,6 +190,7 @@ static void MotorAutoTune_UpdateCurrentGains(MotorAutoTune_t *handle)
 {
 	float current_bw_rad_s;
 
+	// Convert the measured Rs/Ls pair into PI gains for the requested current-loop bandwidth.
 	if (handle == 0)
 	{
 		return;
@@ -289,6 +290,7 @@ static void MotorAutoTune_ResetMechanicalRuntime(
 {
 	float initial_speed_rad_s = 0.0f;
 
+	// Each mechanical stage starts from a clean estimator state so old windows do not leak into new fits.
 	if (handle == 0)
 	{
 		return;
@@ -360,6 +362,7 @@ static void MotorAutoTune_UpdateMechanicalObservables(
 	float accel_lpf_hz;
 	float speed_rpm_abs;
 
+	// J/B estimation works on filtered speed and derived acceleration, not on raw encoder speed.
 	if ((handle == 0) || (inputs == 0))
 	{
 		return;
@@ -405,6 +408,7 @@ static void MotorAutoTune_CommandMechanicalSine(
 	float softstart_scale = 1.0f;
 	uint32_t softstart_ticks;
 
+	// Legacy no-load mechanical ID excites the axis with a gentle sinusoidal iq command.
 	if ((handle == 0) || (outputs == 0))
 	{
 		return;
@@ -620,6 +624,7 @@ static uint8_t MotorAutoTune_FinalizeLoadedTrajectory(
 	float mean_speed_rad_s;
 	uint32_t min_phase_samples = MOTOR_AUTOTUNE_LOADED_MIN_SAMPLES / 2u;
 
+	// Loaded mode solves J from accel/decel plateaus, then folds the remaining drag into an equivalent B.
 	(void)inputs;
 
 	if (handle == 0)
@@ -1601,6 +1606,7 @@ static void MotorAutoTune_ProcessJ(
 	float speed_switch_threshold_rad_s = 0.0f;
 	int8_t current_sign = 0;
 
+	// The J stage fits torque against acceleration while the shaft rocks back and forth around zero.
 	if ((handle == 0) || (inputs == 0) || (outputs == 0))
 	{
 		return;
@@ -1617,6 +1623,7 @@ static void MotorAutoTune_ProcessJ(
 		float manual_iq_limit_a = 0.0f;
 		float rated_current_a = MOTOR_AUTOTUNE_DEFAULT_RS_HIGH_A;
 
+		// Pick a safe iq amplitude first so the mechanical test has enough motion without tripping protection.
 		iq_amplitude_limit_a = MotorAutoTune_DefaultMechanicalIqAmplitude(handle, inputs);
 		if ((inputs != 0) && (inputs->rated_current_a > 0.0f))
 		{
@@ -1701,6 +1708,7 @@ static void MotorAutoTune_ProcessJ(
 
 	if (handle->substep == 0u)
 	{
+		// Give the motion a couple of cycles to settle before we trust any inertia data.
 		handle->counter++;
 		if ((float)handle->counter >= settle_ticks)
 		{
@@ -1712,6 +1720,7 @@ static void MotorAutoTune_ProcessJ(
 
 	if (handle->mechanical_window_active != 0u)
 	{
+		// Least-squares J fit: accumulate torque*alpha over alpha^2 for each accepted half-cycle.
 		handle->mechanical_window_numerator +=
 			raw_torque_nm * handle->mechanical_accel_filtered_rad_s2 * handle->dt_s;
 		handle->mechanical_window_denominator +=
@@ -1809,6 +1818,7 @@ static void MotorAutoTune_ProcessB(
 	float speed_switch_threshold_rad_s = 0.0f;
 	int8_t current_sign = 0;
 
+	// Once J is known, the B stage regresses the leftover torque against speed to estimate drag.
 	if ((handle == 0) || (inputs == 0) || (outputs == 0))
 	{
 		return;
@@ -1855,6 +1865,7 @@ static void MotorAutoTune_ProcessB(
 
 	if (handle->substep == 0u)
 	{
+		// Re-settle before the drag fit so the B regression starts from a clean oscillation.
 		handle->counter++;
 		if ((float)handle->counter >= settle_ticks)
 		{
@@ -1866,6 +1877,7 @@ static void MotorAutoTune_ProcessB(
 
 	if (handle->mechanical_window_active != 0u)
 	{
+		// These sums build the linear fit y = B*w + load_torque over the accepted motion windows.
 		handle->mechanical_regression_sw2 +=
 			current_speed_rad_s * current_speed_rad_s * handle->dt_s;
 		handle->mechanical_regression_sw += current_speed_rad_s * handle->dt_s;
@@ -2185,6 +2197,7 @@ void MotorAutoTune_Process(
 {
 	float phase_current_abs_max;
 
+	// This is the stage dispatcher: validate the snapshot once, then hand off to the active estimator.
 	MotorAutoTune_ResetOutputs(outputs);
 	if ((handle == 0) || (inputs == 0))
 	{
@@ -2249,6 +2262,7 @@ uint8_t MotorAutoTune_ApplyEstimatedParameters(
 	float *motor_parameters,
 	uint32_t motor_parameter_count)
 {
+	// Copy the finished estimates back into the same parameter tables that normal runtime code already consumes.
 	if ((handle == 0) || (driver_parameters == 0) || (motor_parameters == 0))
 	{
 		return 0u;
