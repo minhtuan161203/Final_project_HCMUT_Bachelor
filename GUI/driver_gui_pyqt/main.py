@@ -3183,6 +3183,8 @@ class ScopeCaptureView(QtWidgets.QWidget):
         self._report_mode = False
         self._report_font_point_size = 14
         self._stack_units = False
+        self._display_zoom_x = 1.0
+        self._display_zoom_y = 1.0
         self.setMinimumHeight(340)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -3228,6 +3230,16 @@ class ScopeCaptureView(QtWidgets.QWidget):
 
     def set_stack_units(self, enabled: bool) -> None:
         self._stack_units = bool(enabled)
+        self._update_preferred_height()
+        self.update()
+
+    def set_display_zoom_x(self, factor: float) -> None:
+        self._display_zoom_x = max(1.0, float(factor))
+        self._update_preferred_height()
+        self.update()
+
+    def set_display_zoom_y(self, factor: float) -> None:
+        self._display_zoom_y = max(1.0, float(factor))
         self._update_preferred_height()
         self.update()
 
@@ -3291,6 +3303,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
 
     def sizeHint(self) -> QtCore.QSize:  # noqa: N802
         hint = super().sizeHint()
+        hint.setWidth(max(hint.width(), self.minimumWidth()))
         hint.setHeight(max(hint.height(), self.minimumHeight()))
         return hint
 
@@ -3387,7 +3400,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
 
     def _update_preferred_height(self) -> None:
         if not self._stack_units:
-            self.setMinimumHeight(340)
+            self.setMinimumHeight(max(340, int(340 * self._display_zoom_y)))
             self.updateGeometry()
             return
 
@@ -3406,7 +3419,7 @@ class ScopeCaptureView(QtWidgets.QWidget):
             + panel_count * self._stacked_panel_outer_height()
             + max(0, panel_count - 1) * panel_gap
         )
-        self.setMinimumHeight(max(340, total_height))
+        self.setMinimumHeight(max(340, int(total_height * self._display_zoom_y)))
         self.updateGeometry()
 
     def _stacked_panel_outer_height(self) -> int:
@@ -3434,7 +3447,6 @@ class ScopeCaptureView(QtWidgets.QWidget):
         left_axis_space = int(96 * scale)
         right_axis_space = int(16 * scale)
         panel_gap = int(18 * scale)
-        panel_outer_height = self._stacked_panel_outer_height()
         panel_top = rect.top() + title_height + legend_height + int(20 * scale)
         panel_groups = self._axis_groups()
         if not panel_groups:
@@ -3447,6 +3459,17 @@ class ScopeCaptureView(QtWidgets.QWidget):
                     "indices": [],
                 }
             ]
+
+        panel_count = max(1, len(panel_groups))
+        base_panel_outer_height = self._stacked_panel_outer_height()
+        available_panel_height = max(
+            float(base_panel_outer_height),
+            rect.height() - (panel_top - rect.top()) - ((panel_count - 1) * panel_gap) - int(12 * scale),
+        )
+        panel_outer_height = max(
+            float(base_panel_outer_height),
+            available_panel_height / float(panel_count),
+        )
 
         layouts: list[dict[str, object]] = []
         for panel_index, axis_group in enumerate(panel_groups):
@@ -5535,20 +5558,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_clear_metrics_button.setToolTip(
             "Remove metric annotations from the current trace capture."
         )
+        self.trace_zoom_x_combo = QtWidgets.QComboBox()
+        self.trace_zoom_x_combo.addItem("1x", 1.0)
+        self.trace_zoom_x_combo.addItem("2x", 2.0)
+        self.trace_zoom_x_combo.addItem("4x", 4.0)
+        self.trace_zoom_x_combo.addItem("8x", 8.0)
+        self.trace_zoom_x_combo.setCurrentIndex(0)
+        self.trace_zoom_y_combo = QtWidgets.QComboBox()
+        self.trace_zoom_y_combo.addItem("1x", 1.0)
+        self.trace_zoom_y_combo.addItem("1.5x", 1.5)
+        self.trace_zoom_y_combo.addItem("2x", 2.0)
+        self.trace_zoom_y_combo.addItem("3x", 3.0)
+        self.trace_zoom_y_combo.setCurrentIndex(1)
         self.trace_auto_scale_checkbox = QtWidgets.QCheckBox("Auto-scale Y")
         self.trace_auto_scale_checkbox.setChecked(True)
         self.trace_status_label = QtWidgets.QLabel("Idle")
         self.trace_status_label.setWordWrap(True)
         self.trace_scope_view = ScopeCaptureView()
         self.trace_scope_view.set_stack_units(True)
+        self.trace_scope_view.set_display_zoom_y(1.5)
+        self.trace_scope_view.setMinimumWidth(1680)
         self.trace_scope_scroll = QtWidgets.QScrollArea()
-        self.trace_scope_scroll.setWidgetResizable(True)
+        self.trace_scope_scroll.setWidgetResizable(False)
         self.trace_scope_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.trace_scope_scroll.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+        )
         self.trace_scope_scroll.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self.trace_scope_scroll.setVerticalScrollBarPolicy(
-            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.trace_scope_scroll.setWidget(self.trace_scope_view)
 
@@ -5575,8 +5615,12 @@ class MainWindow(QtWidgets.QMainWindow):
         trace_metrics_hint.setWordWrap(True)
         trace_metrics_hint.setStyleSheet("color: #9aa0a6;")
         control_layout.addWidget(trace_metrics_hint, 5, 2, 1, 2)
-        control_layout.addWidget(QtWidgets.QLabel("Status"), 6, 0)
-        control_layout.addWidget(self.trace_status_label, 6, 1, 1, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Zoom X"), 6, 0)
+        control_layout.addWidget(self.trace_zoom_x_combo, 6, 1)
+        control_layout.addWidget(QtWidgets.QLabel("Zoom Y"), 6, 2)
+        control_layout.addWidget(self.trace_zoom_y_combo, 6, 3)
+        control_layout.addWidget(QtWidgets.QLabel("Status"), 7, 0)
+        control_layout.addWidget(self.trace_status_label, 7, 1, 1, 3)
         report_toolbar = QtWidgets.QHBoxLayout()
         self._append_report_controls(
             report_toolbar,
@@ -5585,9 +5629,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         layout.addWidget(control_group)
         layout.addLayout(report_toolbar)
-        layout.addWidget(self.trace_scope_scroll, 1)
+        layout.addWidget(self.trace_scope_scroll)
 
         self._apply_trace_preset(self.trace_preset_combo.currentText())
+        self._update_trace_scope_zoom()
         return widget
 
     def _build_uerror_tab(self) -> QtWidgets.QWidget:
@@ -6886,6 +6931,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_mark_metrics_button.clicked.connect(self._mark_trace_metrics)
         self.trace_clear_metrics_button.clicked.connect(self._clear_trace_metric_marks)
         self.trace_auto_scale_checkbox.toggled.connect(self.trace_scope_view.set_auto_scale)
+        self.trace_zoom_x_combo.currentIndexChanged.connect(self._update_trace_scope_zoom)
+        self.trace_zoom_y_combo.currentIndexChanged.connect(self._update_trace_scope_zoom)
         self.uerror_start_button.clicked.connect(self._start_uerror_characterization)
         self.uerror_stop_button.clicked.connect(self._stop_uerror_characterization)
         self.uerror_clear_button.clicked.connect(self._clear_uerror_characterization)
@@ -7965,8 +8012,26 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mech_zero_capture_button.setEnabled(
                 self._mechanical_zero_capture_allowed(self._latest_monitor_snapshot)
             )
+            if self._mechanical_zero_valid:
+                self.mech_zero_capture_button.setToolTip(
+                    "A Mechanical Zero is already saved in GUI local settings. "
+                    "Click Clear Mechanical Zero first, then capture a new 0 deg pose."
+                )
+            else:
+                self.mech_zero_capture_button.setToolTip(
+                    "Capture the current encoder pose as GUI-local 0 deg."
+                )
 
     def _capture_current_as_mechanical_zero(self) -> None:
+        if self._mechanical_zero_valid:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Mechanical Zero",
+                "A Mechanical Zero is already saved in GUI local settings.\n\n"
+                "Click Clear Mechanical Zero first, then capture the current pose again "
+                "if you want to replace the existing 0 deg reference.",
+            )
+            return
         snapshot = self._latest_monitor_snapshot
         if snapshot is None:
             QtWidgets.QMessageBox.warning(
@@ -10524,6 +10589,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._active_trace_target == "trace":
             self._active_trace_target = None
         self._refresh_trace_metric_buttons()
+        self._sync_trace_scope_geometry()
 
     def _trace_capture_is_frozen(self) -> bool:
         capture = self._trace_capture
@@ -10547,6 +10613,32 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._trace_capture_is_frozen():
             self.trace_status_label.setText("Capture ready for metric analysis")
         self._refresh_trace_metric_buttons()
+
+    def _sync_trace_scope_geometry(self) -> None:
+        if not hasattr(self, "trace_scope_view") or not hasattr(self, "trace_scope_scroll"):
+            return
+
+        x_zoom = float(self.trace_zoom_x_combo.currentData() or 1.0)
+        y_zoom = float(self.trace_zoom_y_combo.currentData() or 1.0)
+        panel_count = 1
+        if getattr(self.trace_scope_view, "_stack_units", False):
+            panel_count = max(1, len(self.trace_scope_view._axis_groups()))
+        base_width = 1680
+        target_width = max(base_width, int(base_width * x_zoom))
+        base_panel_height = 340
+        target_height = max(
+            760,
+            int((190.0 + (panel_count * base_panel_height)) * y_zoom),
+        )
+
+        self.trace_scope_view.setFixedWidth(target_width)
+        self.trace_scope_view.setFixedHeight(target_height)
+        self.trace_scope_scroll.setFixedHeight(target_height)
+
+    def _update_trace_scope_zoom(self) -> None:
+        y_zoom = float(self.trace_zoom_y_combo.currentData() or 1.0)
+        self.trace_scope_view.set_display_zoom_y(y_zoom)
+        self._sync_trace_scope_geometry()
 
     @staticmethod
     def _trace_series_index_by_label(capture: ScopeCaptureState, label: str) -> int | None:
@@ -10575,42 +10667,104 @@ class MainWindow(QtWidgets.QMainWindow):
         command = command[:usable_count]
         actual = actual[:usable_count]
 
-        command_deltas = [
-            command[index] - command[index - 1]
-            for index in range(1, usable_count)
-        ]
-        if not command_deltas:
-            return None, "Command trace is too short to detect a speed step."
+        initial_window = max(
+            8,
+            min(60, usable_count // 10 if usable_count >= 10 else usable_count),
+        )
+        initial_command = _mean(command[:initial_window])
+        if initial_command is None:
+            return None, "Could not estimate the initial command level from the trace."
 
         command_span = max(command) - min(command)
-        step_threshold = max(1.0, abs(command_span) * 0.05)
-        best_step_index: int | None = None
-        best_step_delta = 0.0
-        for index, delta in enumerate(command_deltas, start=1):
-            if abs(delta) < step_threshold:
-                continue
-            if abs(delta) > abs(best_step_delta):
-                best_step_delta = delta
-                best_step_index = index
+        initial_actual = _mean(actual[:initial_window])
+        if initial_actual is None:
+            return None, "Could not estimate the initial actual speed level from the trace."
 
-        if best_step_index is None:
-            return None, (
-                f"No command step larger than {step_threshold:.2f} rpm was found in the captured trace."
+        dominant_index = max(
+            range(usable_count),
+            key=lambda idx: abs(command[idx] - initial_command),
+        )
+        dominant_delta = command[dominant_index] - initial_command
+        transition_threshold = max(1.0, abs(dominant_delta) * 0.05, command_span * 0.02)
+        plateau_left = dominant_index
+        plateau_right = dominant_index
+        target_command: float | None = None
+        transition_start: int | None = None
+        transition_end: int | None = None
+        transition_source = "command transition"
+        reference_start_value = initial_command
+
+        if abs(dominant_delta) >= transition_threshold:
+            plateau_threshold = max(0.5, abs(dominant_delta) * 0.03)
+            while (
+                plateau_left > 0
+                and abs(command[plateau_left - 1] - command[dominant_index]) <= plateau_threshold
+            ):
+                plateau_left -= 1
+            while (
+                plateau_right + 1 < usable_count
+                and abs(command[plateau_right + 1] - command[dominant_index]) <= plateau_threshold
+            ):
+                plateau_right += 1
+
+            if (plateau_right - plateau_left + 1) < 4:
+                fallback_window = max(
+                    4,
+                    min(24, usable_count // 20 if usable_count >= 20 else usable_count),
+                )
+                plateau_left = max(0, dominant_index - fallback_window)
+                plateau_right = min(usable_count - 1, dominant_index + fallback_window)
+
+            target_command = _mean(command[plateau_left : plateau_right + 1])
+            if target_command is None:
+                return None, "Could not estimate the dominant command plateau from the trace."
+
+            for index in range(usable_count):
+                if abs(command[index] - initial_command) >= transition_threshold:
+                    transition_start = index
+                    break
+            if transition_start is None:
+                return None, (
+                    f"No command transition larger than {transition_threshold:.2f} rpm was found in the captured trace."
+                )
+
+            transition_hold = max(4, min(20, usable_count // 50 if usable_count >= 50 else 4))
+            transition_end = plateau_left
+            for index in range(transition_start, usable_count - transition_hold + 1):
+                window = command[index:index + transition_hold]
+                if all(abs(value - target_command) <= plateau_threshold for value in window):
+                    transition_end = index
+                    break
+        else:
+            steady_window = max(
+                8,
+                min(60, usable_count // 5 if usable_count >= 5 else usable_count),
             )
+            target_command = _mean(command[-steady_window:])
+            if target_command is None:
+                return None, "Could not estimate the commanded speed level from the capture."
 
-        pre_window = max(5, min(30, best_step_index))
-        tail_window = max(8, min(60, usable_count - best_step_index))
-        initial_command = _mean(command[max(0, best_step_index - pre_window):best_step_index])
-        target_command = _mean(command[max(best_step_index, usable_count - tail_window):usable_count])
-        if initial_command is None or target_command is None:
-            return None, "Could not estimate the pre-step and post-step command levels."
+            capture_start_error = target_command - initial_actual
+            if abs(capture_start_error) < 1.0:
+                return None, (
+                    "No usable speed transition was found in the captured trace. "
+                    "Capture earlier so the speed response begins inside the trace window."
+                )
 
-        step_magnitude = target_command - initial_command
+            plateau_threshold = max(0.5, abs(capture_start_error) * 0.03)
+            transition_start = 0
+            transition_end = 0
+            plateau_left = max(0, usable_count - steady_window)
+            plateau_right = usable_count - 1
+            transition_source = "capture-start response"
+            reference_start_value = initial_actual
+
+        step_magnitude = target_command - reference_start_value
         if abs(step_magnitude) < 1.0:
-            return None, "Detected command step is too small to score trace metrics reliably."
+            return None, "Detected speed response is too small to score trace metrics reliably."
 
         positive_step = step_magnitude >= 0.0
-        analysis_slice = actual[best_step_index:]
+        analysis_slice = actual[transition_start:]
         if positive_step:
             peak_local_index = max(range(len(analysis_slice)), key=lambda idx: analysis_slice[idx])
             peak_value = analysis_slice[peak_local_index]
@@ -10619,18 +10773,27 @@ class MainWindow(QtWidgets.QMainWindow):
             peak_local_index = min(range(len(analysis_slice)), key=lambda idx: analysis_slice[idx])
             peak_value = analysis_slice[peak_local_index]
             overshoot = max(0.0, target_command - peak_value)
-        peak_index = best_step_index + peak_local_index
+        peak_index = transition_start + peak_local_index
         overshoot_percent = (overshoot / max(abs(step_magnitude), 1.0)) * 100.0
 
         tolerance_rpm = max(1.0, abs(step_magnitude) * 0.02)
         settle_index: int | None = None
-        for index in range(best_step_index, usable_count):
-            if all(abs(value - target_command) <= tolerance_rpm for value in actual[index:]):
+        settle_guard_end = max(transition_end, plateau_right)
+        for index in range(transition_start, settle_guard_end + 1):
+            if all(
+                abs(value - target_command) <= tolerance_rpm
+                for value in actual[index : settle_guard_end + 1]
+            ):
                 settle_index = index
                 break
 
-        steady_window = max(8, min(60, usable_count // 5 if usable_count >= 5 else usable_count))
-        steady_actual = actual[usable_count - steady_window:usable_count]
+        steady_start = min(max(transition_end, plateau_left), usable_count - 1)
+        steady_end = min(max(steady_start + 1, plateau_right + 1), usable_count)
+        if (steady_end - steady_start) < 6:
+            steady_window = max(8, min(60, usable_count // 5 if usable_count >= 5 else usable_count))
+            steady_start = max(0, usable_count - steady_window)
+            steady_end = usable_count
+        steady_actual = actual[steady_start:steady_end]
         steady_actual_mean = _mean(steady_actual)
         if steady_actual_mean is None:
             return None, "Could not estimate steady-state error from the end of the trace."
@@ -10648,7 +10811,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ),
             ScopeMetricMark(
                 series_label="Act Speed",
-                sample_index=usable_count - 1,
+                sample_index=max(steady_start, min(steady_end - 1, usable_count - 1)),
                 title="Steady Error",
                 detail=f"{steady_error:+.2f} rpm",
                 color="#22c55e",
@@ -10659,7 +10822,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         settling_text = "Not settled"
         if settle_index is not None:
-            settling_time_ms = (settle_index - best_step_index) * capture.sample_period_s * 1000.0
+            settling_time_ms = (settle_index - transition_start) * capture.sample_period_s * 1000.0
             settling_text = f"{settling_time_ms:.2f} ms"
             marks.append(
                 ScopeMetricMark(
@@ -10674,7 +10837,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
         summary_text = (
-            f"Trace metrics: step {step_magnitude:+.1f} rpm | "
+            f"Trace metrics ({transition_source}): response {step_magnitude:+.1f} rpm | "
             f"Overshoot {overshoot:.2f} rpm ({overshoot_percent:.2f}%) | "
             f"Settling {settling_text} | "
             f"Steady error {steady_error:+.2f} rpm"
@@ -12421,6 +12584,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 capture.sample_period_s,
                 status_text,
             )
+            if view is self.trace_scope_view:
+                self._sync_trace_scope_geometry()
 
     def _update_current_tuning_scope_views(self) -> None:
         capture = self._current_tuning_capture
