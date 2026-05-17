@@ -135,6 +135,7 @@ POSITION_TEST_PROFILE_LONG = "long_distance"
 POSITION_TEST_PROFILE_BACKLASH = "back_and_forth"
 POSITION_TEST_SETTLE_SPEED_TOLERANCE_RPM = 3.0
 POSITION_TARGET_COUNT_GUI_LIMIT = 1.0e15
+PARAMETER_STATUS_LABEL_MAX_WIDTH = 420
 DEFAULT_CTUNING_CURRENT_KP = 5.0
 DEFAULT_CTUNING_CURRENT_KI = 10.0
 
@@ -6749,6 +6750,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.write_driver_button = QtWidgets.QPushButton("Write Driver Params")
         self.write_motor_button = QtWidgets.QPushButton("Write Motor Params")
         self.parameter_status_label = QtWidgets.QLabel("Parameter tools are ready.")
+        self.parameter_status_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.parameter_status_label.setMinimumWidth(0)
+        self.parameter_status_label.setMaximumWidth(PARAMETER_STATUS_LABEL_MAX_WIDTH)
+        self.parameter_status_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Maximum,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         toolbar.addWidget(self.read_all_params_button)
         toolbar.addWidget(self.write_driver_button)
         toolbar.addWidget(self.write_motor_button)
@@ -12182,7 +12192,21 @@ class MainWindow(QtWidgets.QMainWindow):
             "error": "#c62828",
         }
         color = palette.get(severity, palette["info"])
-        self.parameter_status_label.setText(text)
+        metrics = self.parameter_status_label.fontMetrics()
+        available_width = max(
+            80,
+            PARAMETER_STATUS_LABEL_MAX_WIDTH
+            - self.parameter_status_label.contentsMargins().left()
+            - self.parameter_status_label.contentsMargins().right()
+            - 6,
+        )
+        display_text = metrics.elidedText(
+            text,
+            QtCore.Qt.TextElideMode.ElideRight,
+            available_width,
+        )
+        self.parameter_status_label.setText(display_text)
+        self.parameter_status_label.setToolTip(text)
         self.parameter_status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
     def _read_driver_parameters(self) -> None:
