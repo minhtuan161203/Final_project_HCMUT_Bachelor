@@ -360,6 +360,7 @@ TRACE_PRESETS = {
     "Current Loop": [3, 4, 11, 14],
     "Phase Currents": [3, 5, 6, 7],
     "Speed Loop": [1, 2, 3, 4],
+    "Position Loop": [10, 2, 3, 4],
     "Speed Debug": [1, 2, 15, 3],
     "Voltage Debug": [11, 12, 13, 14],
 }
@@ -5554,7 +5555,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trace_mark_metrics_button.setEnabled(False)
         self.trace_clear_metrics_button.setEnabled(False)
         self.trace_mark_metrics_button.setToolTip(
-            "Analyze the frozen trace capture and annotate step metrics directly on the chart."
+            "Analyze a frozen speed or position trace and annotate response metrics directly on the chart."
         )
         self.trace_clear_metrics_button.setToolTip(
             "Remove metric annotations from the current trace capture."
@@ -5611,7 +5612,7 @@ class MainWindow(QtWidgets.QMainWindow):
         control_layout.addWidget(self.trace_mark_metrics_button, 5, 0)
         control_layout.addWidget(self.trace_clear_metrics_button, 5, 1)
         trace_metrics_hint = QtWidgets.QLabel(
-            "Metrics work on frozen captures only. Use Single Shot, or stop a Continuous capture first."
+            "Metrics work on frozen captures only. Speed traces need Cmd Speed + Act Speed. Position traces need Pos Err and work best with Act Speed."
         )
         trace_metrics_hint.setWordWrap(True)
         trace_metrics_hint.setStyleSheet("color: #9aa0a6;")
@@ -10861,6 +10862,175 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         return marks, summary_text
 
+    def _analyze_trace_position_metrics(
+        self,
+        capture: ScopeCaptureState,
+    ) -> tuple[list[ScopeMetricMark], str] | tuple[None, str]:
+        error_index = self._trace_series_index_by_label(capture, "Pos Err")
+        if error_index is None:
+            return None, (
+                "Position trace metrics currently support captures that include Pos Err. "
+                "Use the Position Loop preset."
+            )
+
+        speed_index = self._trace_series_index_by_label(capture, "Act Speed")
+
+        position_error = list(capture.series_data[error_index])
+        usable_count = len(position_error)
+        if usable_count < 12:
+            return None, "Not enough samples were captured to compute position metrics."
+
+        actual_speed: list[float] | None = None
+        if speed_index is not None:
+            actual_speed = list(capture.series_data[speed_index])[:usable_count]
+            usable_count = min(usable_count, len(actual_speed))
+            position_error = position_error[:usable_count]
+
+        initial_window = max(
+            8,
+            min(60, usable_count // 10 if usable_count >= 10 else usable_count),
+        )
+        final_window = max(
+            8,
+            min(60, usable_count // 5 if usable_count >= 5 else usable_count),
+        )
+        initial_error = _mean(position_error[:initial_window])
+        steady_error = _mean(position_error[-final_window:])
+        if initial_error is None or steady_error is None:
+            return None, "Could not estimate the start/end error levels from the captured trace."
+
+        error_about_final = [value - steady_error for value in position_error]
+        peak_index = max(range(usable_count), key=lambda idx: abs(error_about_final[idx]))
+        peak_error = abs(error_about_final[peak_index])
+        if peak_error < 1.0:
+            return None, "Detected position response is too small to score trace metrics reliably."
+
+        transition_threshold = max(1.0, peak_error * 0.05)
+        transition_start: int | None = None
+        transition_source = "error transition"
+        for index in range(usable_count):
+            if abs(position_error[index] - initial_error) >= transition_threshold:
+                transition_start = index
+                break
+
+        if transition_start is None:
+            transition_start = 0
+            transition_source = "capture-start response"
+
+        peak_error_counts = peak_error
+        peak_sign = 1.0 if error_about_final[peak_index] >= 0.0 else -1.0
+
+        overshoot_counts = 0.0
+        overshoot_index = peak_index
+        if peak_sign >= 0.0:
+            min_error = min(position_error[peak_index:])
+            if min_error < steady_error:
+                overshoot_counts = steady_error - min_error
+                overshoot_index = peak_index + min(
+                    range(len(position_error[peak_index:])),
+                    key=lambda idx: position_error[peak_index + idx],
+                )
+        else:
+            max_error = max(position_error[peak_index:])
+            if max_error > steady_error:
+                overshoot_counts = max_error - steady_error
+                overshoot_index = peak_index + max(
+                    range(len(position_error[peak_index:])),
+                    key=lambda idx: position_error[peak_index + idx],
+                )
+        overshoot_percent = (overshoot_counts / max(peak_error_counts, 1.0)) * 100.0
+
+        settle_tolerance_counts = max(1.0, peak_error_counts * 0.01)
+        hold_samples = max(
+            4,
+            min(
+                40,
+                int(math.ceil(0.02 / max(capture.sample_period_s, 1.0e-6))),
+            ),
+        )
+        hold_samples = min(hold_samples, usable_count)
+        settle_index: int | None = None
+        speed_tolerance_rpm = POSITION_TEST_SETTLE_SPEED_TOLERANCE_RPM
+        settle_search_start = min(max(transition_start, peak_index), usable_count - 1)
+        for index in range(settle_search_start, usable_count - hold_samples + 1):
+            error_window = position_error[index : index + hold_samples]
+            if not all(
+                abs(value - steady_error) <= settle_tolerance_counts for value in error_window
+            ):
+                continue
+            if actual_speed is not None:
+                speed_window = actual_speed[index : index + hold_samples]
+                if not all(abs(value) <= speed_tolerance_rpm for value in speed_window):
+                    continue
+            settle_index = index
+            break
+
+        marks: list[ScopeMetricMark] = [
+            ScopeMetricMark(
+                series_label="Pos Err",
+                sample_index=peak_index,
+                title="Peak Error",
+                detail=f"{peak_error_counts:.1f} cnt",
+                color="#f97316",
+                offset_dx=18.0,
+                offset_dy=-30.0,
+            ),
+            ScopeMetricMark(
+                series_label="Pos Err",
+                sample_index=usable_count - 1,
+                title="Steady Error",
+                detail=f"{steady_error:+.1f} cnt",
+                color="#22c55e",
+                offset_dx=-170.0,
+                offset_dy=-18.0,
+            ),
+        ]
+
+        if overshoot_counts > settle_tolerance_counts:
+            marks.append(
+                ScopeMetricMark(
+                    series_label="Pos Err",
+                    sample_index=overshoot_index,
+                    title="Overshoot",
+                    detail=f"{overshoot_counts:.1f} cnt ({overshoot_percent:.1f}%)",
+                    color="#ef4444",
+                    offset_dx=18.0,
+                    offset_dy=26.0,
+                )
+            )
+
+        settling_text = "Not settled"
+        if settle_index is not None:
+            settling_time_ms = (settle_index - transition_start) * capture.sample_period_s * 1000.0
+            settling_text = f"{settling_time_ms:.2f} ms"
+            marks.append(
+                ScopeMetricMark(
+                    series_label="Pos Err",
+                    sample_index=settle_index,
+                    title="Settling Time",
+                    detail=(
+                        f"{settling_text} | band ±{settle_tolerance_counts:.1f} cnt"
+                    ),
+                    color="#60a5fa",
+                    offset_dx=18.0,
+                    offset_dy=50.0 if overshoot_counts > settle_tolerance_counts else 24.0,
+                )
+            )
+
+        speed_gate_text = (
+            f", speed gate ±{speed_tolerance_rpm:.1f} rpm"
+            if actual_speed is not None
+            else ""
+        )
+        summary_text = (
+            f"Trace metrics ({transition_source}): peak error {peak_error_counts:.1f} cnt | "
+            f"Overshoot {overshoot_counts:.1f} cnt ({overshoot_percent:.1f}%) | "
+            f"Settling {settling_text} | "
+            f"Steady error {steady_error:+.1f} cnt | "
+            f"Band ±{settle_tolerance_counts:.1f} cnt{speed_gate_text}"
+        )
+        return marks, summary_text
+
     def _mark_trace_metrics(self) -> None:
         if not self._trace_capture_is_frozen():
             QtWidgets.QMessageBox.information(
@@ -10870,7 +11040,10 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
 
-        marks, message = self._analyze_trace_speed_metrics(self._trace_capture)
+        if self._trace_series_index_by_label(self._trace_capture, "Pos Err") is not None:
+            marks, message = self._analyze_trace_position_metrics(self._trace_capture)
+        else:
+            marks, message = self._analyze_trace_speed_metrics(self._trace_capture)
         if marks is None:
             QtWidgets.QMessageBox.information(self, "Trace Metrics", message)
             return
