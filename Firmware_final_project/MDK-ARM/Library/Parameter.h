@@ -17,6 +17,7 @@ typedef struct
 	float fActSpeedFilter;
 	float fPrePosition;
 	float fPosition;
+	int64_t PositionCounts;
 	uint32_t EncRes;
 	int32_t EncSingleTurn;
 	int32_t Pulse;

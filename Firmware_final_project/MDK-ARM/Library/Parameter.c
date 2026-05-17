@@ -9,6 +9,12 @@ extern uint16_t FaultCode;
 extern CurrentSensor_t Current_Sensor;
 extern volatile float gEffectiveCurrentLoopFrequencyHz;
 
+static void SyncPositionFloat(Parameterhandle_t *pHandle)
+{
+	pHandle->fPrePosition = pHandle->fPosition;
+	pHandle->fPosition = (float)pHandle->PositionCounts;
+}
+
 void GetParameter(Parameterhandle_t *pHandle, float *MotorParam)
 {
 //		static int32_t PrevDeltaPos = 0,DeltaPos = 0;
@@ -40,7 +46,8 @@ void GetParameter(Parameterhandle_t *pHandle, float *MotorParam)
 				if(pHandle->DeltaPos > ((int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION] >> 1)) 					pHandle->DeltaPos -= (int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION];
 				else if(pHandle->DeltaPos < -((int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION] >> 1)) 		pHandle->DeltaPos += (int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION];
 				pHandle->PreEncSingleTurn = pHandle->EncSingleTurn;
-				pHandle->fPosition += pHandle->DeltaPos;
+				pHandle->PositionCounts += (int64_t)pHandle->DeltaPos;
+				SyncPositionFloat(pHandle);
 				pHandle->HallSensor = 0;
 				pHandle->CurrMultiturns = 0;
 				pHandle->EncoderAlarm = 0;
@@ -70,12 +77,13 @@ void GetParameter(Parameterhandle_t *pHandle, float *MotorParam)
 				if((int32_t)MotorParam[MOTOR_ABS_ENCODER_MODE] == 0)
 				{
 					if(MotorParam[MOTOR_CURRENT_CTRL_DIRECTION] == 0)
-						pHandle->fPosition = pHandle->CurrMultiturns * MotorParam[MOTOR_ENCODER_RESOLUTION] + pHandle->EncSingleTurn;
+						pHandle->PositionCounts = ((int64_t)pHandle->CurrMultiturns * (int64_t)MotorParam[MOTOR_ENCODER_RESOLUTION]) + (int64_t)pHandle->EncSingleTurn;
 					else
-						pHandle->fPosition = -pHandle->CurrMultiturns * MotorParam[MOTOR_ENCODER_RESOLUTION] - pHandle->EncSingleTurn;
+						pHandle->PositionCounts = -((int64_t)pHandle->CurrMultiturns * (int64_t)MotorParam[MOTOR_ENCODER_RESOLUTION]) - (int64_t)pHandle->EncSingleTurn;
 				}
 				else
-					pHandle->fPosition += pHandle->DeltaPos;
+					pHandle->PositionCounts += (int64_t)pHandle->DeltaPos;
+				SyncPositionFloat(pHandle);
 				pHandle->EncoderAlarm = pHandle->Ui16nEncRxWordBuffer[4] >> 8;
 				pHandle->HallSensor = 0;
 			}
@@ -98,7 +106,8 @@ void GetParameter(Parameterhandle_t *pHandle, float *MotorParam)
 				if(pHandle->DeltaPos > ((int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION]>>1)) 					pHandle->DeltaPos -= (int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION];
 				else if(pHandle->DeltaPos < -((int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION]>>1)) 		pHandle->DeltaPos += (int32_t)MotorParam[MOTOR_ENCODER_RESOLUTION];
 				pHandle->PreEncSingleTurn = pHandle->EncSingleTurn;
-				pHandle->fPosition += pHandle->DeltaPos;
+				pHandle->PositionCounts += (int64_t)pHandle->DeltaPos;
+				SyncPositionFloat(pHandle);
 				pHandle->CurrMultiturns = 0;
 				pHandle->EncoderAlarm = 0;
 			}			
@@ -126,12 +135,13 @@ void GetParameter(Parameterhandle_t *pHandle, float *MotorParam)
 				if(MotorParam[MOTOR_ABS_ENCODER_MODE] == 0)
 				{
 					if(MotorParam[MOTOR_CURRENT_CTRL_DIRECTION] == 0)
-						pHandle->fPosition = pHandle->CurrMultiturns * MotorParam[MOTOR_ENCODER_RESOLUTION] + pHandle->EncSingleTurn;
+						pHandle->PositionCounts = ((int64_t)pHandle->CurrMultiturns * (int64_t)MotorParam[MOTOR_ENCODER_RESOLUTION]) + (int64_t)pHandle->EncSingleTurn;
 					else
-						pHandle->fPosition = -pHandle->CurrMultiturns * MotorParam[MOTOR_ENCODER_RESOLUTION] - pHandle->EncSingleTurn;
+						pHandle->PositionCounts = -((int64_t)pHandle->CurrMultiturns * (int64_t)MotorParam[MOTOR_ENCODER_RESOLUTION]) - (int64_t)pHandle->EncSingleTurn;
 				}
 				else
-					pHandle->fPosition += pHandle->DeltaPos;
+					pHandle->PositionCounts += (int64_t)pHandle->DeltaPos;
+				SyncPositionFloat(pHandle);
 				pHandle->EncoderAlarm = pHandle->Ui16nEncRxWordBuffer[0] >> 8;
 				pHandle->HallSensor = 0;
 			}
@@ -159,12 +169,13 @@ void GetParameter(Parameterhandle_t *pHandle, float *MotorParam)
 				if((int32_t)MotorParam[MOTOR_ABS_ENCODER_MODE] == 0)
 				{
 					if(MotorParam[MOTOR_CURRENT_CTRL_DIRECTION] == 0)
-						pHandle->fPosition = pHandle->CurrMultiturns * MotorParam[MOTOR_ENCODER_RESOLUTION] + pHandle->EncSingleTurn;
+						pHandle->PositionCounts = ((int64_t)pHandle->CurrMultiturns * (int64_t)MotorParam[MOTOR_ENCODER_RESOLUTION]) + (int64_t)pHandle->EncSingleTurn;
 					else
-						pHandle->fPosition = -pHandle->CurrMultiturns * MotorParam[MOTOR_ENCODER_RESOLUTION] - pHandle->EncSingleTurn;
+						pHandle->PositionCounts = -((int64_t)pHandle->CurrMultiturns * (int64_t)MotorParam[MOTOR_ENCODER_RESOLUTION]) - (int64_t)pHandle->EncSingleTurn;
 				}
 				else
-					pHandle->fPosition += pHandle->DeltaPos;
+					pHandle->PositionCounts += (int64_t)pHandle->DeltaPos;
+				SyncPositionFloat(pHandle);
 				pHandle->EncoderAlarm = pHandle->Ui16nEncRxWordBuffer[3] >> 8;
 				pHandle->HallSensor = 0;
 			}
@@ -210,6 +221,7 @@ void Init_Parameter(Parameterhandle_t *pHandle)
 	pHandle->PrevDeltaPos = 0;
 	pHandle->fActSpeed = 0.0f;
 	pHandle->fActSpeedFilter = 0.0f;
+	pHandle->PositionCounts = 0;
 	pHandle->fPosition = 0.0f;
 	pHandle->fPrePosition = 0.0f;
 	pHandle->fTheta = 0.0f;

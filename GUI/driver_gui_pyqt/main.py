@@ -6323,7 +6323,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_test_short_tol_spin.setDecimals(3)
         self.position_test_short_tol_spin.setSingleStep(0.05)
         self.position_test_short_tol_spin.setSuffix(" deg")
-        self.position_test_short_tol_spin.setValue(0.25)
+        self.position_test_short_tol_spin.setValue(1.0)
         self.position_test_short_hold_spin = QtWidgets.QDoubleSpinBox()
         self.position_test_short_hold_spin.setRange(50.0, 5000.0)
         self.position_test_short_hold_spin.setDecimals(0)
@@ -6331,7 +6331,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_test_short_hold_spin.setSuffix(" ms")
         self.position_test_short_hold_spin.setValue(200.0)
         self.position_test_short_timeout_spin = QtWidgets.QDoubleSpinBox()
-        self.position_test_short_timeout_spin.setRange(0.5, 60.0)
+        self.position_test_short_timeout_spin.setRange(0.5, 300.0)
         self.position_test_short_timeout_spin.setDecimals(2)
         self.position_test_short_timeout_spin.setSingleStep(0.5)
         self.position_test_short_timeout_spin.setSuffix(" s")
@@ -6360,7 +6360,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_test_long_tol_spin.setDecimals(3)
         self.position_test_long_tol_spin.setSingleStep(0.05)
         self.position_test_long_tol_spin.setSuffix(" deg")
-        self.position_test_long_tol_spin.setValue(0.50)
+        self.position_test_long_tol_spin.setValue(1.0)
         self.position_test_long_hold_spin = QtWidgets.QDoubleSpinBox()
         self.position_test_long_hold_spin.setRange(50.0, 5000.0)
         self.position_test_long_hold_spin.setDecimals(0)
@@ -6368,7 +6368,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_test_long_hold_spin.setSuffix(" ms")
         self.position_test_long_hold_spin.setValue(300.0)
         self.position_test_long_timeout_spin = QtWidgets.QDoubleSpinBox()
-        self.position_test_long_timeout_spin.setRange(1.0, 300.0)
+        self.position_test_long_timeout_spin.setRange(1.0, 1200.0)
         self.position_test_long_timeout_spin.setDecimals(1)
         self.position_test_long_timeout_spin.setSingleStep(1.0)
         self.position_test_long_timeout_spin.setSuffix(" s")
@@ -6412,7 +6412,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_test_backlash_tol_spin.setDecimals(3)
         self.position_test_backlash_tol_spin.setSingleStep(0.05)
         self.position_test_backlash_tol_spin.setSuffix(" deg")
-        self.position_test_backlash_tol_spin.setValue(0.30)
+        self.position_test_backlash_tol_spin.setValue(1.0)
         self.position_test_backlash_hold_spin = QtWidgets.QDoubleSpinBox()
         self.position_test_backlash_hold_spin.setRange(50.0, 5000.0)
         self.position_test_backlash_hold_spin.setDecimals(0)
@@ -6420,7 +6420,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_test_backlash_hold_spin.setSuffix(" ms")
         self.position_test_backlash_hold_spin.setValue(250.0)
         self.position_test_backlash_timeout_spin = QtWidgets.QDoubleSpinBox()
-        self.position_test_backlash_timeout_spin.setRange(0.5, 60.0)
+        self.position_test_backlash_timeout_spin.setRange(0.5, 300.0)
         self.position_test_backlash_timeout_spin.setDecimals(2)
         self.position_test_backlash_timeout_spin.setSingleStep(0.5)
         self.position_test_backlash_timeout_spin.setSuffix(" s")
@@ -8152,6 +8152,12 @@ class MainWindow(QtWidgets.QMainWindow):
         display_counts = (normalized_degrees / 360.0) * encoder_resolution
         return self._display_single_turn_counts_to_raw_counts(display_counts)
 
+    def _degrees_to_delta_counts(self, degrees: float) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        if encoder_resolution <= 1.0:
+            return 0.0
+        return (float(degrees) / 360.0) * encoder_resolution
+
     def _position_angle_range_deg(self, tracking_mode: int | None = None) -> tuple[float, float]:
         mode = self._position_tracking_mode() if tracking_mode is None else int(tracking_mode)
         if mode == POSITION_TRACKING_MODE_MULTI_TURN:
@@ -8755,12 +8761,13 @@ class MainWindow(QtWidgets.QMainWindow):
             hold_s = float(self.position_test_long_hold_spin.value()) / 1000.0
             timeout_s = float(self.position_test_long_timeout_spin.value())
             start_counts = float(current_counts)
-            target_counts = start_counts + self._degrees_to_counts(
-                travel_deg,
-                POSITION_TRACKING_MODE_MULTI_TURN,
+            target_counts = start_counts + self._degrees_to_delta_counts(travel_deg)
+            start_deg = self._counts_to_accumulated_degrees(
+                self._raw_multi_turn_counts_to_display_counts(start_counts)
             )
-            start_deg = self._counts_to_accumulated_degrees(start_counts)
-            target_deg = self._counts_to_accumulated_degrees(target_counts)
+            target_deg = self._counts_to_accumulated_degrees(
+                self._raw_multi_turn_counts_to_display_counts(target_counts)
+            )
             return [
                 {
                     "type": "prepare_position",
