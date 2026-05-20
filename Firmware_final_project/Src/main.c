@@ -1964,10 +1964,6 @@ static float PlanPositionSpeedReferenceRpm(
 		encoder_resolution);
 	if (position_error_counts > 0.0f)
 	{
-		/* Preserve the project's existing position-loop sign convention:
-		   positive position error previously produced a negative speed reference
-		   via position_pi_output_rpm = -gPositionPi.fOut. The planner must emit
-		   the same speed direction so position mode behavior stays unchanged. */
 		desired_direction = -1.0f;
 	}
 	else if (position_error_counts < 0.0f)
@@ -3076,9 +3072,6 @@ static void ApplyPhaseCurrentFeedbackMapping(float *phase_u, float *phase_v)
 		return;
 	}
 
-	/* Current polarity is a driver hardware characteristic for this board.
-	   Keep it forced in firmware so every motor uses the same validated
-	   feedback sign. U/V swap remains available only as an extra debug aid. */
 	if (IdSquareTuning.Enable != 0u)
 	{
 		apply_swap = (FORCE_DRIVER_CURRENT_UV_SWAP != 0u) || (IdSquareTuning.CurrentUvSwapTest != 0u);
@@ -3355,8 +3348,6 @@ static void ReportFault(uint16_t fault)
 	gRunMode = RUN_MODE_FOC;
 	gVfFrequencyHz = 0.0f;
 	gVfVoltageV = 0.0f;
-	/* Keep the requested position target latched for diagnostics/UI even
-	 * if the fault happened before the axis fully reached the command. */
 	gCommandedSpeedRpm = 0.0f;
 	gTracePosError = 0.0f;
 	RestoreIdSquareTuningOffsetGuard();
@@ -3500,11 +3491,6 @@ static void RunFocLoop(void)
 	else if ((IdSquareTuning.Enable != 0u) &&
 		(IdSquareTuning.Mode == ID_SQUARE_TUNING_MODE_SQUARE_WAVE))
 	{
-		// Id square-wave commissioning must stay on a fixed d-axis frame so the
-		// current response is repeatable between runs and does not depend on the
-		// live encoder angle at the instant the user presses Start. The
-		// commissioning UI documents this as ""Forced = 0 rad"", so keep the test
-		// locked to that electrical frame.
 		control_theta = GetIdSquareLockedControlTheta();
 	}
 	else if (IdSquareTuning.Enable != 0u)
@@ -3641,9 +3627,6 @@ static void RunFocLoop(void)
 				}
 				else
 				{
-					/* Position mode now uses an online trapezoidal planner:
-					   every speed-loop tick the remaining distance and the
-					   accel/decel constraints generate the next speed command. */
 					gPositionPi.m_rst(&gPositionPi);
 					gTracePosError = position_raw_error_counts;
 					speed_reference_rpm = PlanPositionSpeedReferenceRpm(
@@ -3688,10 +3671,6 @@ static void RunFocLoop(void)
 	gIqPi.fLowOutLim = -voltage_limit;
 
 	
-	// D-axis zero-hold is useful for locked-rotor commissioning, but in runtime
-	// FOC it can chatter around low-speed zero crossings: the PI gets reset,
-	// rebuilds Vd, then gets reset again. Keep the old behavior only for
-	// Id-tuning/alignment flows and let runtime FOC regulate Id continuously.
 	if ((IdSquareTuning.Enable != 0u) &&
 		(ShouldHoldCurrentLoopAtZero(gIdRefA, gPark.fD) != 0u))
 	{
@@ -3708,9 +3687,6 @@ static void RunFocLoop(void)
 	// If in tunning mode --> isolate and reset PI control Q - axis
 	if (IdSquareTuning.Enable != 0u)
 	{
-		/* Keep the Id square-wave / alignment experiment on the d-axis only.
-		   The q-axis PI is reset and forced to zero so Vq/Iq coupling does not
-		   pollute the locked-rotor response while we validate alignment or tune Id. */
 		gIqPi.m_rst(&gIqPi);
 		gIqPi.fIn = 0.0f;
 		gIqPi.fOut = 0.0f;
@@ -3721,12 +3697,6 @@ static void RunFocLoop(void)
 	// Q loop current control
 	else
 	{
-		/* Runtime speed/position FOC should regulate q-axis current continuously.
-		   Resetting the q-axis PI around tiny low-speed references can make the
-		   controller drop its integral state, then rebuild Vq in bursts, which
-		   looks like torque "kicks" near zero-speed operation. Keep zero-hold
-		   only in explicit tuning/test flows and let runtime FOC close Iq
-		   normally even when the reference is small. */
 		gIqPi.fIn = gIqRefA - gPark.fQ;
 		gIqPi.m_calc(&gIqPi);
 		ApplyCurrentLoopDecoupling(
@@ -3769,7 +3739,7 @@ static void RunFocLoop(void)
 
 	if (alignment_active != 0u)
 	{
-		// Hold first, then average encoder counts; that makes the captured offset less sensitive to transient wobble.
+		// Hold first, then average encoder counts;
 		if (IdSquareTuning.AlignmentCounter <
 			(uint16_t)(GetEffectiveCurrentLoopFrequency() * ID_SQUARE_TUNING_ALIGN_TIME_S))
 		{
