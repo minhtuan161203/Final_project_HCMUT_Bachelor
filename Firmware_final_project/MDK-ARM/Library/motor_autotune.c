@@ -707,9 +707,7 @@ static uint8_t MotorAutoTune_FinalizeLoadedTrajectory(
 		residual_drag_nm = MotorAutoTune_Abs(residual_drag_nm);
 	}
 
-	/* With only accel/decel segments, constant load torque and viscous drag are
-	   not independently observable. Map the positive-speed drag residual to an
-	   equivalent viscous term so downstream tuning still gets a usable B. */
+
 	if ((mean_speed_rad_s > 1.0e-3f) && (residual_drag_nm > 0.0f))
 	{
 		solved_b = residual_drag_nm / mean_speed_rad_s;
@@ -900,9 +898,7 @@ static void MotorAutoTune_Finish(MotorAutoTune_t *handle, const MotorAutoTuneInp
 		encoder_resolution_counts,
 		1.0f,
 		16777216.0f);
-	/* Position PI works on encoder counts and outputs RPM. Scale the requested
-	   bandwidth into count-based gains so Apply Estimated Gains matches the
-	   runtime position PI controller instead of the legacy P-only path. */
+
 	position_output_scale = 60.0f / encoder_resolution_counts;
 	handle->tuned_position_kp = position_output_scale * (2.0f * position_bw_rad_s);
 	handle->tuned_position_ki = position_output_scale * (position_bw_rad_s * position_bw_rad_s);
@@ -1335,10 +1331,7 @@ static void MotorAutoTune_ProcessFlux(
 			phase_current_rms = sqrtf(handle->flux_current_sq_sum / (float)handle->flux_samples);
 			resistive_drop_rms = phase_current_rms * MotorAutoTune_Clamp(handle->measured_Rs, 0.0f, 1000.0f);
 			compensated_phase_rms_sq = (phase_rms * phase_rms) - (resistive_drop_rms * resistive_drop_rms);
-			/* Best-effort Rs compensation for back-EMF estimation. If the computed
-			   correction becomes non-physical because voltage is model-derived
-			   from PWM or the operating point is too slow/noisy, fall back to the
-			   original terminal-voltage estimate instead of aborting the flow. */
+	
 			if (compensated_phase_rms_sq > (phase_rms * phase_rms * 0.05f))
 			{
 				phase_rms = sqrtf(compensated_phase_rms_sq);
@@ -1391,11 +1384,7 @@ static void MotorAutoTune_ProcessLoadedMechanical(
 		return;
 	}
 
-	/* Threshold-based loaded J tuning:
-	   1. wait near zero speed,
-	   2. apply +Iq and capture average Iq between SPEED_LOW and SPEED_HIGH,
-	   3. apply -Iq and capture average Iq while braking back to SPEED_LOW,
-	   4. solve J from the accel/decel torque difference. */
+	
 	low_speed_rpm = MotorAutoTune_GetLoadedMinValidSpeedRpm(handle);
 	high_speed_rpm = MotorAutoTune_GetLoadedMaxValidSpeedRpm(handle, low_speed_rpm);
 	speed_span_rpm = high_speed_rpm - low_speed_rpm;

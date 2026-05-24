@@ -998,6 +998,269 @@ Z(jw) = Rs + jwLs
 
 Firmware dang dung phan bien do cua `Z(jw)` de suy `Ls`.
 
+#### 14.4.1 Lam ro implementation hien tai
+
+Can noi ro de tranh nham giua "mo hinh ly tuong" va "code dang lam gi":
+
+- firmware dang dung `Vd` command de kich plant
+- firmware do `Id` that tu feedback
+- sau do tinh `|Z|`, roi moi suy ra `X_L` va `Ls`
+
+Chuoi suy luan day du la:
+
+```text
+|Z| = V_peak / I_peak
+X_L = sqrt(|Z|^2 - Rs^2)
+Ls = X_L / omega
+```
+
+Noi cach khac, code dang "tru di Rs" trong mien tro khang:
+
+```text
+|Z|^2 = Rs^2 + X_L^2
+=> X_L = sqrt(|Z|^2 - Rs^2)
+```
+
+chu khong tru truc tiep theo tung mau thoi gian:
+
+```text
+V_L = Vd - Rs * Id
+```
+
+Hai cach nay cung dua tren cung mot mo hinh `RL`, nhung branch hien tai dang chon cach magnitude-domain o trang thai xac lap sin.
+
+#### 14.4.2 `Vd` trong stage `Ls` la gi
+
+`Vd` o day la `dq voltage command`, khong phai mot dien ap analog duoc do doc lap tren cuon day.
+
+Trong runtime autotune:
+
+```c
+inputs.vd_voltage_v = Parameter.fVdq[0];
+```
+
+trong khi `Parameter.fVdq[0]` duoc set thang tu command:
+
+```c
+Parameter.fVdq[0] = vd;
+Parameter.fVdq[1] = vq;
+```
+
+roi moi dua qua:
+
+```text
+Inverse Park -> Inverse Clarke -> PWM
+```
+
+de tao `Vabc`.
+
+Vi vay, neu noi cho that chat:
+
+```text
+Vd dung de tinh Ls hien tai la Vd command / Vd tai tao trong frame dq,
+khong phai "Vd thuc te sau moi phi tuyen cua nghich luu"
+```
+
+#### 14.4.3 Uerror va sut ap nghich luu co duoc bu trong stage `Ls` khong
+
+Theo source active hien tai, cau tra loi la:
+
+```text
+Khong
+```
+
+Ly do:
+
+- `ApplyUerrorCompensationToPhaseVoltages()` chi tac dong len `Parameter.fVabc[]`
+- no khong sua nguoc lai `Parameter.fVdq[]`
+- va compensation nay chi cho phep khi `gRunMode == RUN_MODE_FOC`
+- trong khi autotune chay o `RUN_MODE_AUTOTUNE`
+
+Nen trong stage `Ls`, firmware chua dung mot `Vd` da duoc bu deadtime / inverter nonlinearity. Day la mot xap xi thuc dung, khong phai measurement dien ap pha "closed by metrology".
+
+#### 14.4.4 Co ap giu / dong giu DC hay khong
+
+Voi code hien tai, stage `Ls` dang bom:
+
+```c
+commanded_vd = voltage_peak_v * sinf(omega * elapsed_s);
+outputs->vd_voltage_v = commanded_vd;
+outputs->vq_voltage_v = 0.0f;
+```
+
+Nghia la no dang bom:
+
+```text
+Vd(t) = V_peak * sin(omega t)
+```
+
+quanh diem `0`, tuc la:
+
+```text
+khong co DC bias holding voltage
+khong co holding current d-axis rieng
+```
+
+Neu thay hoi truc dien:
+
+```text
+Ap giu hien tai = 0
+Dong giu hien tai = 0
+```
+
+Noi chinh xac hon:
+
+- branch `Ls` hien tai khong cong them mot thanh phan `Vd_hold`
+- cung khong co mot `Id_hold` duoc current-loop giu rieng trong luc bom AC
+- rotor duoc giu frame chu yeu nho da alignment truoc do va `theta` autotune duoc khoa ve cung `d-axis` voi `Id tuning`
+
+Neu co ap giu / dong giu DC de khoa rotor chat hon, cong thuc phai co dang:
+
+```text
+Vd(t) = Vd_hold + V_ac_peak * sin(omega t)
+```
+
+hoac tuong duong la current-loop bias tren truc `d`.
+
+Trong branch hien tai, rotor duoc ky vong van giu frame nho:
+
+- da alignment truoc do
+- theta autotune duoc khoa ve cung `d-axis` voi `Id tuning`
+- bien do AC va tan so kich thich duoc chon trong vung "nhe"
+- ma sat tinh va quan tinh rotor giup rotor khong bi xoay vach ra ngoai
+
+Truc giac vat ly:
+
+- khi frame `d-axis` da trung voi truc nam cham rotor, kich thich `Vd` ly tuong chi thay doi do lon tu thong tren cung mot truc
+- no khong chu dong tao torque `q-axis` de quay rotor
+- vi vay rotor ly tuong se khong bi quay, nhung co the co rung vi mo neu frame chua that su hoan hao hoac inverter / sat / cogging gay lech nho
+
+Neu thay dung cum "hit vao 1 phia", co the hieu la thay dang hoi:
+
+```text
+co mot thanh phan DC nao dang khoa rotor chat theo truc d hay khong?
+```
+
+Voi branch hien tai, cau tra loi la:
+
+```text
+Khong co
+```
+
+co nghia la stage `Ls` hien tai la:
+
+```text
+Pure AC d-axis injection
+```
+
+khong phai:
+
+```text
+DC hold + AC perturbation
+```
+
+#### 14.4.5 Neu them DC bias cho state `Ls` thi duoc gi va mat gi
+
+Them `DC bias` la y tuong hop ly ve mat commissioning cong nghiep, nhung no khong mien phi.
+
+Co 2 huong co the nghien cuu:
+
+1. `Voltage bias`:
+
+```text
+Vd(t) = Vd_hold + V_ac_peak * sin(omega t)
+```
+
+2. `Current bias`:
+
+```text
+Id_ref(t) = Id_hold + I_ac_peak * sin(omega t)
+```
+
+Ve thuc te, neu muc tieu la "khoa rotor chat", `current bias` thuong de noi ve vat ly hon vi no gan truc tiep voi tu thong / luc hut. Tuy nhien branch `Ls` hien tai dang dung `DIRECT_D_VOLTAGE`, nghia la bypass current loop de nhin plant dien "tho" hon.
+
+##### Loi ich khi them DC bias
+
+- rotor duoc khoa chat hon tren truc `d`
+- giam rung vi mo khi bom AC
+- giam nguy co lech frame neu alignment khong hoan hao
+- de tra loi hoi dong theo logic "co luc giu rotor"
+
+##### Cai gia phai tra khi them DC bias
+
+Day la diem rat quan trong ve mat nhan dang:
+
+- `Ls` cua PMSM khong nhat thiet la hang so tuyet doi
+- no co the phu thuoc muc `Id` vi saturation
+- neu cong `DC bias`, ban khong con do `Ls` quanh goc `Id = 0`
+- ban dang do:
+
+```text
+incremental Ld quanh mot operating point co bias
+```
+
+Noi cach khac:
+
+- khong bias: do "small-signal inductance quanh 0"
+- co bias: do "small-signal inductance quanh `Id_hold`"
+
+Neu `Id_hold` lon, ket qua `Ls` co the giam do sat tu.
+
+##### Co nen them DC bias hay khong
+
+Voi branch hien tai, cau tra loi thuc dung la:
+
+```text
+Chua chac nen them ngay
+```
+
+Nen giu `DC bias = 0` neu:
+
+- rotor dang dung du on trong stage `Ls`
+- ket qua `Ls` lap lai duoc qua nhieu lan do
+- muon giu y nghia tham so gan voi vung van hanh `Id ~= 0`
+- muon implementation gon va de defend
+
+Nen can nhac them `DC bias` neu:
+
+- rotor rung ro khi inject AC
+- `Ls` nhay manh giua cac lan do
+- frame alignment chua that su ben
+- muon uu tien "khoa rotor chat" theo kieu commissioning cong nghiep
+
+Khuyen nghi hop ly cho source hien tai:
+
+- neu autotune `Ls` dang chay on va lap lai duoc, uu tien giu nguyen `DC bias = 0`
+- trong bao ve, noi ro day la phep do quanh `Id = 0`
+- chi de xuat them bias nhu mot huong cai tien khi can tang do robust co khi
+
+Noi cach khac:
+
+- giu nguyen hien tai = de, sach, dung voi operating point gan zero-bias
+- them bias = khoa rotor chat hon, nhung doi lai tham so do duoc se tro thanh `incremental inductance` tai diem bias
+
+##### Van de current loop / plant visibility
+
+Neu dung `Id_hold` bang current loop roi lai superimpose AC len tren no, can can nhac:
+
+- current loop co the che bot dong hoc dien that cua plant
+- luc do bai toan `Ls` khong con la "direct plant excitation" don gian nua
+
+Vi vay, neu muon giu rotor ma van ton trong tinh than do `Ls`, mot huong dung hoa la:
+
+- giu `theta` khoa nhu hien tai
+- cong mot `Vd_hold` nho vua du tao preload
+- superimpose `V_ac` nho len tren no
+- va chap nhan rang `Ls` do duoc la `Ld` tai operating point do
+
+##### Cach tra loi bao ve de vua trung thuc vua thuyet phuc
+
+> Trong implementation hien tai, stage `Ls` cua em khong dung ap giu hay dong giu DC, tuc la `DC bias = 0`. Em dang bom AC thuan tuy tren truc `d` da duoc khoa boi alignment va frame lock. Vi vay rotor van duoc ky vong giu nguyen huong do khong co thanh phan `q-axis`, cong them ma sat tinh va quan tinh co khi. Tuy nhien, neu muon khoa rotor chat hon nhu huong cong nghiep, em co the cong them `d-axis` DC bias roi superimpose AC len tren no. Diem doi lai la `Ls` khi do se tro thanh inductance gia tang quanh operating point co bias, khong con la gia tri quanh `Id = 0` nua.
+
+Noi trung thuc khi defend:
+
+> Stage `Ls` hien tai khong cong them DC holding bias. Day la mot implementation toi gian. Neu muon tang do "khoa chat" rotor va giam rung vi mo, mot cai tien hop ly la cong them `d-axis` holding bias roi superimpose thanh phan AC len tren no.
+
 Uu diem:
 
 - kha sach vi do tren rotor khoa
@@ -1010,6 +1273,8 @@ Nhuoc diem:
 - can chon tan so kich thich hop ly
 - neu dong qua nho, peak current rat de nhieu
 - `Ls` co the phu thuoc muc dong vi saturation
+- `Vd` dang la command ly tuong, chua phan anh day du deadtime / Uerror / diode drop
+- khong co DC holding bias nen rotor co the co rung vi mo hon cach khoa rotor cong nghiep
 
 ### 14.5 Stage `PolePairs` va `Flux`
 
@@ -1038,6 +1303,148 @@ Y tuong:
 ```text
 PolePairs ~= electrical_turns / mechanical_turns
 ```
+
+#### 14.5.1 `Electrical turn` la gi
+
+Day la cho rat de nham, nen can tach ro:
+
+- `1 mechanical turn` = rotor quay that `360 do` co khi
+- `1 electrical turn` = vector tu truong quay cua stator quay du `360 do` trong khong gian dien
+
+Neu dien ap / dong 3 pha duoc tao theo dang:
+
+```text
+A = cos(theta_e)
+B = cos(theta_e - 120 do)
+C = cos(theta_e + 120 do)
+```
+
+thi khi `theta_e` chay tu:
+
+```text
+0 -> 2pi
+```
+
+vector tu truong stator quay tron du mot vong dien. Day chinh la:
+
+```text
+1 electrical turn
+```
+
+No khong bat buoc bang `1 vong co` cua rotor. Moi lien he dung la:
+
+```text
+theta_e = p * theta_m
+```
+
+voi `p` la so cap cuc. Suy ra theo so vong:
+
+```text
+electrical_turns = pole_pairs * mechanical_turns
+```
+
+hay:
+
+```text
+pole_pairs = electrical_turns / mechanical_turns
+```
+
+Vi du:
+
+- neu motor co `4` cap cuc
+- stator field quay `4` vong dien
+- rotor moi quay `1` vong co
+
+#### 14.5.2 Firmware dang dem `electrical_turns` nhu the nao
+
+Code dung:
+
+```c
+handle->commanded_electrical_turns += MotorAutoTune_Abs(test_frequency_hz) * handle->dt_s;
+```
+
+Day la he qua truc tiep cua dinh nghia tan so:
+
+```text
+Hz = electrical turn / second
+```
+
+nen moi chu ky:
+
+```text
+dN_elec = |f_e| * dt
+```
+
+cong don theo thoi gian se ra:
+
+```text
+N_elec = integral |f_e(t)| dt
+```
+
+Neu `f_e` la hang so thi:
+
+```text
+N_elec = |f_e| * T
+```
+
+Vi firmware chinh la ben ra lenh `vf_frequency_hz`, nen no biet ro no da "bat" tu truong quay bao nhieu vong dien ma khong can do lai bang sensor rieng.
+
+Neu lay vi du:
+
+- `test_frequency_hz = 5 Hz`
+- chay trong `2 s`
+
+thi:
+
+```text
+commanded_electrical_turns = 5 * 2 = 10 vong dien
+```
+
+Neu cung thoi gian do, encoder bao rotor quay `2.5` vong co, thi:
+
+```text
+pole_pairs = 10 / 2.5 = 4
+```
+
+#### 14.5.3 Tai sao phai dung open-loop V/F
+
+Muc tieu cua stage nay khong phai la torque control chinh xac, ma la tao mot tu truong quay co tan so dien da biet truoc.
+
+Trong runtime autotune:
+
+- `MotorAutoTune_ProcessFlux()` tra ve `outputs->mode = MOTOR_AUTOTUNE_OUTPUT_OPEN_LOOP_VF`
+- `RunMotorAutoTuneLoop()` goi `ApplyOpenLoopVfCommand(outputs->vf_frequency_hz, outputs->vf_voltage_v)`
+
+Nghia la:
+
+- firmware chu dong tao mot rotating field
+- rotor co xu huong khoa dong bo va "di theo"
+- encoder chi viec bao rotor da quay duoc bao nhieu vong co
+
+Neu rotor theo kip rotating field, thi phep chia:
+
+```text
+electrical_turns / mechanical_turns
+```
+
+se cho ra so cap cuc.
+
+#### 14.5.4 Diem can noi trung thuc khi defend
+
+Cach lam nay dung va rat de giai thich, nhung co dieu kien an:
+
+- rotor phai theo kip rotating field open-loop
+- khong bi stall nang
+- khong bi truot qua lon
+- encoder phai doc dung
+
+Do do code moi co:
+
+- timeout
+- stall detection
+- nguong movement toi thieu
+
+Neu rotor khong theo kip, ty so `electrical_turns / mechanical_turns` se bi sai, va khi do `pole_pairs` tinh ra khong con dang tin.
 
 Sau do stage flux:
 
