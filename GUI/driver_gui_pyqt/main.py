@@ -316,6 +316,8 @@ TRACE_CHANNEL_META = {
     13: {"label": "Vd", "unit": "V", "color": "#843c39"},
     14: {"label": "Vq", "unit": "V", "color": "#7b4173"},
     15: {"label": "Raw Speed", "unit": "rpm", "color": "#00bcd4"},
+    16: {"label": "Iq Ref (z^-1)", "unit": "A", "color": "#ffbb78"},
+    17: {"label": "Id Ref (z^-1)", "unit": "A", "color": "#98df8a"},
 }
 
 DRIVER_PARAM_CONTROL_MODE = 1
@@ -358,10 +360,12 @@ TRACE_PRESETS = {
     "Encoder Alignment": [12, 11, 4, 14],
     "Id Tuning": [12, 11, 13, 14],
     "Current Loop": [3, 4, 11, 14],
+    "Current Loop (Aligned Ref)": [16, 4, 17, 11],
     "Phase Currents": [3, 5, 6, 7],
-    "Speed Loop": [1, 2, 3, 4],
+    "Speed Loop": [1, 2, 16, 4],
+    "Speed Loop (Raw Ref)": [1, 2, 3, 4],
     "Position Loop": [10, 2, 3, 4],
-    "Speed Debug": [1, 2, 15, 3],
+    "Speed Debug": [2, 15, 16, 4],
     "Voltage Debug": [11, 12, 13, 14],
 }
 
@@ -2879,12 +2883,14 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         series_keys: list[str],
         stats_mode: str | None = None,
         on_export_requested=None,
+        on_pause_requested=None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._trend_buffer = trend_buffer
         self._series_keys = list(series_keys)
         self._stats_mode = stats_mode
+        self._on_pause_requested = on_pause_requested
         layout = QtWidgets.QVBoxLayout(self)
         toolbar = QtWidgets.QHBoxLayout()
 
@@ -2998,8 +3004,17 @@ class ScadaTrendPanel(QtWidgets.QWidget):
             self.export_report_button.clicked.connect(lambda: on_export_requested(self.plot_view))
 
     def _handle_pause_toggled(self, checked: bool) -> None:
-        self.pause_button.setText("Resume" if checked else "Pause")
-        self.plot_view.set_paused(checked)
+        if self._on_pause_requested is not None:
+            self._on_pause_requested(bool(checked))
+            return
+        self.set_paused_state(bool(checked))
+
+    def set_paused_state(self, paused: bool) -> None:
+        blocker = QtCore.QSignalBlocker(self.pause_button)
+        self.pause_button.setChecked(bool(paused))
+        del blocker
+        self.pause_button.setText("Resume" if paused else "Pause")
+        self.plot_view.set_paused(bool(paused))
         self.refresh()
 
     def _handle_window_changed(self, text: str) -> None:
@@ -4522,6 +4537,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_foc_mode_ui = SPEED_CONTROL_MODE
         self._speed_test_session: SpeedTestSession | None = None
         self._position_test_session: PositionTestSession | None = None
+        self._trace_monitor_suspended = False
 
         self._ack_timer = QtCore.QTimer(self)
         self._ack_timer.setSingleShot(True)
@@ -4745,29 +4761,26 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(dialog)
         tabs = QtWidgets.QTabWidget(dialog)
 
-        self.phase_current_panel = ScadaTrendPanel(
-            "Phase Currents",
-            self._trend_buffer,
-            ["phase_u", "phase_v", "phase_w"],
-            on_export_requested=self._open_report_editor_for_chart,
-        )
         self.dq_current_panel = ScadaTrendPanel(
             "D/Q Currents",
             self._trend_buffer,
             ["id_ref", "id_current", "iq_ref", "iq_current"],
             on_export_requested=self._open_report_editor_for_chart,
+            on_pause_requested=self._set_all_trend_panels_paused,
         )
         self.vdq_voltage_panel = ScadaTrendPanel(
             "D/Q Voltages",
             self._trend_buffer,
             ["vd", "vq"],
             on_export_requested=self._open_report_editor_for_chart,
+            on_pause_requested=self._set_all_trend_panels_paused,
         )
         self.speed_panel = ScadaTrendPanel(
             "Speed Response",
             self._trend_buffer,
             ["act_speed", "cmd_speed"],
             on_export_requested=self._open_report_editor_for_chart,
+            on_pause_requested=self._set_all_trend_panels_paused,
         )
         self.speed_error_panel = ScadaTrendPanel(
             "Speed Error",
@@ -4775,12 +4788,14 @@ class MainWindow(QtWidgets.QMainWindow):
             ["speed_error"],
             stats_mode="speed_error",
             on_export_requested=self._open_report_editor_for_chart,
+            on_pause_requested=self._set_all_trend_panels_paused,
         )
         self.position_panel = ScadaTrendPanel(
             "Position Response",
             self._trend_buffer,
             ["act_position_deg", "cmd_position_deg"],
             on_export_requested=self._open_report_editor_for_chart,
+            on_pause_requested=self._set_all_trend_panels_paused,
         )
         self.position_error_panel = ScadaTrendPanel(
             "Position Error",
@@ -4788,9 +4803,9 @@ class MainWindow(QtWidgets.QMainWindow):
             ["position_error_deg", "validation_error_deg"],
             stats_mode="position_error",
             on_export_requested=self._open_report_editor_for_chart,
+            on_pause_requested=self._set_all_trend_panels_paused,
         )
 
-        tabs.addTab(self.phase_current_panel, "Phase Currents")
         tabs.addTab(self.dq_current_panel, "D/Q Currents")
         tabs.addTab(self.vdq_voltage_panel, "Vd/Vq")
         tabs.addTab(self.speed_panel, "Speed Response")
@@ -4802,7 +4817,7 @@ class MainWindow(QtWidgets.QMainWindow):
         clear_trend_button = QtWidgets.QPushButton("Clear History")
         clear_trend_button.clicked.connect(self._clear_trend_history)
         trend_hint = QtWidgets.QLabel(
-            "Use Pause to inspect data, Auto-scale Y to freeze the range, and hover to read point values. The Speed Error and Position Error tabs show windowed error statistics across the visible time range."
+            "Pause on any chart now freezes all trend tabs together. Use Auto-scale Y to freeze the range, and hover to read point values. The Speed Error and Position Error tabs show windowed error statistics across the visible time range."
         )
         trend_hint.setWordWrap(True)
         toolbar.addWidget(clear_trend_button)
@@ -4812,7 +4827,6 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(tabs, 1)
 
         self._trend_panels = [
-            self.phase_current_panel,
             self.dq_current_panel,
             self.vdq_voltage_panel,
             self.speed_panel,
@@ -7111,6 +7125,19 @@ class MainWindow(QtWidgets.QMainWindow):
             self.auto_poll_checkbox.setChecked(True)
             del blocker
         self._monitor_timer.setInterval(AUTO_MONITOR_INTERVAL_MS)
+
+    def _set_trace_monitor_suspended(self, suspended: bool) -> None:
+        self._trace_monitor_suspended = bool(suspended)
+        if suspended:
+            if self._monitor_timer.isActive():
+                self._monitor_timer.stop()
+            return
+
+        auto_poll_enabled = True
+        if hasattr(self, "auto_poll_checkbox"):
+            auto_poll_enabled = self.auto_poll_checkbox.isChecked()
+        if auto_poll_enabled and not self._monitor_timer.isActive():
+            self._monitor_timer.start()
 
     def _trace_sample_period_s(self) -> float:
         decimation = int(self.trace_rate_combo.currentData() or 0)
@@ -10632,6 +10659,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.trace_status_label.setText("Capture ready for metric analysis")
         self._refresh_trace_metric_buttons()
 
+    def _set_all_trend_panels_paused(self, paused: bool) -> None:
+        for panel in self._trend_panels:
+            panel.set_paused_state(bool(paused))
+
     def _sync_trace_scope_geometry(self) -> None:
         if not hasattr(self, "trace_scope_view") or not hasattr(self, "trace_scope_scroll"):
             return
@@ -11153,6 +11184,7 @@ class MainWindow(QtWidgets.QMainWindow):
             received_samples=0,
         )
         self._active_trace_target = "current_tuning"
+        self._set_trace_monitor_suspended(True)
         window_ms = TRACE_TOTAL_SAMPLES * sample_period_s * 1000.0
         self.ctuning_status_label.setText(
             f"Arming trace and starting Id square-wave tuning ({window_ms:.1f} ms window)..."
@@ -11178,6 +11210,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._current_tuning_capture.active = False
         self.ctuning_status_label.setText("Stopped")
+        self._set_trace_monitor_suspended(False)
         if self._active_trace_target == "current_tuning":
             self._active_trace_target = None
 
@@ -11755,6 +11788,7 @@ class MainWindow(QtWidgets.QMainWindow):
             received_samples=0,
         )
         self._active_trace_target = "trace"
+        self._set_trace_monitor_suspended(True)
         duration_ms = self._trace_capture.total_samples * self._trace_capture.sample_period_s * 1000.0
         self.trace_status_label.setText(
             f"Capturing {self.trace_capture_rate_text()} for ~{duration_ms:.1f} ms"
@@ -11769,6 +11803,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._enqueue_command(Command.CMD_APPLY_TRACE, bytes([0, 0, 0, 0, 0, 0, 0]), "Stop Firmware Trace")
         self._trace_capture.active = False
         self.trace_status_label.setText("Stopped. Capture is frozen and ready for metric analysis.")
+        self._set_trace_monitor_suspended(False)
         if self._active_trace_target == "trace":
             self._active_trace_target = None
         self._refresh_trace_metric_buttons()
@@ -12903,6 +12938,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         else:
             status_label.setText("Capture complete")
+            self._set_trace_monitor_suspended(False)
             if capture_kind == "current_tuning":
                 self._active_trace_target = None
         prefix = "Id tuning" if capture_kind == "current_tuning" else "Trace"

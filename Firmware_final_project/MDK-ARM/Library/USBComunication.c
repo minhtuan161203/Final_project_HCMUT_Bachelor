@@ -79,6 +79,23 @@ extern volatile float gEffectiveCurrentLoopFrequencyHz;
 extern volatile float gEffectiveSpeedLoopFrequencyHz;
 extern uint16_t FaultCode;
 extern float gTracePosError;
+extern volatile float gTraceCmdSpeedSnapshotRpm;
+extern volatile float gTraceActSpeedSnapshotRpm;
+extern volatile float gTraceIqRefSnapshotA;
+extern volatile float gTraceIqRefPrevSnapshotA;
+extern volatile float gTraceIqSnapshotA;
+extern volatile float gTracePhaseUSnapshotA;
+extern volatile float gTracePhaseVSnapshotA;
+extern volatile float gTracePhaseWSnapshotA;
+extern volatile float gTraceVdcSnapshotV;
+extern volatile float gTraceTempSnapshotC;
+extern volatile float gTracePosErrSnapshotCnt;
+extern volatile float gTraceIdSnapshotA;
+extern volatile float gTraceIdRefSnapshotA;
+extern volatile float gTraceIdRefPrevSnapshotA;
+extern volatile float gTraceVdSnapshotV;
+extern volatile float gTraceVqSnapshotV;
+extern volatile float gTraceRawSpeedSnapshotRpm;
 extern float RecordTable1[TRACE_DATA_LENGTH * 4u];
 extern TraceData Trace_Data;
 extern IdSquareTuning_t IdSquareTuning;
@@ -852,35 +869,39 @@ static float *USB_ResolveTraceChannelPointer(uint8_t channel_code)
 	switch (channel_code)
 	{
 		case 1u:
-			return (float *)&gTargetSpeedRpm;
+			return (float *)&gTraceCmdSpeedSnapshotRpm;
 		case 2u:
-			return &Parameter.fActSpeed;
+			return (float *)&gTraceActSpeedSnapshotRpm;
 		case 3u:
-			return &gIqRefA;
+			return (float *)&gTraceIqRefSnapshotA;
 		case 4u:
-			return &Parameter.fIdq[1];
+			return (float *)&gTraceIqSnapshotA;
 		case 5u:
-			return &Parameter.fIabc[0];
+			return (float *)&gTracePhaseUSnapshotA;
 		case 6u:
-			return &Parameter.fIabc[1];
+			return (float *)&gTracePhaseVSnapshotA;
 		case 7u:
-			return &Parameter.fIabc[2];
+			return (float *)&gTracePhaseWSnapshotA;
 		case 8u:
-			return &Parameter.fVdc;
+			return (float *)&gTraceVdcSnapshotV;
 		case 9u:
-			return &Parameter.fTemparature;
+			return (float *)&gTraceTempSnapshotC;
 		case 10u:
-			return &gTracePosError;
+			return (float *)&gTracePosErrSnapshotCnt;
 		case 11u:
-			return &Parameter.fIdq[0];
+			return (float *)&gTraceIdSnapshotA;
 		case 12u:
-			return &gIdRefA;
+			return (float *)&gTraceIdRefSnapshotA;
 		case 13u:
-			return &Parameter.fVdq[0];
+			return (float *)&gTraceVdSnapshotV;
 		case 14u:
-			return &Parameter.fVdq[1];
+			return (float *)&gTraceVqSnapshotV;
 		case 15u:
-			return (float *)&gDebugSpeedRawRpm;
+			return (float *)&gTraceRawSpeedSnapshotRpm;
+		case 16u:
+			return (float *)&gTraceIqRefPrevSnapshotA;
+		case 17u:
+			return (float *)&gTraceIdRefPrevSnapshotA;
 		default:
 			return 0;
 	}

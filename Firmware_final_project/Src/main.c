@@ -119,6 +119,23 @@ volatile uint8_t gControlTimingMode = USER_DEFAULT_CONTROL_TIMING_MODE;
 volatile float gEffectiveCurrentLoopFrequencyHz = USER_SELECTED_ISR_FREQUENCY;
 volatile float gEffectiveSpeedLoopFrequencyHz = USER_EFFECTIVE_SPEED_LOOP_FREQUENCY;
 float gTracePosError = 0.0f;
+volatile float gTraceCmdSpeedSnapshotRpm = 0.0f;
+volatile float gTraceActSpeedSnapshotRpm = 0.0f;
+volatile float gTraceIqRefSnapshotA = 0.0f;
+volatile float gTraceIqRefPrevSnapshotA = 0.0f;
+volatile float gTraceIqSnapshotA = 0.0f;
+volatile float gTracePhaseUSnapshotA = 0.0f;
+volatile float gTracePhaseVSnapshotA = 0.0f;
+volatile float gTracePhaseWSnapshotA = 0.0f;
+volatile float gTraceVdcSnapshotV = 0.0f;
+volatile float gTraceTempSnapshotC = 0.0f;
+volatile float gTracePosErrSnapshotCnt = 0.0f;
+volatile float gTraceIdSnapshotA = 0.0f;
+volatile float gTraceIdRefSnapshotA = 0.0f;
+volatile float gTraceIdRefPrevSnapshotA = 0.0f;
+volatile float gTraceVdSnapshotV = 0.0f;
+volatile float gTraceVqSnapshotV = 0.0f;
+volatile float gTraceRawSpeedSnapshotRpm = 0.0f;
 /* Single user-tunable position deadband. Release hysteresis is derived internally. */
 volatile float gPositionLoopDeadbandDeg = 0.3f;
 volatile uint8_t gEncoderAlignmentPolicy = ENCODER_ALIGNMENT_POLICY_POWER_ON;
@@ -210,6 +227,7 @@ static void RunMotorAutoTuneLoop(void);
 static float CalcIdSquareTuningVoltageLimit(void);
 static float CalcIdSquareTuningReference(void);
 static float CalcIdSquareTuningAlignmentCurrent(void);
+static void UpdateTraceSnapshot(void);
 static void UpdateTraceCapture(void);
 static void ResetDebugAveraging(void);
 static void InitIsrDebugCounter(void);
@@ -223,10 +241,13 @@ static float GetConfiguredPositionVffFilterHz(void);
 static uint8_t GetConfiguredPositionTrackingMode(void);
 static float GetConfiguredSpeedLimitRpm(void);
 static float GetConfiguredSpeedIqLimitA(void);
+static float GetConfiguredSpeedTorqueFeedforwardGain(void);
 static float GetConfiguredMotorInductanceHenry(void);
 static float GetConfiguredFluxLinkageWb(void);
 static float GetConfiguredPolePairsFloat(void);
+static float GetConfiguredTorqueConstantNmPerA(void);
 static float GetElectricalSpeedRadPerSec(float mechanical_speed_rpm);
+static float CalcSpeedTorqueFeedforwardA(float speed_reference_rpm, float dt_sec);
 static void ApplyCurrentLoopDecoupling(
 	float *vd_command,
 	float *vq_command,
@@ -239,6 +260,7 @@ static float GetPositionControlErrorCounts(float target_position_counts, float a
 static float GetPositionLoopErrorDeadbandCounts(float encoder_resolution);
 static float GetPositionLoopErrorReleaseDeadbandCounts(float encoder_resolution);
 static float UpdatePositionSetpointVelocityRpm(float target_position_counts, float encoder_resolution, float dt_sec);
+static float ApplySpeedRampLimitForFeedforward(float current_command, float target_command, float max_speed_rpm, float dt_sec);
 static float PlanPositionSpeedReferenceRpm(
 	float target_position_counts,
 	float actual_position_counts,
@@ -370,6 +392,10 @@ uint8_t SaveUerrorLutToFlash(void);
 #define SPEED_ESTIMATE_LPF_ALPHA 0.1f
 #define SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED 0.02f
 #define SPEED_ESTIMATE_LPF_BLEND_END_RPM 120.0f
+#define SPEED_ESTIMATE_LPF_ALPHA_TRANSIENT 0.25f
+#define SPEED_ESTIMATE_TRANSIENT_ERROR_RPM 150.0f
+#define SPEED_TORQUE_FF_DEFAULT_GAIN 1.0f
+#define SPEED_TORQUE_FF_MAX_GAIN 5.0f
 #define DEBUG_AVG_SAMPLES 256u
 static float sDebugDeltaPosAccum = 0.0f;
 static float sDebugSpeedRawAccum = 0.0f;
@@ -394,6 +420,8 @@ static uint16_t sFocRotatingThetaVoltageLogCounter = 0u;
 static float sPositionSetpointPrevCounts = 0.0f;
 static float sPositionSetpointVelocityCountsPerSec = 0.0f;
 static uint8_t sPositionDeadbandHoldActive = 0u;
+static float sSpeedTorqueFfTrajectoryRpm = 0.0f;
+static float sSpeedTorqueFfPrevOmegaRadPerSec = 0.0f;
 static const uint8_t sFocCurrentFeedbackMapSwapCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 0u, 1u, 1u};
 static const uint8_t sFocCurrentFeedbackMapInvertCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 1u, 0u, 1u};
 static uint8_t sFocCurrentFeedbackMapCaseIndex = 0u;
@@ -628,6 +656,9 @@ static float GetSpeedEstimateLpfAlpha(float raw_speed_rpm)
 {
 	float speed_context_rpm;
 	float blend;
+	float base_alpha;
+	float transient_error_rpm;
+	float transient_blend;
 
 	speed_context_rpm = fmaxf(
 		fabsf(raw_speed_rpm),
@@ -636,8 +667,20 @@ static float GetSpeedEstimateLpfAlpha(float raw_speed_rpm)
 		speed_context_rpm / SPEED_ESTIMATE_LPF_BLEND_END_RPM,
 		0.0f,
 		1.0f);
-	return SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED +
+	base_alpha = SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED +
 		blend * (SPEED_ESTIMATE_LPF_ALPHA - SPEED_ESTIMATE_LPF_ALPHA_LOW_SPEED);
+
+	/* Large speed steps benefit from a faster observer path so the speed PI
+	   does not keep pushing stale filtered feedback into the current loop. */
+	transient_error_rpm = fmaxf(
+		fabsf(gCommandedSpeedRpm - Parameter.fActSpeedFilter),
+		fabsf(gTargetSpeedRpm - Parameter.fActSpeedFilter));
+	transient_blend = ClampFloat(
+		transient_error_rpm / SPEED_ESTIMATE_TRANSIENT_ERROR_RPM,
+		0.0f,
+		1.0f);
+	return base_alpha +
+		transient_blend * (SPEED_ESTIMATE_LPF_ALPHA_TRANSIENT - base_alpha);
 }
 
 static void ResetDebugAveraging(void)
@@ -1592,6 +1635,8 @@ static void ResetControlLoops(void)
 	sPositionSetpointPrevCounts = gTargetPositionCounts;
 	sPositionSetpointVelocityCountsPerSec = 0.0f;
 	sPositionDeadbandHoldActive = 0u;
+	sSpeedTorqueFfTrajectoryRpm = 0.0f;
+	sSpeedTorqueFfPrevOmegaRadPerSec = 0.0f;
 	gDebugOpenLoopElectricalHzCmd = 0.0f;
 	gDebugOpenLoopSyncRpmCmd = 0.0f;
 	gDebugExpectedDeltaPosSync = 0.0f;
@@ -1660,9 +1705,15 @@ static float GetConfiguredSpeedLimitRpm(void)
 
 static float GetConfiguredSpeedIqLimitA(void)
 {
+	float peak_limit = MotorParameter[MOTOR_PEAK_CURRENT_RMS];
 	float rated_limit = MotorParameter[MOTOR_RATED_CURRENT_RMS];
 	float oc_limit = Current_Sensor.OverCurrentThreshold * FOC_SPEED_LOOP_MAX_OC_RATIO;
-	float iq_limit = rated_limit;
+	float iq_limit = peak_limit;
+
+	if (iq_limit <= 0.0f)
+	{
+		iq_limit = rated_limit;
+	}
 
 	if ((oc_limit > 0.0f) && ((iq_limit <= 0.0f) || (oc_limit < iq_limit)))
 	{
@@ -1677,6 +1728,20 @@ static float GetConfiguredSpeedIqLimitA(void)
 		iq_limit = FOC_SPEED_LOOP_MIN_IQ_LIMIT_A;
 	}
 	return iq_limit;
+}
+
+static float GetConfiguredSpeedTorqueFeedforwardGain(void)
+{
+	float ff_gain = DriverParameter[POSITION_FF_GAIN];
+
+	/* Reuse the dormant POSITION_FF_GAIN field as a runtime scale for the
+	   model-based speed torque feedforward until a dedicated speed-FF
+	   parameter is added to the protocol/GUI. */
+	if (!isfinite(ff_gain) || (ff_gain <= 0.0f))
+	{
+		ff_gain = SPEED_TORQUE_FF_DEFAULT_GAIN;
+	}
+	return ClampFloat(ff_gain, 0.0f, SPEED_TORQUE_FF_MAX_GAIN);
 }
 
 static float GetConfiguredMotorInductanceHenry(void)
@@ -1716,9 +1781,70 @@ static float GetConfiguredPolePairsFloat(void)
 	return pole_pairs;
 }
 
+static float GetConfiguredTorqueConstantNmPerA(void)
+{
+	float pole_pairs = GetConfiguredPolePairsFloat();
+	float flux_linkage_wb = GetConfiguredFluxLinkageWb();
+	float torque_constant = 1.5f * pole_pairs * flux_linkage_wb;
+
+	if (torque_constant < 0.0f)
+	{
+		torque_constant = 0.0f;
+	}
+	return torque_constant;
+}
+
 static float GetElectricalSpeedRadPerSec(float mechanical_speed_rpm)
 {
 	return mechanical_speed_rpm * GetConfiguredPolePairsFloat() * (2.0f * PI / 60.0f);
+}
+
+static float CalcSpeedTorqueFeedforwardA(float speed_reference_rpm, float dt_sec)
+{
+	float ff_gain;
+	float torque_constant_nm_per_a;
+	float rotor_inertia_kgm2;
+	float viscous_friction_nms;
+	float speed_limit_rpm;
+	float ff_target_rpm;
+	float ff_next_rpm;
+	float omega_ref_rad_s;
+	float alpha_ref_rad_s2;
+	float torque_ff_nm;
+
+	if (dt_sec <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	ff_gain = GetConfiguredSpeedTorqueFeedforwardGain();
+	torque_constant_nm_per_a = GetConfiguredTorqueConstantNmPerA();
+	rotor_inertia_kgm2 = MotorParameter[MOTOR_ROTOR_INERTIA] * 1.0e-3f;
+	viscous_friction_nms = MotorParameter[MOTOR_VISCOUS_FRICTION] * 1.0e-3f;
+	speed_limit_rpm = GetConfiguredSpeedLimitRpm();
+
+	if ((ff_gain <= 0.0f) || (torque_constant_nm_per_a <= 1.0e-6f) || (speed_limit_rpm <= 0.0f))
+	{
+		sSpeedTorqueFfTrajectoryRpm = speed_reference_rpm;
+		sSpeedTorqueFfPrevOmegaRadPerSec = speed_reference_rpm * (2.0f * PI / 60.0f);
+		return 0.0f;
+	}
+
+	ff_target_rpm = ClampFloat(speed_reference_rpm, -speed_limit_rpm, speed_limit_rpm);
+	ff_next_rpm = ApplySpeedRampLimitForFeedforward(
+		sSpeedTorqueFfTrajectoryRpm,
+		ff_target_rpm,
+		speed_limit_rpm,
+		dt_sec);
+	omega_ref_rad_s = ff_next_rpm * (2.0f * PI / 60.0f);
+	alpha_ref_rad_s2 = (omega_ref_rad_s - sSpeedTorqueFfPrevOmegaRadPerSec) / dt_sec;
+	torque_ff_nm = (rotor_inertia_kgm2 * alpha_ref_rad_s2) +
+		(viscous_friction_nms * omega_ref_rad_s);
+
+	sSpeedTorqueFfTrajectoryRpm = ff_next_rpm;
+	sSpeedTorqueFfPrevOmegaRadPerSec = omega_ref_rad_s;
+
+	return ff_gain * (torque_ff_nm / torque_constant_nm_per_a);
 }
 
 static void ApplyCurrentLoopDecoupling(
@@ -1864,6 +1990,46 @@ static float UpdatePositionSetpointVelocityRpm(float target_position_counts, flo
 	}
 
 	return (sPositionSetpointVelocityCountsPerSec * 60.0f) / encoder_resolution;
+}
+
+static float ApplySpeedRampLimitForFeedforward(float current_command, float target_command, float max_speed_rpm, float dt_sec)
+{
+	float accel_ms = DriverParameter[ACCELERATION_TIME];
+	float decel_ms = DriverParameter[DECELERATION_TIME];
+	float accel_step;
+	float decel_step;
+	float step_limit;
+	float delta;
+
+	if ((dt_sec <= 0.0f) || (max_speed_rpm <= 0.0f))
+	{
+		return target_command;
+	}
+
+	if (accel_ms <= 0.0f)
+	{
+		accel_ms = 200.0f;
+	}
+	if (decel_ms <= 0.0f)
+	{
+		decel_ms = accel_ms;
+	}
+
+	accel_step = max_speed_rpm * dt_sec / (accel_ms * 0.001f);
+	decel_step = max_speed_rpm * dt_sec / (decel_ms * 0.001f);
+	delta = target_command - current_command;
+	step_limit = (fabsf(target_command) > fabsf(current_command)) ? accel_step : decel_step;
+
+	if (delta > step_limit)
+	{
+		delta = step_limit;
+	}
+	else if (delta < -step_limit)
+	{
+		delta = -step_limit;
+	}
+
+	return current_command + delta;
 }
 
 static float ApplySpeedRampLimit(float current_command, float target_command, float max_speed_rpm, float dt_sec)
@@ -2723,6 +2889,8 @@ static void UpdateTraceCapture(void)
 		return;
 	}
 
+	UpdateTraceSnapshot();
+
 	if (Trace_Data.u8CntSample > 0u)
 	{
 		Trace_Data.u8CntSample--;
@@ -2744,6 +2912,35 @@ static void UpdateTraceCapture(void)
 	RecordTable1[index + 2u] = (Trace_Data.Data3 != 0) ? *Trace_Data.Data3 : 0.0f;
 	RecordTable1[index + 3u] = (Trace_Data.Data4 != 0) ? *Trace_Data.Data4 : 0.0f;
 	Trace_Data.Counter++;
+}
+
+static void UpdateTraceSnapshot(void)
+{
+	static float sPrevIqRefA = 0.0f;
+	static float sPrevIdRefA = 0.0f;
+
+	/* Latch one coherent control-loop snapshot so Trace Scope sees synchronized
+	   values instead of live globals that were updated at different ISR stages. */
+	gTraceCmdSpeedSnapshotRpm = gCommandedSpeedRpm;
+	gTraceActSpeedSnapshotRpm = Parameter.fActSpeed;
+	gTraceIqRefPrevSnapshotA = sPrevIqRefA;
+	gTraceIqRefSnapshotA = gIqRefA;
+	gTraceIqSnapshotA = Parameter.fIdq[1];
+	gTracePhaseUSnapshotA = Parameter.fIabc[0];
+	gTracePhaseVSnapshotA = Parameter.fIabc[1];
+	gTracePhaseWSnapshotA = Parameter.fIabc[2];
+	gTraceVdcSnapshotV = Parameter.fVdc;
+	gTraceTempSnapshotC = Parameter.fTemparature;
+	gTracePosErrSnapshotCnt = gTracePosError;
+	gTraceIdRefPrevSnapshotA = sPrevIdRefA;
+	gTraceIdRefSnapshotA = gIdRefA;
+	gTraceIdSnapshotA = Parameter.fIdq[0];
+	gTraceVdSnapshotV = Parameter.fVdq[0];
+	gTraceVqSnapshotV = Parameter.fVdq[1];
+	gTraceRawSpeedSnapshotRpm = gDebugSpeedRawRpm;
+
+	sPrevIqRefA = gIqRefA;
+	sPrevIdRefA = gIdRefA;
 }
 
 void UpdateDriverParameter(float *driver_parameter)
@@ -2883,9 +3080,6 @@ void UpdateMotorParameter(float *motor_parameter)
 	Parameter.EncRes = (uint32_t)motor_parameter[MOTOR_ENCODER_RESOLUTION];
 	Parameter.u8PolePair = (uint8_t)motor_parameter[MOTOR_NUMBER_POLE_PAIRS];
 	Parameter.Offset_Enc = (int32_t)motor_parameter[MOTOR_HALL_OFFSET];
-	/* Prefer rated current for software OC protection because that is the
-	   value most consistently available from the motor label. Fall back to
-	   peak-current capability only when rated current is missing. */
 	if (peak_current <= 0.0f)
 	{
 		float peak_current_ratio = DEFAULT_MOTOR_PEAK_CURRENT_RMS /
@@ -2896,8 +3090,11 @@ void UpdateMotorParameter(float *motor_parameter)
 	{
 		rated_current = peak_current;
 	}
+	/* Fast loop protection should follow the motor's short-term current
+	   capability so speed-step launch is not artificially clamped at the
+	   continuous RMS rating. */
 	Current_Sensor.OverCurrentThreshold = ClampFloat(
-		rated_current,
+		peak_current,
 		0.5f,
 		DIRVER_OVER_CURRENT_THRESHOLD_AMPERE_UNIT);
 
@@ -3659,7 +3856,16 @@ static void RunFocLoop(void)
 			gCommandedSpeedRpm = speed_reference_rpm;
 			gSpeedPi.fIn = speed_reference_rpm - Parameter.fActSpeed;
 			gSpeedPi.m_calc(&gSpeedPi);
-			gIqRefA = -ClampFloat(gSpeedPi.fOut, gSpeedPi.fLowOutLim, gSpeedPi.fUpOutLim); //Get Iq ref for current loop
+			{
+				float speed_iq_ff_a = CalcSpeedTorqueFeedforwardA(
+					speed_reference_rpm,
+					gSpeedPi.fDtSec);
+				float speed_iq_cmd_a = gSpeedPi.fOut + speed_iq_ff_a;
+				gIqRefA = -ClampFloat(
+					speed_iq_cmd_a,
+					gSpeedPi.fLowOutLim,
+					gSpeedPi.fUpOutLim); // Get Iq ref for current loop
+			}
 		}
 
 		voltage_limit = Parameter.fVdc * 0.51f;
