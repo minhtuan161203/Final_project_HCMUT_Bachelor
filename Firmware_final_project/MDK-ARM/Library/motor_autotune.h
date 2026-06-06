@@ -163,6 +163,12 @@ typedef struct
 	float ls_current_sq_sum;
 	float ls_current_peak_a;
 	uint32_t ls_measure_samples;
+	float ls_voltage_sin_sum;
+	float ls_voltage_cos_sum;
+	float ls_current_sin_sum;
+	float ls_current_cos_sum;
+	float ls_voltage_fundamental_v;
+	float ls_current_fundamental_a;
 
 	float flux_voltage_sq_sum;
 	float flux_current_sq_sum;

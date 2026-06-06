@@ -98,6 +98,8 @@
 
 #define MOTOR_AUTOTUNE_RS_WAIT_HOST_SUBSTEP     4u
 #define MOTOR_AUTOTUNE_LS_WAIT_HOST_SUBSTEP     3u
+#define MOTOR_AUTOTUNE_SQRT_2_F                 1.41421356237f
+#define MOTOR_AUTOTUNE_SQRT_3_F                 1.73205080757f
 
 typedef enum
 {
@@ -120,6 +122,12 @@ static void MotorAutoTune_ResetLoadedTrajectory(MotorAutoTune_t *handle);
 static void MotorAutoTune_UpdateLoadedTorqueSign(
 	MotorAutoTune_t *handle,
 	const MotorAutoTuneInputs_t *inputs);
+static float MotorAutoTune_ReconstructDVoltage(
+	const MotorAutoTuneInputs_t *inputs);
+static float MotorAutoTune_FundamentalPeakFromSums(
+	float sin_sum,
+	float cos_sum,
+	uint32_t sample_count);
 static uint8_t MotorAutoTune_FinalizeLoadedTrajectory(
 	MotorAutoTune_t *handle,
 	const MotorAutoTuneInputs_t *inputs);
@@ -161,6 +169,41 @@ static uint32_t MotorAutoTune_SecondsToTicks(const MotorAutoTune_t *handle, floa
 		ticks_f = 1.0f;
 	}
 	return (uint32_t)(ticks_f + 0.5f);
+}
+
+static float MotorAutoTune_ReconstructDVoltage(
+	const MotorAutoTuneInputs_t *inputs)
+{
+	float alpha_v;
+	float beta_v;
+	float sin_theta;
+	float cos_theta;
+
+	if (inputs == 0)
+	{
+		return 0.0f;
+	}
+
+	alpha_v = inputs->phase_voltage_u_v;
+	beta_v = (inputs->phase_voltage_v_v - inputs->phase_voltage_w_v) /
+		MOTOR_AUTOTUNE_SQRT_3_F;
+	sin_theta = sinf(inputs->electrical_theta_rad);
+	cos_theta = cosf(inputs->electrical_theta_rad);
+	return (alpha_v * cos_theta) + (beta_v * sin_theta);
+}
+
+static float MotorAutoTune_FundamentalPeakFromSums(
+	float sin_sum,
+	float cos_sum,
+	uint32_t sample_count)
+{
+	if (sample_count == 0u)
+	{
+		return 0.0f;
+	}
+
+	return (2.0f / (float)sample_count) *
+		sqrtf((sin_sum * sin_sum) + (cos_sum * cos_sum));
 }
 
 static float MotorAutoTune_LpfAlpha(float cutoff_hz, float dt_s)
@@ -1052,8 +1095,12 @@ static void MotorAutoTune_ProcessLs(
 	float commanded_vd;
 	float sample_marker;
 	float current_sample_a;
+	float voltage_sample_v;
+	float sample_sin;
+	float sample_cos;
 	float current_rms_a;
 	float current_peak_a;
+	float voltage_fundamental_peak_v;
 	float impedance_mag_ohm;
 	float reactive_term_sq;
 
@@ -1096,6 +1143,12 @@ static void MotorAutoTune_ProcessLs(
 				handle->ls_current_sq_sum = 0.0f;
 				handle->ls_current_peak_a = 0.0f;
 				handle->ls_measure_samples = 0u;
+				handle->ls_voltage_sin_sum = 0.0f;
+				handle->ls_voltage_cos_sum = 0.0f;
+				handle->ls_current_sin_sum = 0.0f;
+				handle->ls_current_cos_sum = 0.0f;
+				handle->ls_voltage_fundamental_v = 0.0f;
+				handle->ls_current_fundamental_a = 0.0f;
 				handle->ls_initial_current_a = 0.0f;
 				handle->ls_final_current_a = 0.0f;
 				handle->ls_current_slope_a_per_s = 0.0f;
@@ -1110,13 +1163,20 @@ static void MotorAutoTune_ProcessLs(
 			outputs->vd_voltage_v = commanded_vd;
 			outputs->vq_voltage_v = 0.0f;
 			outputs->isolate_q_axis = 1u;
+			voltage_sample_v = MotorAutoTune_ReconstructDVoltage(inputs);
 			sample_marker = (handle->counter >= settle_ticks) ? 1.0f : 0.0f;
-			MotorAutoTune_PushChart(handle, inputs->id_current_a, commanded_vd, sample_marker);
+			MotorAutoTune_PushChart(handle, inputs->id_current_a, voltage_sample_v, sample_marker);
 
 			if (handle->counter >= settle_ticks)
 			{
 				current_sample_a = inputs->id_current_a;
 				handle->ls_current_sq_sum += current_sample_a * current_sample_a;
+				sample_sin = sinf(omega * elapsed_s);
+				sample_cos = cosf(omega * elapsed_s);
+				handle->ls_voltage_sin_sum += voltage_sample_v * sample_sin;
+				handle->ls_voltage_cos_sum += voltage_sample_v * sample_cos;
+				handle->ls_current_sin_sum += current_sample_a * sample_sin;
+				handle->ls_current_cos_sum += current_sample_a * sample_cos;
 				current_sample_a = MotorAutoTune_Abs(current_sample_a);
 				if (current_sample_a > handle->ls_current_peak_a)
 				{
@@ -1134,18 +1194,29 @@ static void MotorAutoTune_ProcessLs(
 				}
 
 				current_rms_a = sqrtf(handle->ls_current_sq_sum / (float)handle->ls_measure_samples);
-				current_peak_a = current_rms_a * sqrtf(2.0f);
+				current_peak_a = MotorAutoTune_FundamentalPeakFromSums(
+					handle->ls_current_sin_sum,
+					handle->ls_current_cos_sum,
+					handle->ls_measure_samples);
+				voltage_fundamental_peak_v = MotorAutoTune_FundamentalPeakFromSums(
+					handle->ls_voltage_sin_sum,
+					handle->ls_voltage_cos_sum,
+					handle->ls_measure_samples);
+				handle->ls_voltage_fundamental_v = voltage_fundamental_peak_v;
+				handle->ls_current_fundamental_a = current_peak_a;
 				handle->ls_initial_current_a = current_rms_a;
 				handle->ls_final_current_a = current_peak_a;
 				handle->ls_current_slope_a_per_s = handle->ls_current_peak_a;
+				handle->ls_step_voltage_applied_v = voltage_fundamental_peak_v;
 
-				if (current_peak_a < MOTOR_AUTOTUNE_LS_MIN_CURRENT_PEAK_A)
+				if ((current_peak_a < MOTOR_AUTOTUNE_LS_MIN_CURRENT_PEAK_A) ||
+					(voltage_fundamental_peak_v <= MOTOR_AUTOTUNE_MIN_STEP_VOLTAGE_V))
 				{
 					MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 					return;
 				}
 
-				impedance_mag_ohm = voltage_peak_v / current_peak_a;
+				impedance_mag_ohm = voltage_fundamental_peak_v / current_peak_a;
 				reactive_term_sq =
 					(impedance_mag_ohm * impedance_mag_ohm) -
 					(handle->measured_Rs * handle->measured_Rs);

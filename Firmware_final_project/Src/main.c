@@ -1364,8 +1364,13 @@ static void ApplyUerrorCompensationToPhaseVoltages(void)
 	float comp_v;
 	float comp_w;
 	float common_mode;
+	uint8_t compensation_active;
 
-	if ((gRunMode != RUN_MODE_FOC) ||
+	compensation_active = ((gRunMode == RUN_MODE_FOC) ||
+		((gRunMode == RUN_MODE_AUTOTUNE) &&
+		 (gMotorAutoTune.state == MOTOR_AUTOTUNE_STATE_LS))) ? 1u : 0u;
+
+	if ((compensation_active == 0u) ||
 		(gUerrorCharacterization.compensation_enabled == 0u) ||
 		(gUerrorCharacterization.lut_point_count < 2u) ||
 		(Parameter.fVdc <= 1.0f))
@@ -3336,11 +3341,17 @@ static void ApplyVoltageVectorForTheta(float electrical_theta, float vd, float v
 	duty_u = 0.5f + (Parameter.fVabc[0] * inv_vbus);
 	duty_v = 0.5f + (Parameter.fVabc[1] * inv_vbus);
 	duty_w = 0.5f + (Parameter.fVabc[2] * inv_vbus);
+	duty_u = ClampFloat(duty_u, 0.05f, 0.95f);
+	duty_v = ClampFloat(duty_v, 0.05f, 0.95f);
+	duty_w = ClampFloat(duty_w, 0.05f, 0.95f);
 
-	GeneratePWM(
-		ClampFloat(duty_u, 0.05f, 0.95f),
-		ClampFloat(duty_v, 0.05f, 0.95f),
-		ClampFloat(duty_w, 0.05f, 0.95f));
+	/* Reconstruct the actually applied average phase voltages after PWM clamping
+	   so autotune/debug consumers do not keep assuming the unclamped request. */
+	Parameter.fVabc[0] = (duty_u - 0.5f) * Parameter.fVdc;
+	Parameter.fVabc[1] = (duty_v - 0.5f) * Parameter.fVdc;
+	Parameter.fVabc[2] = (duty_w - 0.5f) * Parameter.fVdc;
+
+	GeneratePWM(duty_u, duty_v, duty_w);
 }
 
 static void RunCurrentLoopForTheta(
@@ -3937,11 +3948,15 @@ static void RunFocLoop(void)
 	duty_u = 0.5f + (Parameter.fVabc[0] * inv_vbus);
 	duty_v = 0.5f + (Parameter.fVabc[1] * inv_vbus);
 	duty_w = 0.5f + (Parameter.fVabc[2] * inv_vbus);
+	duty_u = ClampFloat(duty_u, 0.05f, 0.95f);
+	duty_v = ClampFloat(duty_v, 0.05f, 0.95f);
+	duty_w = ClampFloat(duty_w, 0.05f, 0.95f);
 
-	GeneratePWM(
-		ClampFloat(duty_u, 0.05f, 0.95f),
-		ClampFloat(duty_v, 0.05f, 0.95f),
-		ClampFloat(duty_w, 0.05f, 0.95f));
+	Parameter.fVabc[0] = (duty_u - 0.5f) * Parameter.fVdc;
+	Parameter.fVabc[1] = (duty_v - 0.5f) * Parameter.fVdc;
+	Parameter.fVabc[2] = (duty_w - 0.5f) * Parameter.fVdc;
+
+	GeneratePWM(duty_u, duty_v, duty_w);
 
 	if (alignment_active != 0u)
 	{
