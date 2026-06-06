@@ -20,7 +20,11 @@
 #define MOTOR_AUTOTUNE_LS_PREPARE_S             0.10f
 #define MOTOR_AUTOTUNE_LS_SETTLE_CYCLES         5.0f
 #define MOTOR_AUTOTUNE_LS_MEASURE_CYCLES        6.0f
+#define MOTOR_AUTOTUNE_LS_MIN_MEASURE_S         0.020f
+#define MOTOR_AUTOTUNE_LS_MIN_SAMPLES_PER_CYCLE 16u
 #define MOTOR_AUTOTUNE_LS_MIN_CURRENT_PEAK_A    0.03f
+#define MOTOR_AUTOTUNE_LS_BIAS_RATED_RATIO      0.7f
+#define MOTOR_AUTOTUNE_LS_BIAS_OC_LIMIT_RATIO   0.90f
 #define MOTOR_AUTOTUNE_LS_PROGRESS              60u
 
 #define MOTOR_AUTOTUNE_PP_TEST_TIMEOUT_S        5.0f
@@ -110,6 +114,9 @@ typedef enum
 } MotorAutoTuneLoadedState_e;
 
 static float MotorAutoTune_CurrentLoopVoltageLimit(const MotorAutoTuneInputs_t *inputs);
+static float MotorAutoTune_LsBiasCurrent(
+	const MotorAutoTune_t *handle,
+	const MotorAutoTuneInputs_t *inputs);
 static void MotorAutoTune_AdvanceToStage(MotorAutoTune_t *handle, MotorAutoTuneState_e next_state);
 static void MotorAutoTune_Finish(MotorAutoTune_t *handle, const MotorAutoTuneInputs_t *inputs);
 void MotorAutoTune_SetError(MotorAutoTune_t *handle, MotorAutoTuneError_e error);
@@ -510,6 +517,36 @@ static float MotorAutoTune_CurrentLoopVoltageLimit(const MotorAutoTuneInputs_t *
 		limit = 12.0f;
 	}
 	return limit;
+}
+
+static float MotorAutoTune_LsBiasCurrent(
+	const MotorAutoTune_t *handle,
+	const MotorAutoTuneInputs_t *inputs)
+{
+	float rated_current_a = MOTOR_AUTOTUNE_DEFAULT_RS_HIGH_A;
+	float bias_current_a;
+	float oc_limited_a;
+
+	if ((inputs != 0) && (inputs->rated_current_a > 0.0f))
+	{
+		rated_current_a = inputs->rated_current_a;
+	}
+
+	bias_current_a = rated_current_a * MOTOR_AUTOTUNE_LS_BIAS_RATED_RATIO;
+	if ((handle != 0) && (handle->overcurrent_threshold_a > 0.0f))
+	{
+		oc_limited_a =
+			handle->overcurrent_threshold_a * MOTOR_AUTOTUNE_LS_BIAS_OC_LIMIT_RATIO;
+		if (bias_current_a > oc_limited_a)
+		{
+			bias_current_a = oc_limited_a;
+		}
+	}
+	if (bias_current_a < 0.0f)
+	{
+		bias_current_a = 0.0f;
+	}
+	return bias_current_a;
 }
 
 static float MotorAutoTune_GetLoadedMinValidSpeedRpm(const MotorAutoTune_t *handle)
@@ -1088,6 +1125,9 @@ static void MotorAutoTune_ProcessLs(
 	uint32_t settle_ticks;
 	uint32_t measure_ticks;
 	uint32_t total_ticks;
+	uint32_t samples_per_cycle;
+	uint32_t settle_cycles;
+	uint32_t measure_cycles;
 	float frequency_hz;
 	float omega;
 	float voltage_peak_v;
@@ -1103,21 +1143,53 @@ static void MotorAutoTune_ProcessLs(
 	float voltage_fundamental_peak_v;
 	float impedance_mag_ohm;
 	float reactive_term_sq;
+	float bias_current_a;
+	float bias_voltage_v;
 
 	prepare_ticks = MotorAutoTune_SecondsToTicks(handle, MOTOR_AUTOTUNE_LS_PREPARE_S);
 	frequency_hz = MotorAutoTune_Clamp(
 		handle->config.ls_frequency_hz,
 		MOTOR_AUTOTUNE_MIN_LS_FREQUENCY_HZ,
 		1000.0f);
+	samples_per_cycle = 0u;
+	settle_cycles = (uint32_t)(MOTOR_AUTOTUNE_LS_SETTLE_CYCLES + 0.5f);
+	measure_cycles = (uint32_t)(MOTOR_AUTOTUNE_LS_MEASURE_CYCLES + 0.5f);
+	if ((handle->loop_frequency_hz > MOTOR_AUTOTUNE_MIN_LOOP_HZ) &&
+		(frequency_hz > 0.0f))
+	{
+		uint32_t min_measure_cycles;
+		samples_per_cycle = (uint32_t)((handle->loop_frequency_hz / frequency_hz) + 0.5f);
+		if (samples_per_cycle < MOTOR_AUTOTUNE_LS_MIN_SAMPLES_PER_CYCLE)
+		{
+			samples_per_cycle = MOTOR_AUTOTUNE_LS_MIN_SAMPLES_PER_CYCLE;
+		}
+		frequency_hz = handle->loop_frequency_hz / (float)samples_per_cycle;
+		min_measure_cycles = (uint32_t)ceilf(MOTOR_AUTOTUNE_LS_MIN_MEASURE_S * frequency_hz);
+		if (min_measure_cycles > measure_cycles)
+		{
+			measure_cycles = min_measure_cycles;
+		}
+		settle_ticks = samples_per_cycle * settle_cycles;
+		measure_ticks = samples_per_cycle * measure_cycles;
+	}
+	else
+	{
+		settle_ticks = MotorAutoTune_SecondsToTicks(
+			handle,
+			MOTOR_AUTOTUNE_LS_SETTLE_CYCLES / frequency_hz);
+		measure_ticks = MotorAutoTune_SecondsToTicks(
+			handle,
+			MOTOR_AUTOTUNE_LS_MEASURE_CYCLES / frequency_hz);
+	}
 	voltage_peak_v = MotorAutoTune_Abs(handle->config.ls_step_voltage_v);
-	settle_ticks = MotorAutoTune_SecondsToTicks(
-		handle,
-		MOTOR_AUTOTUNE_LS_SETTLE_CYCLES / frequency_hz);
-	measure_ticks = MotorAutoTune_SecondsToTicks(
-		handle,
-		MOTOR_AUTOTUNE_LS_MEASURE_CYCLES / frequency_hz);
 	total_ticks = settle_ticks + measure_ticks;
 	omega = 2.0f * PI * frequency_hz;
+	bias_current_a = MotorAutoTune_LsBiasCurrent(handle, inputs);
+	bias_voltage_v = 0.0f;
+	if (handle->measured_Rs > 0.0f)
+	{
+		bias_voltage_v = handle->measured_Rs * bias_current_a;
+	}
 
 	switch (handle->substep)
 	{
@@ -1130,7 +1202,7 @@ static void MotorAutoTune_ProcessLs(
 					prepare_ticks + total_ticks);
 			}
 			outputs->mode = MOTOR_AUTOTUNE_OUTPUT_CURRENT_LOOP;
-			outputs->id_ref_a = 0.0f;
+			outputs->id_ref_a = bias_current_a;
 			outputs->iq_ref_a = 0.0f;
 			outputs->voltage_limit_v = MotorAutoTune_CurrentLoopVoltageLimit(inputs);
 			outputs->isolate_q_axis = 1u;
@@ -1159,7 +1231,7 @@ static void MotorAutoTune_ProcessLs(
 		case 1u:
 			outputs->mode = MOTOR_AUTOTUNE_OUTPUT_DIRECT_D_VOLTAGE;
 			elapsed_s = ((float)handle->counter) * handle->dt_s;
-			commanded_vd = voltage_peak_v * sinf(omega * elapsed_s);
+			commanded_vd = bias_voltage_v + (voltage_peak_v * sinf(omega * elapsed_s));
 			outputs->vd_voltage_v = commanded_vd;
 			outputs->vq_voltage_v = 0.0f;
 			outputs->isolate_q_axis = 1u;

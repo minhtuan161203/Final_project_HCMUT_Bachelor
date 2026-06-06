@@ -100,6 +100,8 @@ extern volatile float gTraceSpeedPiPoutSnapshotA;
 extern volatile float gTraceSpeedPiIoutSnapshotA;
 extern volatile float gTraceSpeedIqFfSnapshotA;
 extern volatile float gTraceSpeedIqPreClampSnapshotA;
+extern volatile float gTraceCurrentVdFfSnapshotV;
+extern volatile float gTraceCurrentVqFfSnapshotV;
 extern float RecordTable1[TRACE_DATA_LENGTH * 4u];
 extern TraceData Trace_Data;
 extern IdSquareTuning_t IdSquareTuning;
@@ -914,6 +916,10 @@ static float *USB_ResolveTraceChannelPointer(uint8_t channel_code)
 			return (float *)&gTraceSpeedIqFfSnapshotA;
 		case 21u:
 			return (float *)&gTraceSpeedIqPreClampSnapshotA;
+		case 22u:
+			return (float *)&gTraceCurrentVdFfSnapshotV;
+		case 23u:
+			return (float *)&gTraceCurrentVqFfSnapshotV;
 		default:
 			return 0;
 	}

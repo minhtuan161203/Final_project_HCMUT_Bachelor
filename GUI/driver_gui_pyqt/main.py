@@ -152,7 +152,9 @@ TREND_SERIES_META = {
     "act_speed": {"label": "Act Speed", "unit": "rpm", "color": "#17becf"},
     "raw_speed": {"label": "Raw Speed", "unit": "rpm", "color": "#00bcd4"},
     "cmd_speed": {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
+    "planned_speed": {"label": "Planned Speed", "unit": "rpm", "color": "#bcbd22"},
     "speed_error": {"label": "Speed Error", "unit": "rpm", "color": "#7f7f7f"},
+    "planned_speed_error": {"label": "Planned Error", "unit": "rpm", "color": "#ff7f0e"},
     "cmd_position_deg": {"label": "Target Position", "unit": "deg", "color": "#8a8f98"},
     "planned_position_deg": {"label": "Planned Position", "unit": "deg", "color": "#bcbd22"},
     "act_position_deg": {"label": "Mechanical Angle", "unit": "deg", "color": "#17becf"},
@@ -173,7 +175,9 @@ TREND_EMA_ALPHA = {
     "act_speed": 0.25,
     "raw_speed": 0.20,
     "cmd_speed": None,
+    "planned_speed": None,
     "speed_error": 0.22,
+    "planned_speed_error": 0.22,
     "cmd_position_deg": None,
     "planned_position_deg": None,
     "act_position_deg": None,
@@ -326,6 +330,8 @@ TRACE_CHANNEL_META = {
     19: {"label": "Speed I->Iq", "unit": "A", "color": "#2ca02c"},
     20: {"label": "Torque FF->Iq", "unit": "A", "color": "#9467bd"},
     21: {"label": "Iq Pre-Clamp", "unit": "A", "color": "#8c564b"},
+    22: {"label": "Current Vd FF", "unit": "V", "color": "#ff9896"},
+    23: {"label": "Current Vq FF", "unit": "V", "color": "#c5b0d5"},
 }
 
 DRIVER_PARAM_CONTROL_MODE = 1
@@ -339,6 +345,7 @@ DRIVER_PARAM_ACCEL_TIME_MS = 10
 DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
 DRIVER_PARAM_POSITION_TRACKING_MODE = 16
+POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ = 50.0
 MOTOR_PARAM_RATED_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_RATED_CURRENT_RMS")
 MOTOR_PARAM_PEAK_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_PEAK_CURRENT_RMS")
 MOTOR_PARAM_RESISTANCE = MOTOR_PARAMETER_NAMES.index("MOTOR_RESISTANCE")
@@ -374,6 +381,7 @@ TRACE_PRESETS = {
     "Speed Loop (Raw Ref)": [1, 2, 3, 4],
     "Speed PI Terms": [18, 19, 20, 21],
     "Torque Tracking": [3, 4, 20, 21],
+    "Current Voltage FF": [3, 4, 14, 23],
     "Position Loop": [10, 2, 3, 4],
     "Speed Debug": [2, 15, 16, 4],
     "Voltage Debug": [11, 12, 13, 14],
@@ -3144,16 +3152,16 @@ class ScadaTrendPanel(QtWidgets.QWidget):
         command_epsilon = 0.0
         if self._stats_mode == "speed_error":
             times, values = self._trend_buffer.windowed_series(
-                ["cmd_speed", "act_speed", "speed_error"],
+                ["planned_speed", "act_speed", "planned_speed_error"],
                 start_time_s,
                 end_time_s,
             )
             command_epsilon = 1.0
             summary = _window_metric_summary(
                 times,
-                values["cmd_speed"],
+                values["planned_speed"],
                 values["act_speed"],
-                values["speed_error"],
+                values["planned_speed_error"],
                 command_epsilon=command_epsilon,
             )
             self._update_stats_card(summary, unit="rpm", command_epsilon=command_epsilon)
@@ -4792,14 +4800,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.speed_panel = ScadaTrendPanel(
             "Speed Response",
             self._trend_buffer,
-            ["act_speed", "cmd_speed"],
+            ["act_speed", "planned_speed"],
             on_export_requested=self._open_report_editor_for_chart,
             on_pause_requested=self._set_all_trend_panels_paused,
         )
         self.speed_error_panel = ScadaTrendPanel(
             "Speed Error",
             self._trend_buffer,
-            ["speed_error"],
+            ["planned_speed_error"],
             stats_mode="speed_error",
             on_export_requested=self._open_report_editor_for_chart,
             on_pause_requested=self._set_all_trend_panels_paused,
@@ -5221,7 +5229,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autotune_ls_voltage_spin.setSuffix(" V")
 
         self.autotune_ls_frequency_spin = QtWidgets.QDoubleSpinBox()
-        self.autotune_ls_frequency_spin.setRange(10.0, 1000.0)
+        self.autotune_ls_frequency_spin.setRange(10.0, 10000.0)
         self.autotune_ls_frequency_spin.setDecimals(3)
         self.autotune_ls_frequency_spin.setValue(200.0)
         self.autotune_ls_frequency_spin.setSuffix(" Hz")
@@ -5957,20 +5965,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_ki_spin.setSingleStep(0.01)
         self.foc_position_ki_spin.setValue(0.50)
 
-        self.foc_position_vff_gain_label = QtWidgets.QLabel("Pos VFF Gain")
+        self.foc_position_vff_gain_label = QtWidgets.QLabel("Torque FF Gain")
         self.foc_position_vff_gain_spin = QtWidgets.QDoubleSpinBox()
         self.foc_position_vff_gain_spin.setRange(0.0, 1000.0)
         self.foc_position_vff_gain_spin.setDecimals(5)
         self.foc_position_vff_gain_spin.setSingleStep(0.01)
         self.foc_position_vff_gain_spin.setValue(0.0)
+        self.foc_position_vff_gain_spin.setToolTip(
+            "Scale for model-based torque feedforward in the speed loop. 0 disables the feedforward term."
+        )
 
-        self.foc_position_vff_filter_label = QtWidgets.QLabel("Pos VFF Filter")
+        self.foc_position_vff_filter_label = QtWidgets.QLabel("Setpoint Velocity Filter")
         self.foc_position_vff_filter_spin = QtWidgets.QDoubleSpinBox()
         self.foc_position_vff_filter_spin.setRange(0.1, 5000.0)
         self.foc_position_vff_filter_spin.setDecimals(2)
         self.foc_position_vff_filter_spin.setSingleStep(5.0)
         self.foc_position_vff_filter_spin.setSuffix(" Hz")
-        self.foc_position_vff_filter_spin.setValue(50.0)
+        self.foc_position_vff_filter_spin.setValue(POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ)
+        self.foc_position_vff_filter_label.setVisible(False)
+        self.foc_position_vff_filter_spin.setVisible(False)
 
         self.foc_speed_kp_spin = QtWidgets.QDoubleSpinBox()
         self.foc_speed_kp_spin.setRange(0.0, 1000.0)
@@ -6064,8 +6077,6 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.foc_angle_slider_widget, 4, 1, 1, 3)
         summary_layout.addWidget(self.foc_target_position_label, 5, 0)
         summary_layout.addWidget(self.foc_target_position_spin, 5, 1)
-        summary_layout.addWidget(self.foc_position_vff_filter_label, 5, 2)
-        summary_layout.addWidget(self.foc_position_vff_filter_spin, 5, 3)
         summary_layout.addWidget(QtWidgets.QLabel("Speed Kp"), 6, 0)
         summary_layout.addWidget(self.foc_speed_kp_spin, 6, 1)
         summary_layout.addWidget(QtWidgets.QLabel("Speed Ki"), 6, 2)
@@ -8033,6 +8044,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._planned_position_timestamp_s = None
         self._planned_position_tracking_mode = None
 
+    def _planned_speed_rpm_for_trend(self, snapshot) -> float:
+        # Firmware publishes gCommandedSpeedRpm here, which is the ramped/planned speed reference.
+        return float(getattr(snapshot, "cmd_speed", 0.0))
+
     def _planned_position_counts_for_trend(
         self,
         snapshot,
@@ -8502,9 +8517,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_vff_gain_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_FF_GAIN, 0.0)
         )
-        self.foc_position_vff_filter_spin.setValue(
-            self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_FF_FILTER, 50.0)
-        )
+        self.foc_position_vff_filter_spin.setValue(POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ)
         self.foc_speed_kp_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_SPEED_P_GAIN, 0.02)
         )
@@ -8568,7 +8581,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_table_float_value(
             self.driver_table,
             DRIVER_PARAM_POSITION_FF_FILTER,
-            float(self.foc_position_vff_filter_spin.value()),
+            POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ,
         )
         self._set_table_float_value(
             self.driver_table,
@@ -8752,7 +8765,7 @@ class MainWindow(QtWidgets.QMainWindow):
             float(self.foc_position_kp_spin.value()),
             float(self.foc_position_ki_spin.value()),
             float(self.foc_position_vff_gain_spin.value()),
-            float(self.foc_position_vff_filter_spin.value()),
+            POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ,
             float(self.foc_speed_kp_spin.value()),
             float(self.foc_speed_ki_spin.value()),
             float(self.foc_accel_spin.value()),
@@ -10151,10 +10164,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_kp_spin.setEnabled(position_mode)
         self.foc_position_ki_label.setEnabled(position_mode)
         self.foc_position_ki_spin.setEnabled(position_mode)
-        self.foc_position_vff_gain_label.setEnabled(position_mode)
-        self.foc_position_vff_gain_spin.setEnabled(position_mode)
-        self.foc_position_vff_filter_label.setEnabled(position_mode)
-        self.foc_position_vff_filter_spin.setEnabled(position_mode)
+        self.foc_position_vff_gain_label.setEnabled(True)
+        self.foc_position_vff_gain_spin.setEnabled(True)
         if position_mode:
             if tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN:
                 self.foc_angle_slider_value_label.setText("Disabled in multi-turn")
@@ -10182,7 +10193,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
             if not self._connected:
                 self.foc_live_summary_label.setText(
-                    "Position Mode is ready. Choose Single Turn or Multi Turn, enter the target angle, use relative jog if needed, set the speed limit and PI/VFF gains, then press Start FOC."
+                    "Position Mode is ready. Choose Single Turn or Multi Turn, enter the target angle, use relative jog if needed, set the speed limit, PI gains, and torque FF gain, then press Start FOC."
                 )
         else:
             self.foc_mode_description_label.setText(
@@ -10522,7 +10533,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_position_kp_spin.value()),
                 float(self.foc_position_ki_spin.value()),
                 float(self.foc_position_vff_gain_spin.value()),
-                float(self.foc_position_vff_filter_spin.value()),
+                POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ,
                 float(self.foc_speed_kp_spin.value()),
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
@@ -10536,7 +10547,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"(target={position_target_degrees:.2f} deg / {position_target_display_counts:.1f} cnt, "
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
                 f"pi=({self.foc_position_kp_spin.value():.3f}, {self.foc_position_ki_spin.value():.3f}), "
-                f"vff=({self.foc_position_vff_gain_spin.value():.3f}, {self.foc_position_vff_filter_spin.value():.1f} Hz), "
+                f"torque_ff={self.foc_position_vff_gain_spin.value():.3f}, "
                 f"tracking={self._position_tracking_mode_text(tracking_mode).lower()}, "
                 "frame=none)"
             )
@@ -11436,7 +11447,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if int(stage) == MOTOR_AUTOTUNE_CHART_LS:
             return [
                 {"label": "Id", "unit": "A", "color": "#1f77b4"},
-                {"label": "Vd Sine", "unit": "V", "color": "#d62728"},
+                {"label": "Vd Bias+Sine", "unit": "V", "color": "#d62728"},
                 {"label": "Measure Window", "unit": "", "color": "#7f7f7f"},
             ]
         return []
@@ -13107,6 +13118,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append_snapshot_to_trend_buffer(self, snapshot) -> None:
         sample_timestamp_s = time.monotonic()
         tracking_mode = self._position_tracking_mode()
+        planned_speed_rpm = self._planned_speed_rpm_for_trend(snapshot)
+        act_speed_rpm = float(snapshot.act_speed)
+        planned_speed_error_rpm = planned_speed_rpm - act_speed_rpm
         cmd_position_counts, act_position_counts = self._snapshot_position_counts_for_display(
             snapshot,
             tracking_mode,
@@ -13154,7 +13168,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 "act_speed": snapshot.act_speed,
                 "raw_speed": snapshot.debug_speed_raw_rpm,
                 "cmd_speed": snapshot.cmd_speed,
+                "planned_speed": planned_speed_rpm,
                 "speed_error": snapshot.speed_error,
+                "planned_speed_error": planned_speed_error_rpm,
                 "cmd_position_deg": cmd_position_deg,
                 "planned_position_deg": planned_position_deg,
                 "act_position_deg": act_position_deg,
@@ -13168,6 +13184,10 @@ class MainWindow(QtWidgets.QMainWindow):
         sample_timestamp_s = time.monotonic()
         last_monitor = self._latest_monitor_snapshot
         tracking_mode = self._position_tracking_mode()
+        speed_snapshot = last_monitor if last_monitor is not None else snapshot
+        planned_speed_rpm = self._planned_speed_rpm_for_trend(speed_snapshot)
+        act_speed_rpm = float(snapshot.act_speed)
+        planned_speed_error_rpm = planned_speed_rpm - act_speed_rpm
         if (
             last_monitor is not None
             and tracking_mode != POSITION_TRACKING_MODE_MULTI_TURN
@@ -13237,7 +13257,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 "act_speed": snapshot.act_speed,
                 "raw_speed": float(getattr(snapshot, "debug_speed_raw_rpm", 0.0)),
                 "cmd_speed": snapshot.cmd_speed,
+                "planned_speed": planned_speed_rpm,
                 "speed_error": snapshot.speed_error,
+                "planned_speed_error": planned_speed_error_rpm,
                 "cmd_position_deg": cmd_position_deg,
                 "planned_position_deg": planned_position_deg,
                 "act_position_deg": act_position_deg,

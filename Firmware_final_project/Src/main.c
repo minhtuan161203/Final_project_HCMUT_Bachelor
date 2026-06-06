@@ -140,8 +140,12 @@ volatile float gTraceSpeedPiPoutSnapshotA = 0.0f;
 volatile float gTraceSpeedPiIoutSnapshotA = 0.0f;
 volatile float gTraceSpeedIqFfSnapshotA = 0.0f;
 volatile float gTraceSpeedIqPreClampSnapshotA = 0.0f;
+volatile float gTraceCurrentVdFfSnapshotV = 0.0f;
+volatile float gTraceCurrentVqFfSnapshotV = 0.0f;
 volatile float gDebugSpeedIqFfA = 0.0f;
 volatile float gDebugSpeedIqPreClampA = 0.0f;
+volatile float gDebugCurrentVdFfV = 0.0f;
+volatile float gDebugCurrentVqFfV = 0.0f;
 /* Single user-tunable position deadband. Release hysteresis is derived internally. */
 volatile float gPositionLoopDeadbandDeg = 0.3f;
 volatile uint8_t gEncoderAlignmentPolicy = ENCODER_ALIGNMENT_POLICY_POWER_ON;
@@ -244,11 +248,12 @@ static float GetEffectiveCurrentLoopFrequency(void);
 static float GetEffectiveSpeedLoopFrequency(void);
 static uint8_t GetActiveFocControlMode(void);
 static float GetConfiguredPositionIntegralGain(void);
-static float GetConfiguredPositionVffFilterHz(void);
+static float GetPositionSetpointVelocityFilterHz(void);
 static uint8_t GetConfiguredPositionTrackingMode(void);
 static float GetConfiguredSpeedLimitRpm(void);
 static float GetConfiguredSpeedIqLimitA(void);
 static float GetConfiguredSpeedTorqueFeedforwardGain(void);
+static float GetConfiguredMotorResistanceOhm(void);
 static float GetConfiguredMotorInductanceHenry(void);
 static float GetConfiguredFluxLinkageWb(void);
 static float GetConfiguredPolePairsFloat(void);
@@ -256,6 +261,14 @@ static float GetConfiguredTorqueConstantNmPerA(void);
 static float GetElectricalSpeedRadPerSec(float mechanical_speed_rpm);
 static float CalcSpeedTorqueFeedforwardA(float speed_reference_rpm, float dt_sec);
 static void CalcPiConditionalAntiWindup(tPI *controller);
+static void ResetCurrentVoltageFeedforwardState(void);
+static void ApplyCurrentReferenceVoltageFeedforward(
+	float *vd_command,
+	float *vq_command,
+	float id_ref_a,
+	float iq_ref_a,
+	float voltage_limit,
+	uint8_t reset_derivative_flags);
 static void ApplyCurrentLoopDecoupling(
 	float *vd_command,
 	float *vq_command,
@@ -352,8 +365,8 @@ uint8_t SaveUerrorLutToFlash(void);
 #define FOC_ZERO_CMD_REF_DEADBAND_A 0.01f
 #define FOC_ZERO_CMD_MEAS_DEADBAND_A 0.08f
 #define POSITION_LOOP_ERROR_RELEASE_RATIO 1.6f
-#define POSITION_LOOP_FF_DEADBAND_RPM 0.05f
-#define POSITION_VFF_FILTER_DEFAULT_HZ 50.0f
+#define POSITION_SETPOINT_VELOCITY_QUIET_RPM 0.05f
+#define POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ 50.0f
 #define FORCE_DRIVER_CURRENT_POLARITY_INVERT 0u
 #define FORCE_DRIVER_CURRENT_UV_SWAP 1u
 #define ID_SQUARE_TUNING_ALIGN_CURRENT_MIN_A 0.2f
@@ -407,6 +420,9 @@ uint8_t SaveUerrorLutToFlash(void);
 #define SPEED_ESTIMATE_TRANSIENT_ERROR_RPM 150.0f
 #define SPEED_TORQUE_FF_DEFAULT_GAIN 1.0f
 #define SPEED_TORQUE_FF_MAX_GAIN 5.0f
+#define CURRENT_VOLTAGE_FF_ENABLE 1u
+#define CURRENT_VOLTAGE_FF_MAX_VOLTAGE_RATIO 0.85f
+#define CURRENT_VOLTAGE_FF_MIN_INDUCTANCE_H 1.0e-7f
 #define DEBUG_AVG_SAMPLES 256u
 static float sDebugDeltaPosAccum = 0.0f;
 static float sDebugSpeedRawAccum = 0.0f;
@@ -433,6 +449,9 @@ static float sPositionSetpointVelocityCountsPerSec = 0.0f;
 static uint8_t sPositionDeadbandHoldActive = 0u;
 static float sSpeedTorqueFfTrajectoryRpm = 0.0f;
 static float sSpeedTorqueFfPrevOmegaRadPerSec = 0.0f;
+static float sCurrentVoltageFfPrevIdRefA = 0.0f;
+static float sCurrentVoltageFfPrevIqRefA = 0.0f;
+static uint8_t sCurrentVoltageFfPrimed = 0u;
 static const uint8_t sFocCurrentFeedbackMapSwapCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 0u, 1u, 1u};
 static const uint8_t sFocCurrentFeedbackMapInvertCases[CURRENT_FEEDBACK_MAP_TEST_CASE_COUNT] = {0u, 1u, 0u, 1u};
 static uint8_t sFocCurrentFeedbackMapCaseIndex = 0u;
@@ -1653,6 +1672,7 @@ static void ResetControlLoops(void)
 	sPositionDeadbandHoldActive = 0u;
 	sSpeedTorqueFfTrajectoryRpm = 0.0f;
 	sSpeedTorqueFfPrevOmegaRadPerSec = 0.0f;
+	ResetCurrentVoltageFeedforwardState();
 	gDebugSpeedIqFfA = 0.0f;
 	gDebugSpeedIqPreClampA = 0.0f;
 	gDebugOpenLoopElectricalHzCmd = 0.0f;
@@ -1687,14 +1707,14 @@ static float GetConfiguredPositionIntegralGain(void)
 	return position_integral_gain;
 }
 
-static float GetConfiguredPositionVffFilterHz(void)
+static float GetPositionSetpointVelocityFilterHz(void)
 {
-	float position_vff_filter_hz = DriverParameter[POSITION_FF_FILTER];
-	if (position_vff_filter_hz <= 0.0f)
+	float setpoint_velocity_filter_hz = DriverParameter[POSITION_FF_FILTER];
+	if (setpoint_velocity_filter_hz <= 0.0f)
 	{
-		position_vff_filter_hz = POSITION_VFF_FILTER_DEFAULT_HZ;
+		setpoint_velocity_filter_hz = POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ;
 	}
-	return position_vff_filter_hz;
+	return setpoint_velocity_filter_hz;
 }
 
 static uint8_t GetConfiguredPositionTrackingMode(void)
@@ -1755,11 +1775,22 @@ static float GetConfiguredSpeedTorqueFeedforwardGain(void)
 	/* Reuse the dormant POSITION_FF_GAIN field as a runtime scale for the
 	   model-based speed torque feedforward until a dedicated speed-FF
 	   parameter is added to the protocol/GUI. */
-	if (!isfinite(ff_gain) || (ff_gain <= 0.0f))
+	if (!isfinite(ff_gain))
 	{
 		ff_gain = SPEED_TORQUE_FF_DEFAULT_GAIN;
 	}
 	return ClampFloat(ff_gain, 0.0f, SPEED_TORQUE_FF_MAX_GAIN);
+}
+
+static float GetConfiguredMotorResistanceOhm(void)
+{
+	float resistance_ohm = MotorParameter[MOTOR_RESISTANCE] * 1.0e-3f;
+
+	if (resistance_ohm < 0.0f)
+	{
+		resistance_ohm = 0.0f;
+	}
+	return resistance_ohm;
 }
 
 static float GetConfiguredMotorInductanceHenry(void)
@@ -1863,6 +1894,98 @@ static float CalcSpeedTorqueFeedforwardA(float speed_reference_rpm, float dt_sec
 	sSpeedTorqueFfPrevOmegaRadPerSec = omega_ref_rad_s;
 
 	return ff_gain * (torque_ff_nm / torque_constant_nm_per_a);
+}
+
+static void ResetCurrentVoltageFeedforwardState(void)
+{
+	sCurrentVoltageFfPrevIdRefA = 0.0f;
+	sCurrentVoltageFfPrevIqRefA = 0.0f;
+	sCurrentVoltageFfPrimed = 0u;
+	gDebugCurrentVdFfV = 0.0f;
+	gDebugCurrentVqFfV = 0.0f;
+}
+
+static void ApplyCurrentReferenceVoltageFeedforward(
+	float *vd_command,
+	float *vq_command,
+	float id_ref_a,
+	float iq_ref_a,
+	float voltage_limit,
+	uint8_t reset_derivative_flags)
+{
+	float resistance_ohm;
+	float inductance_h;
+	float dt_sec;
+	float did_ref_dt;
+	float diq_ref_dt;
+	float max_didt;
+	float vd_ff;
+	float vq_ff;
+
+	if ((vd_command == 0) || (vq_command == 0))
+	{
+		return;
+	}
+
+	gDebugCurrentVdFfV = 0.0f;
+	gDebugCurrentVqFfV = 0.0f;
+
+#if (CURRENT_VOLTAGE_FF_ENABLE == 0u)
+	sCurrentVoltageFfPrevIdRefA = id_ref_a;
+	sCurrentVoltageFfPrevIqRefA = iq_ref_a;
+	sCurrentVoltageFfPrimed = 1u;
+	(void)voltage_limit;
+	(void)reset_derivative_flags;
+	return;
+#else
+	resistance_ohm = GetConfiguredMotorResistanceOhm();
+	inductance_h = GetConfiguredMotorInductanceHenry();
+	dt_sec = 1.0f / GetEffectiveCurrentLoopFrequency();
+
+	if ((dt_sec <= 0.0f) ||
+		((resistance_ohm <= 0.0f) && (inductance_h <= CURRENT_VOLTAGE_FF_MIN_INDUCTANCE_H)))
+	{
+		sCurrentVoltageFfPrevIdRefA = id_ref_a;
+		sCurrentVoltageFfPrevIqRefA = iq_ref_a;
+		sCurrentVoltageFfPrimed = 1u;
+		return;
+	}
+
+	if (sCurrentVoltageFfPrimed == 0u)
+	{
+		sCurrentVoltageFfPrevIdRefA = id_ref_a;
+		sCurrentVoltageFfPrevIqRefA = iq_ref_a;
+		sCurrentVoltageFfPrimed = 1u;
+	}
+	if ((reset_derivative_flags & 0x01u) != 0u)
+	{
+		sCurrentVoltageFfPrevIdRefA = id_ref_a;
+	}
+	if ((reset_derivative_flags & 0x02u) != 0u)
+	{
+		sCurrentVoltageFfPrevIqRefA = iq_ref_a;
+	}
+
+	did_ref_dt = (id_ref_a - sCurrentVoltageFfPrevIdRefA) / dt_sec;
+	diq_ref_dt = (iq_ref_a - sCurrentVoltageFfPrevIqRefA) / dt_sec;
+	sCurrentVoltageFfPrevIdRefA = id_ref_a;
+	sCurrentVoltageFfPrevIqRefA = iq_ref_a;
+
+	if ((inductance_h > CURRENT_VOLTAGE_FF_MIN_INDUCTANCE_H) && (voltage_limit > 0.0f))
+	{
+		max_didt =
+			(voltage_limit * CURRENT_VOLTAGE_FF_MAX_VOLTAGE_RATIO) / inductance_h;
+		did_ref_dt = ClampFloat(did_ref_dt, -max_didt, max_didt);
+		diq_ref_dt = ClampFloat(diq_ref_dt, -max_didt, max_didt);
+	}
+
+	vd_ff = (resistance_ohm * id_ref_a) + (inductance_h * did_ref_dt);
+	vq_ff = (resistance_ohm * iq_ref_a) + (inductance_h * diq_ref_dt);
+	gDebugCurrentVdFfV = vd_ff;
+	gDebugCurrentVqFfV = vq_ff;
+	*vd_command += vd_ff;
+	*vq_command += vq_ff;
+#endif
 }
 
 static void CalcPiConditionalAntiWindup(tPI *controller)
@@ -2049,7 +2172,7 @@ static float UpdatePositionSetpointVelocityRpm(float target_position_counts, flo
 	}
 	sPositionSetpointPrevCounts = target_position_counts;
 	target_velocity_counts_per_sec = target_delta_counts / dt_sec;
-	filter_hz = GetConfiguredPositionVffFilterHz();
+	filter_hz = GetPositionSetpointVelocityFilterHz();
 	if (filter_hz > 0.0f)
 	{
 		filter_tau_sec = 1.0f / (2.0f * PI * filter_hz);
@@ -3067,6 +3190,8 @@ static void UpdateTraceSnapshot(void)
 	gTraceSpeedPiIoutSnapshotA = -gSpeedPi.fIout;
 	gTraceSpeedIqFfSnapshotA = -gDebugSpeedIqFfA;
 	gTraceSpeedIqPreClampSnapshotA = -gDebugSpeedIqPreClampA;
+	gTraceCurrentVdFfSnapshotV = gDebugCurrentVdFfV;
+	gTraceCurrentVqFfSnapshotV = gDebugCurrentVqFfV;
 
 	sPrevIqRefA = gIqRefA;
 	sPrevIdRefA = gIdRefA;
@@ -3105,7 +3230,7 @@ void UpdateDriverParameter(float *driver_parameter)
 	}
 	if (driver_parameter[POSITION_FF_FILTER] <= 0.0f)
 	{
-		driver_parameter[POSITION_FF_FILTER] = POSITION_VFF_FILTER_DEFAULT_HZ;
+		driver_parameter[POSITION_FF_FILTER] = POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ;
 	}
 	if (driver_parameter[SPEED_P_GAIN] < 0.0f)
 	{
@@ -3256,7 +3381,7 @@ static void LoadDefaultParameters(void)
 	DriverParameter[POSITION_P_GAIN] = 0.05f;
 	DriverParameter[POSITION_I_GAIN] = 0.50f;
 	DriverParameter[POSITION_FF_GAIN] = 0.0f;
-	DriverParameter[POSITION_FF_FILTER] = POSITION_VFF_FILTER_DEFAULT_HZ;
+	DriverParameter[POSITION_FF_FILTER] = POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ;
 	DriverParameter[SPEED_P_GAIN] = 0.001f;
 	DriverParameter[SPEED_I_GAIN] = 0.001f;
 	DriverParameter[ACCELERATION_TIME] = 1000.0f;
@@ -3468,6 +3593,9 @@ static void RunCurrentLoopForTheta(
 {
 	float vd_command;
 	float vq_command;
+	uint8_t id_hold_zero;
+	uint8_t iq_hold_zero;
+	uint8_t ff_reset_flags;
 
 	if (voltage_limit < 0.5f)
 	{
@@ -3479,7 +3607,8 @@ static void RunCurrentLoopForTheta(
 	gIqPi.fUpOutLim = voltage_limit;
 	gIqPi.fLowOutLim = -voltage_limit;
 
-	if (ShouldHoldCurrentLoopAtZero(id_ref, Parameter.fIdq[0]) != 0u)
+	id_hold_zero = ShouldHoldCurrentLoopAtZero(id_ref, Parameter.fIdq[0]);
+	if (id_hold_zero != 0u)
 	{
 		gIdPi.m_rst(&gIdPi);
 		gIdPi.fIn = 0.0f;
@@ -3494,13 +3623,15 @@ static void RunCurrentLoopForTheta(
 
 	if (isolate_q_axis != 0u)
 	{
+		iq_hold_zero = 1u;
 		gIqPi.m_rst(&gIqPi);
 		gIqPi.fIn = 0.0f;
 		vq_command = 0.0f;
 	}
 	else
 	{
-		if (ShouldHoldCurrentLoopAtZero(iq_ref, Parameter.fIdq[1]) != 0u)
+		iq_hold_zero = ShouldHoldCurrentLoopAtZero(iq_ref, Parameter.fIdq[1]);
+		if (iq_hold_zero != 0u)
 		{
 			gIqPi.m_rst(&gIqPi);
 			gIqPi.fIn = 0.0f;
@@ -3512,14 +3643,34 @@ static void RunCurrentLoopForTheta(
 			gIqPi.m_calc(&gIqPi);
 			vq_command = gIqPi.fOut;
 		}
+	}
+
+	ff_reset_flags = 0u;
+	if (id_hold_zero != 0u)
+	{
+		ff_reset_flags |= 0x01u;
+	}
+	if ((isolate_q_axis != 0u) || (iq_hold_zero != 0u))
+	{
+		ff_reset_flags |= 0x02u;
+	}
+	ApplyCurrentReferenceVoltageFeedforward(
+		&vd_command,
+		&vq_command,
+		id_ref,
+		(isolate_q_axis != 0u) ? 0.0f : iq_ref,
+		voltage_limit,
+		ff_reset_flags);
+	if (isolate_q_axis == 0u)
+	{
 		ApplyCurrentLoopDecoupling(
 			&vd_command,
 			&vq_command,
 			Parameter.fIdq[0],
 			Parameter.fIdq[1],
 			Parameter.fActSpeed);
-		LimitDqVoltageVector(&vd_command, &vq_command, voltage_limit);
 	}
+	LimitDqVoltageVector(&vd_command, &vq_command, voltage_limit);
 
 	ApplyVoltageVectorForTheta(electrical_theta, vd_command, vq_command);
 }
@@ -3724,6 +3875,9 @@ static void RunFocLoop(void)
 	float encoder_resolution;
 	uint8_t alignment_active = 0u;
 	uint8_t alignment_hold_mode = 0u;
+	uint8_t id_hold_zero = 0u;
+	uint8_t iq_hold_zero = 0u;
+	uint8_t ff_reset_flags = 0u;
 
 	// The FOC loop always follows the same order: choose theta, read currents, build refs, then drive PWM.
 	if (Parameter.fVdc < 1.0f)
@@ -3914,7 +4068,7 @@ static void RunFocLoop(void)
 					encoder_resolution,
 					gSpeedPi.fDtSec);
 				uint8_t setpoint_velocity_is_quiet =
-					(fabsf(setpoint_velocity_rpm) < POSITION_LOOP_FF_DEADBAND_RPM) ? 1u : 0u;
+					(fabsf(setpoint_velocity_rpm) < POSITION_SETPOINT_VELOCITY_QUIET_RPM) ? 1u : 0u;
 
 				if ((sPositionDeadbandHoldActive != 0u) &&
 						((setpoint_velocity_is_quiet == 0u) ||
@@ -3993,8 +4147,8 @@ static void RunFocLoop(void)
 	gIqPi.fLowOutLim = -voltage_limit;
 
 	
-	if ((IdSquareTuning.Enable != 0u) &&
-		(ShouldHoldCurrentLoopAtZero(gIdRefA, gPark.fD) != 0u))
+	id_hold_zero = ShouldHoldCurrentLoopAtZero(gIdRefA, gPark.fD);
+	if ((IdSquareTuning.Enable != 0u) && (id_hold_zero != 0u))
 	{
 		gIdPi.m_rst(&gIdPi);
 		gIdPi.fIn = 0.0f;
@@ -4009,18 +4163,58 @@ static void RunFocLoop(void)
 	// If in tunning mode --> isolate and reset PI control Q - axis
 	if (IdSquareTuning.Enable != 0u)
 	{
+		iq_hold_zero = 1u;
 		gIqPi.m_rst(&gIqPi);
 		gIqPi.fIn = 0.0f;
 		gIqPi.fOut = 0.0f;
 		gIqPi.fPout = 0.0f;
-		gIdPi.fOut = ClampFloat(gIdPi.fOut, -voltage_limit, voltage_limit);
+		ff_reset_flags = 0x02u;
+		if (id_hold_zero != 0u)
+		{
+			ff_reset_flags |= 0x01u;
+		}
+		ApplyCurrentReferenceVoltageFeedforward(
+			&gIdPi.fOut,
+			&gIqPi.fOut,
+			gIdRefA,
+			0.0f,
+			voltage_limit,
+			ff_reset_flags);
+		LimitDqVoltageVector(&gIdPi.fOut, &gIqPi.fOut, voltage_limit);
 	}
 	// If not in Id tuning mode --> calculate PI control Q - axis
 	// Q loop current control
 	else
 	{
-		gIqPi.fIn = gIqRefA - gPark.fQ;
-		gIqPi.m_calc(&gIqPi);
+		iq_hold_zero = ShouldHoldCurrentLoopAtZero(gIqRefA, gPark.fQ);
+		if (iq_hold_zero != 0u)
+		{
+			gIqPi.m_rst(&gIqPi);
+			gIqPi.fIn = 0.0f;
+			gIqPi.fOut = 0.0f;
+			gIqPi.fPout = 0.0f;
+		}
+		else
+		{
+			gIqPi.fIn = gIqRefA - gPark.fQ;
+			gIqPi.m_calc(&gIqPi);
+		}
+		ff_reset_flags = 0u;
+		if (id_hold_zero != 0u)
+		{
+			ff_reset_flags |= 0x01u;
+		}
+		if (iq_hold_zero != 0u)
+		{
+			ff_reset_flags |= 0x02u;
+		}
+		ApplyCurrentReferenceVoltageFeedforward(
+			&gIdPi.fOut,
+			&gIqPi.fOut,
+			gIdRefA,
+			gIqRefA,
+			voltage_limit,
+			ff_reset_flags);
 		ApplyCurrentLoopDecoupling(
 			&gIdPi.fOut,
 			&gIqPi.fOut,
