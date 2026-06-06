@@ -136,6 +136,12 @@ volatile float gTraceIdRefPrevSnapshotA = 0.0f;
 volatile float gTraceVdSnapshotV = 0.0f;
 volatile float gTraceVqSnapshotV = 0.0f;
 volatile float gTraceRawSpeedSnapshotRpm = 0.0f;
+volatile float gTraceSpeedPiPoutSnapshotA = 0.0f;
+volatile float gTraceSpeedPiIoutSnapshotA = 0.0f;
+volatile float gTraceSpeedIqFfSnapshotA = 0.0f;
+volatile float gTraceSpeedIqPreClampSnapshotA = 0.0f;
+volatile float gDebugSpeedIqFfA = 0.0f;
+volatile float gDebugSpeedIqPreClampA = 0.0f;
 /* Single user-tunable position deadband. Release hysteresis is derived internally. */
 volatile float gPositionLoopDeadbandDeg = 0.3f;
 volatile uint8_t gEncoderAlignmentPolicy = ENCODER_ALIGNMENT_POLICY_POWER_ON;
@@ -208,6 +214,7 @@ static void LoadDefaultParameters(void);
 static void ReadFastProtectionFeedback(void);
 static void UpdateMeasuredSpeedAndTheta(void);
 static void LimitDqVoltageVector(float *vd, float *vq, float limit);
+static void ApplyPhaseVoltagesToPwm(void);
 static float GetOpenLoopVoltageLimit(void);
 static void ApplyOpenLoopVfCommand(float requested_frequency, float requested_voltage);
 static void RunOpenLoopVf(void);
@@ -248,6 +255,7 @@ static float GetConfiguredPolePairsFloat(void);
 static float GetConfiguredTorqueConstantNmPerA(void);
 static float GetElectricalSpeedRadPerSec(float mechanical_speed_rpm);
 static float CalcSpeedTorqueFeedforwardA(float speed_reference_rpm, float dt_sec);
+static void CalcPiConditionalAntiWindup(tPI *controller);
 static void ApplyCurrentLoopDecoupling(
 	float *vd_command,
 	float *vq_command,
@@ -338,6 +346,9 @@ uint8_t SaveUerrorLutToFlash(void);
 #define ID_SQUARE_TUNING_MIN_VOLTAGE_LIMIT_V 1.0f
 #define FOC_SPEED_LOOP_MAX_OC_RATIO 0.90f
 #define FOC_SPEED_LOOP_MIN_IQ_LIMIT_A 0.20f
+#define FOC_RUNTIME_VOLTAGE_LIMIT_RATIO 0.54f
+#define FOC_PWM_DUTY_MIN 0.02f
+#define FOC_PWM_DUTY_MAX 0.98f
 #define FOC_ZERO_CMD_REF_DEADBAND_A 0.01f
 #define FOC_ZERO_CMD_MEAS_DEADBAND_A 0.08f
 #define POSITION_LOOP_ERROR_RELEASE_RATIO 1.6f
@@ -1642,6 +1653,8 @@ static void ResetControlLoops(void)
 	sPositionDeadbandHoldActive = 0u;
 	sSpeedTorqueFfTrajectoryRpm = 0.0f;
 	sSpeedTorqueFfPrevOmegaRadPerSec = 0.0f;
+	gDebugSpeedIqFfA = 0.0f;
+	gDebugSpeedIqPreClampA = 0.0f;
 	gDebugOpenLoopElectricalHzCmd = 0.0f;
 	gDebugOpenLoopSyncRpmCmd = 0.0f;
 	gDebugExpectedDeltaPosSync = 0.0f;
@@ -1850,6 +1863,62 @@ static float CalcSpeedTorqueFeedforwardA(float speed_reference_rpm, float dt_sec
 	sSpeedTorqueFfPrevOmegaRadPerSec = omega_ref_rad_s;
 
 	return ff_gain * (torque_ff_nm / torque_constant_nm_per_a);
+}
+
+static void CalcPiConditionalAntiWindup(tPI *controller)
+{
+	float proportional_out;
+	float integral_in;
+	float integral_candidate;
+	float pre_out;
+	uint8_t allow_integral = 1u;
+
+	if (controller == 0)
+	{
+		return;
+	}
+
+	proportional_out = controller->fIn * controller->fKp;
+	integral_in = controller->fIn * controller->fKi;
+	integral_candidate = controller->fIprevOut +
+		(0.5f * controller->fDtSec * (integral_in + controller->fIprevIn));
+	pre_out = proportional_out + integral_candidate;
+
+	/* For the speed loop, a large step often drives P straight into the
+	   current limit. The generic PI back-calculation would then create a
+	   large negative integral, causing IqRef to fall before the motor has
+	   reached the speed setpoint. Hold integration only while the error is
+	   pushing further into the same saturation direction. */
+	if ((pre_out > controller->fUpOutLim) && (integral_in > 0.0f))
+	{
+		allow_integral = 0u;
+	}
+	else if ((pre_out < controller->fLowOutLim) && (integral_in < 0.0f))
+	{
+		allow_integral = 0u;
+	}
+
+	if (allow_integral == 0u)
+	{
+		integral_candidate = controller->fIprevOut;
+		integral_in = 0.0f;
+		pre_out = proportional_out + integral_candidate;
+	}
+
+	if (pre_out > controller->fUpOutLim)
+	{
+		pre_out = controller->fUpOutLim;
+	}
+	else if (pre_out < controller->fLowOutLim)
+	{
+		pre_out = controller->fLowOutLim;
+	}
+
+	controller->fPout = proportional_out;
+	controller->fIout = integral_candidate;
+	controller->fIprevIn = integral_in;
+	controller->fIprevOut = integral_candidate;
+	controller->fOut = pre_out;
 }
 
 static void ApplyCurrentLoopDecoupling(
@@ -2212,6 +2281,57 @@ static void LimitDqVoltageVector(float *vd, float *vq, float limit)
 	scale = limit / sqrtf(magnitude_sq);
 	*vd *= scale;
 	*vq *= scale;
+}
+
+static void ApplyPhaseVoltagesToPwm(void)
+{
+	float voltage_max;
+	float voltage_min;
+	float zero_sequence;
+	float inv_vbus;
+	float duty_u;
+	float duty_v;
+	float duty_w;
+	float applied_u;
+	float applied_v;
+	float applied_w;
+	float applied_common;
+
+	if (Parameter.fVdc < 1.0f)
+	{
+		Parameter.fVabc[0] = 0.0f;
+		Parameter.fVabc[1] = 0.0f;
+		Parameter.fVabc[2] = 0.0f;
+		GeneratePWM(0.5f, 0.5f, 0.5f);
+		return;
+	}
+
+	/* SVPWM-style common-mode injection keeps the requested line-line voltage
+	   while using more of the DC bus than plain sinusoidal PWM. */
+	voltage_max = fmaxf(Parameter.fVabc[0], fmaxf(Parameter.fVabc[1], Parameter.fVabc[2]));
+	voltage_min = fminf(Parameter.fVabc[0], fminf(Parameter.fVabc[1], Parameter.fVabc[2]));
+	zero_sequence = -0.5f * (voltage_max + voltage_min);
+
+	inv_vbus = 1.0f / Parameter.fVdc;
+	duty_u = 0.5f + ((Parameter.fVabc[0] + zero_sequence) * inv_vbus);
+	duty_v = 0.5f + ((Parameter.fVabc[1] + zero_sequence) * inv_vbus);
+	duty_w = 0.5f + ((Parameter.fVabc[2] + zero_sequence) * inv_vbus);
+	duty_u = ClampFloat(duty_u, FOC_PWM_DUTY_MIN, FOC_PWM_DUTY_MAX);
+	duty_v = ClampFloat(duty_v, FOC_PWM_DUTY_MIN, FOC_PWM_DUTY_MAX);
+	duty_w = ClampFloat(duty_w, FOC_PWM_DUTY_MIN, FOC_PWM_DUTY_MAX);
+
+	applied_u = (duty_u - 0.5f) * Parameter.fVdc;
+	applied_v = (duty_v - 0.5f) * Parameter.fVdc;
+	applied_w = (duty_w - 0.5f) * Parameter.fVdc;
+	applied_common = (applied_u + applied_v + applied_w) / 3.0f;
+
+	/* Store the motor-equivalent, zero-sequence-free phase voltages for trace
+	   and autotune math; the PWM duties above still carry the common mode. */
+	Parameter.fVabc[0] = applied_u - applied_common;
+	Parameter.fVabc[1] = applied_v - applied_common;
+	Parameter.fVabc[2] = applied_w - applied_common;
+
+	GeneratePWM(duty_u, duty_v, duty_w);
 }
 
 static float CalcIdSquareTuningVoltageLimit(void)
@@ -2943,6 +3063,10 @@ static void UpdateTraceSnapshot(void)
 	gTraceVdSnapshotV = Parameter.fVdq[0];
 	gTraceVqSnapshotV = Parameter.fVdq[1];
 	gTraceRawSpeedSnapshotRpm = gDebugSpeedRawRpm;
+	gTraceSpeedPiPoutSnapshotA = -gSpeedPi.fPout;
+	gTraceSpeedPiIoutSnapshotA = -gSpeedPi.fIout;
+	gTraceSpeedIqFfSnapshotA = -gDebugSpeedIqFfA;
+	gTraceSpeedIqPreClampSnapshotA = -gDebugSpeedIqPreClampA;
 
 	sPrevIqRefA = gIqRefA;
 	sPrevIdRefA = gIdRefA;
@@ -3302,10 +3426,6 @@ static void ApplyVoltageVectorForTheta(float electrical_theta, float vd, float v
 {
 	float sin_theta;
 	float cos_theta;
-	float inv_vbus;
-	float duty_u;
-	float duty_v;
-	float duty_w;
 
 	Parameter.fVdq[0] = vd;
 	Parameter.fVdq[1] = vq;
@@ -3336,22 +3456,7 @@ static void ApplyVoltageVectorForTheta(float electrical_theta, float vd, float v
 	Parameter.fVabc[1] = gInvClarke.fB;
 	Parameter.fVabc[2] = gInvClarke.fC;
 	ApplyUerrorCompensationToPhaseVoltages();
-
-	inv_vbus = 1.0f / Parameter.fVdc;
-	duty_u = 0.5f + (Parameter.fVabc[0] * inv_vbus);
-	duty_v = 0.5f + (Parameter.fVabc[1] * inv_vbus);
-	duty_w = 0.5f + (Parameter.fVabc[2] * inv_vbus);
-	duty_u = ClampFloat(duty_u, 0.05f, 0.95f);
-	duty_v = ClampFloat(duty_v, 0.05f, 0.95f);
-	duty_w = ClampFloat(duty_w, 0.05f, 0.95f);
-
-	/* Reconstruct the actually applied average phase voltages after PWM clamping
-	   so autotune/debug consumers do not keep assuming the unclamped request. */
-	Parameter.fVabc[0] = (duty_u - 0.5f) * Parameter.fVdc;
-	Parameter.fVabc[1] = (duty_v - 0.5f) * Parameter.fVdc;
-	Parameter.fVabc[2] = (duty_w - 0.5f) * Parameter.fVdc;
-
-	GeneratePWM(duty_u, duty_v, duty_w);
+	ApplyPhaseVoltagesToPwm();
 }
 
 static void RunCurrentLoopForTheta(
@@ -3613,10 +3718,6 @@ static void RunFocLoop(void)
 	float sin_theta;
 	float cos_theta;
 	float voltage_limit;
-	float inv_vbus;
-	float duty_u;
-	float duty_v;
-	float duty_w;
 	float control_theta;
 	float current_phase_u;
 	float current_phase_v;
@@ -3770,6 +3871,8 @@ static void RunFocLoop(void)
 		gCommandedSpeedRpm = 0.0f;
 		gTracePosError = 0.0f;
 		gIqRefA = 0.0f;
+		gDebugSpeedIqFfA = 0.0f;
+		gDebugSpeedIqPreClampA = 0.0f;
 		if ((alignment_active != 0u) || (alignment_hold_mode != 0u))
 		{
 			// Alignment only injects d-axis current; q-axis torque stays at zero on purpose.
@@ -3866,12 +3969,14 @@ static void RunFocLoop(void)
 
 			gCommandedSpeedRpm = speed_reference_rpm;
 			gSpeedPi.fIn = speed_reference_rpm - Parameter.fActSpeed;
-			gSpeedPi.m_calc(&gSpeedPi);
+			CalcPiConditionalAntiWindup(&gSpeedPi);
 			{
 				float speed_iq_ff_a = CalcSpeedTorqueFeedforwardA(
 					speed_reference_rpm,
 					gSpeedPi.fDtSec);
 				float speed_iq_cmd_a = gSpeedPi.fOut + speed_iq_ff_a;
+				gDebugSpeedIqFfA = speed_iq_ff_a;
+				gDebugSpeedIqPreClampA = speed_iq_cmd_a;
 				gIqRefA = -ClampFloat(
 					speed_iq_cmd_a,
 					gSpeedPi.fLowOutLim,
@@ -3879,7 +3984,7 @@ static void RunFocLoop(void)
 			}
 		}
 
-		voltage_limit = Parameter.fVdc * 0.51f;
+		voltage_limit = Parameter.fVdc * FOC_RUNTIME_VOLTAGE_LIMIT_RATIO;
 	}
 
 	gIdPi.fUpOutLim = voltage_limit;
@@ -3943,20 +4048,7 @@ static void RunFocLoop(void)
 	Parameter.fVabc[1] = gInvClarke.fB;
 	Parameter.fVabc[2] = gInvClarke.fC;
 	ApplyUerrorCompensationToPhaseVoltages();
-
-	inv_vbus = 1.0f / Parameter.fVdc;
-	duty_u = 0.5f + (Parameter.fVabc[0] * inv_vbus);
-	duty_v = 0.5f + (Parameter.fVabc[1] * inv_vbus);
-	duty_w = 0.5f + (Parameter.fVabc[2] * inv_vbus);
-	duty_u = ClampFloat(duty_u, 0.05f, 0.95f);
-	duty_v = ClampFloat(duty_v, 0.05f, 0.95f);
-	duty_w = ClampFloat(duty_w, 0.05f, 0.95f);
-
-	Parameter.fVabc[0] = (duty_u - 0.5f) * Parameter.fVdc;
-	Parameter.fVabc[1] = (duty_v - 0.5f) * Parameter.fVdc;
-	Parameter.fVabc[2] = (duty_w - 0.5f) * Parameter.fVdc;
-
-	GeneratePWM(duty_u, duty_v, duty_w);
+	ApplyPhaseVoltagesToPwm();
 
 	if (alignment_active != 0u)
 	{

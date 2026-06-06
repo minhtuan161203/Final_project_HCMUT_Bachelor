@@ -153,8 +153,10 @@ TREND_SERIES_META = {
     "raw_speed": {"label": "Raw Speed", "unit": "rpm", "color": "#00bcd4"},
     "cmd_speed": {"label": "Cmd Speed", "unit": "rpm", "color": "#bcbd22"},
     "speed_error": {"label": "Speed Error", "unit": "rpm", "color": "#7f7f7f"},
-    "cmd_position_deg": {"label": "Setting Position", "unit": "deg", "color": "#bcbd22"},
+    "cmd_position_deg": {"label": "Target Position", "unit": "deg", "color": "#8a8f98"},
+    "planned_position_deg": {"label": "Planned Position", "unit": "deg", "color": "#bcbd22"},
     "act_position_deg": {"label": "Mechanical Angle", "unit": "deg", "color": "#17becf"},
+    "planned_position_error_deg": {"label": "Planned Error", "unit": "deg", "color": "#ff7f0e"},
     "position_error_deg": {"label": "Tracking Error", "unit": "deg", "color": "#7f7f7f"},
     "validation_error_deg": {"label": "Validation Error", "unit": "deg", "color": "#ff9896"},
 }
@@ -173,7 +175,9 @@ TREND_EMA_ALPHA = {
     "cmd_speed": None,
     "speed_error": 0.22,
     "cmd_position_deg": None,
+    "planned_position_deg": None,
     "act_position_deg": None,
+    "planned_position_error_deg": 0.22,
     "position_error_deg": None,
     "validation_error_deg": None,
 }
@@ -318,6 +322,10 @@ TRACE_CHANNEL_META = {
     15: {"label": "Raw Speed", "unit": "rpm", "color": "#00bcd4"},
     16: {"label": "Iq Ref (z^-1)", "unit": "A", "color": "#ffbb78"},
     17: {"label": "Id Ref (z^-1)", "unit": "A", "color": "#98df8a"},
+    18: {"label": "Speed P->Iq", "unit": "A", "color": "#1f77b4"},
+    19: {"label": "Speed I->Iq", "unit": "A", "color": "#2ca02c"},
+    20: {"label": "Torque FF->Iq", "unit": "A", "color": "#9467bd"},
+    21: {"label": "Iq Pre-Clamp", "unit": "A", "color": "#8c564b"},
 }
 
 DRIVER_PARAM_CONTROL_MODE = 1
@@ -364,6 +372,8 @@ TRACE_PRESETS = {
     "Phase Currents": [3, 5, 6, 7],
     "Speed Loop": [1, 2, 16, 4],
     "Speed Loop (Raw Ref)": [1, 2, 3, 4],
+    "Speed PI Terms": [18, 19, 20, 21],
+    "Torque Tracking": [3, 4, 20, 21],
     "Position Loop": [10, 2, 3, 4],
     "Speed Debug": [2, 15, 16, 4],
     "Voltage Debug": [11, 12, 13, 14],
@@ -3158,16 +3168,16 @@ class ScadaTrendPanel(QtWidgets.QWidget):
 
         if self._stats_mode == "position_error":
             times, values = self._trend_buffer.windowed_series(
-                ["cmd_position_deg", "act_position_deg", "position_error_deg"],
+                ["planned_position_deg", "act_position_deg", "planned_position_error_deg"],
                 start_time_s,
                 end_time_s,
             )
             command_epsilon = 0.1
             summary = _window_metric_summary(
                 times,
-                values["cmd_position_deg"],
+                values["planned_position_deg"],
                 values["act_position_deg"],
-                values["position_error_deg"],
+                values["planned_position_error_deg"],
                 command_epsilon=command_epsilon,
             )
             self._update_stats_card(summary, unit="deg", command_epsilon=command_epsilon)
@@ -4538,6 +4548,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._speed_test_session: SpeedTestSession | None = None
         self._position_test_session: PositionTestSession | None = None
         self._trace_monitor_suspended = False
+        self._planned_position_counts: float | None = None
+        self._planned_position_target_counts: float | None = None
+        self._planned_position_timestamp_s: float | None = None
+        self._planned_position_tracking_mode: int | None = None
 
         self._ack_timer = QtCore.QTimer(self)
         self._ack_timer.setSingleShot(True)
@@ -4793,14 +4807,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_panel = ScadaTrendPanel(
             "Position Response",
             self._trend_buffer,
-            ["act_position_deg", "cmd_position_deg"],
+            ["act_position_deg", "planned_position_deg"],
             on_export_requested=self._open_report_editor_for_chart,
             on_pause_requested=self._set_all_trend_panels_paused,
         )
         self.position_error_panel = ScadaTrendPanel(
             "Position Error",
             self._trend_buffer,
-            ["position_error_deg", "validation_error_deg"],
+            ["planned_position_error_deg", "validation_error_deg"],
             stats_mode="position_error",
             on_export_requested=self._open_report_editor_for_chart,
             on_pause_requested=self._set_all_trend_panels_paused,
@@ -8012,6 +8026,99 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._snapshot_single_turn_counts(snapshot)
             ),
         )
+
+    def _reset_planned_position_trend(self) -> None:
+        self._planned_position_counts = None
+        self._planned_position_target_counts = None
+        self._planned_position_timestamp_s = None
+        self._planned_position_tracking_mode = None
+
+    def _planned_position_counts_for_trend(
+        self,
+        snapshot,
+        timestamp_s: float,
+        target_counts: float,
+        actual_counts: float,
+        tracking_mode: int,
+    ) -> float:
+        encoder_resolution = self._encoder_resolution_counts()
+        target_counts = float(target_counts)
+        actual_counts = float(actual_counts)
+        timestamp_s = float(timestamp_s)
+        tracking_mode = int(tracking_mode)
+
+        if snapshot is None or encoder_resolution <= 1.0:
+            self._reset_planned_position_trend()
+            return target_counts
+
+        position_mode_active = (
+            self._current_foc_mode() == POSITION_CONTROL_MODE
+            and self._foc_is_running(snapshot)
+        )
+        if not position_mode_active:
+            self._planned_position_counts = target_counts
+            self._planned_position_target_counts = target_counts
+            self._planned_position_timestamp_s = timestamp_s
+            self._planned_position_tracking_mode = tracking_mode
+            return target_counts
+
+        target_epsilon_counts = max(1.0, encoder_resolution / 36000.0)
+        mode_changed = self._planned_position_tracking_mode != tracking_mode
+        target_changed = self._planned_position_target_counts is None
+        if self._planned_position_target_counts is not None:
+            target_delta_counts = abs(
+                self._display_position_error_counts(
+                    target_counts,
+                    self._planned_position_target_counts,
+                    tracking_mode,
+                )
+            )
+            target_changed = target_delta_counts > target_epsilon_counts
+
+        if self._planned_position_counts is None or mode_changed or target_changed:
+            self._planned_position_counts = actual_counts
+            self._planned_position_target_counts = target_counts
+            self._planned_position_timestamp_s = timestamp_s
+            self._planned_position_tracking_mode = tracking_mode
+            return self._planned_position_counts
+
+        previous_timestamp_s = self._planned_position_timestamp_s
+        self._planned_position_timestamp_s = timestamp_s
+        self._planned_position_target_counts = target_counts
+        self._planned_position_tracking_mode = tracking_mode
+        if previous_timestamp_s is None:
+            return self._planned_position_counts
+
+        dt_s = timestamp_s - previous_timestamp_s
+        if dt_s <= 0.0 or dt_s > 1.0:
+            return self._planned_position_counts
+
+        remaining_counts = self._display_position_error_counts(
+            target_counts,
+            self._planned_position_counts,
+            tracking_mode,
+        )
+        if abs(remaining_counts) <= target_epsilon_counts:
+            self._planned_position_counts = target_counts
+            return self._planned_position_counts
+
+        command_speed_rpm = abs(float(getattr(snapshot, "cmd_speed", 0.0)))
+        if command_speed_rpm <= 0.05:
+            return self._planned_position_counts
+
+        max_delta_counts = (command_speed_rpm * encoder_resolution / 60.0) * dt_s
+        if max_delta_counts <= 0.0:
+            return self._planned_position_counts
+
+        delta_counts = min(max_delta_counts, abs(remaining_counts))
+        if remaining_counts < 0.0:
+            delta_counts = -delta_counts
+        self._planned_position_counts += delta_counts
+        if tracking_mode == POSITION_TRACKING_MODE_SINGLE_TURN:
+            self._planned_position_counts = self._normalize_single_turn_counts(
+                self._planned_position_counts
+            )
+        return self._planned_position_counts
 
     def _mechanical_zero_status_text(self) -> str:
         if self._mechanical_zero_valid and self._mechanical_zero_stale:
@@ -12804,6 +12911,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _clear_trend_history(self) -> None:
         self._trend_buffer.clear()
+        self._reset_planned_position_trend()
         for panel in self._trend_panels:
             panel.clear()
 
@@ -12997,13 +13105,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_uerror_plots()
 
     def _append_snapshot_to_trend_buffer(self, snapshot) -> None:
+        sample_timestamp_s = time.monotonic()
         tracking_mode = self._position_tracking_mode()
         cmd_position_counts, act_position_counts = self._snapshot_position_counts_for_display(
             snapshot,
             tracking_mode,
         )
+        planned_position_counts = self._planned_position_counts_for_trend(
+            snapshot,
+            sample_timestamp_s,
+            cmd_position_counts,
+            act_position_counts,
+            tracking_mode,
+        )
         cmd_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
+        planned_position_deg = self._counts_to_position_mode_degrees(
+            planned_position_counts,
+            tracking_mode,
+        )
         act_position_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
+        planned_position_error_deg = self._display_position_error_degrees(
+            planned_position_counts,
+            act_position_counts,
+            tracking_mode,
+        )
         position_error_deg = self._display_position_error_degrees(
             cmd_position_counts,
             act_position_counts,
@@ -13015,7 +13140,7 @@ class MainWindow(QtWidgets.QMainWindow):
             tracking_mode,
         )
         self._trend_buffer.append_sample(
-            time.monotonic(),
+            sample_timestamp_s,
             {
                 "phase_u": snapshot.phase_u,
                 "phase_v": snapshot.phase_v,
@@ -13031,13 +13156,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 "cmd_speed": snapshot.cmd_speed,
                 "speed_error": snapshot.speed_error,
                 "cmd_position_deg": cmd_position_deg,
+                "planned_position_deg": planned_position_deg,
                 "act_position_deg": act_position_deg,
+                "planned_position_error_deg": planned_position_error_deg,
                 "position_error_deg": position_error_deg,
                 "validation_error_deg": validation_error_deg,
             },
         )
 
     def _append_error_snapshot_to_trend_buffer(self, snapshot) -> None:
+        sample_timestamp_s = time.monotonic()
         last_monitor = self._latest_monitor_snapshot
         tracking_mode = self._position_tracking_mode()
         if (
@@ -13057,8 +13185,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 else float(getattr(snapshot, "cmd_position", 0.0))
             )
             act_position_counts = float(snapshot.act_position)
+        planned_snapshot = last_monitor if last_monitor is not None else snapshot
+        planned_position_counts = self._planned_position_counts_for_trend(
+            planned_snapshot,
+            sample_timestamp_s,
+            cmd_position_counts,
+            act_position_counts,
+            tracking_mode,
+        )
         cmd_position_deg = self._counts_to_position_mode_degrees(cmd_position_counts, tracking_mode)
+        planned_position_deg = self._counts_to_position_mode_degrees(
+            planned_position_counts,
+            tracking_mode,
+        )
         act_position_deg = self._counts_to_position_mode_degrees(act_position_counts, tracking_mode)
+        planned_position_error_deg = self._display_position_error_degrees(
+            planned_position_counts,
+            act_position_counts,
+            tracking_mode,
+        )
         position_error_deg = self._display_position_error_degrees(
             cmd_position_counts,
             act_position_counts,
@@ -13070,7 +13215,7 @@ class MainWindow(QtWidgets.QMainWindow):
             tracking_mode,
         )
         self._trend_buffer.append_sample(
-            time.monotonic(),
+            sample_timestamp_s,
             {
                 "phase_u": snapshot.phase_u,
                 "phase_v": snapshot.phase_v,
@@ -13094,7 +13239,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 "cmd_speed": snapshot.cmd_speed,
                 "speed_error": snapshot.speed_error,
                 "cmd_position_deg": cmd_position_deg,
+                "planned_position_deg": planned_position_deg,
                 "act_position_deg": act_position_deg,
+                "planned_position_error_deg": planned_position_error_deg,
                 "position_error_deg": position_error_deg,
                 "validation_error_deg": validation_error_deg,
             },
