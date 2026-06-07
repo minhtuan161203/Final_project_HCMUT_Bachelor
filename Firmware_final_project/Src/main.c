@@ -253,6 +253,7 @@ static uint8_t GetConfiguredPositionTrackingMode(void);
 static float GetConfiguredSpeedLimitRpm(void);
 static float GetConfiguredSpeedIqLimitA(void);
 static float GetConfiguredSpeedTorqueFeedforwardGain(void);
+static float GetConfiguredCurrentVoltageFfGain(void);
 static float GetConfiguredMotorResistanceOhm(void);
 static float GetConfiguredMotorInductanceHenry(void);
 static float GetConfiguredFluxLinkageWb(void);
@@ -421,6 +422,8 @@ uint8_t SaveUerrorLutToFlash(void);
 #define SPEED_TORQUE_FF_DEFAULT_GAIN 1.0f
 #define SPEED_TORQUE_FF_MAX_GAIN 5.0f
 #define CURRENT_VOLTAGE_FF_ENABLE 1u
+#define CURRENT_VOLTAGE_FF_DEFAULT_GAIN 1.0f
+#define CURRENT_VOLTAGE_FF_MAX_GAIN 5.0f
 #define CURRENT_VOLTAGE_FF_MAX_VOLTAGE_RATIO 0.85f
 #define CURRENT_VOLTAGE_FF_MIN_INDUCTANCE_H 1.0e-7f
 #define DEBUG_AVG_SAMPLES 256u
@@ -1782,6 +1785,17 @@ static float GetConfiguredSpeedTorqueFeedforwardGain(void)
 	return ClampFloat(ff_gain, 0.0f, SPEED_TORQUE_FF_MAX_GAIN);
 }
 
+static float GetConfiguredCurrentVoltageFfGain(void)
+{
+	float ff_gain = DriverParameter[CURRENT_VOLTAGE_FF_GAIN];
+
+	if (!isfinite(ff_gain))
+	{
+		ff_gain = CURRENT_VOLTAGE_FF_DEFAULT_GAIN;
+	}
+	return ClampFloat(ff_gain, 0.0f, CURRENT_VOLTAGE_FF_MAX_GAIN);
+}
+
 static float GetConfiguredMotorResistanceOhm(void)
 {
 	float resistance_ohm = MotorParameter[MOTOR_RESISTANCE] * 1.0e-3f;
@@ -1919,6 +1933,7 @@ static void ApplyCurrentReferenceVoltageFeedforward(
 	float did_ref_dt;
 	float diq_ref_dt;
 	float max_didt;
+	float ff_gain;
 	float vd_ff;
 	float vq_ff;
 
@@ -1940,9 +1955,11 @@ static void ApplyCurrentReferenceVoltageFeedforward(
 #else
 	resistance_ohm = GetConfiguredMotorResistanceOhm();
 	inductance_h = GetConfiguredMotorInductanceHenry();
+	ff_gain = GetConfiguredCurrentVoltageFfGain();
 	dt_sec = 1.0f / GetEffectiveCurrentLoopFrequency();
 
 	if ((dt_sec <= 0.0f) ||
+		(ff_gain <= 0.0f) ||
 		((resistance_ohm <= 0.0f) && (inductance_h <= CURRENT_VOLTAGE_FF_MIN_INDUCTANCE_H)))
 	{
 		sCurrentVoltageFfPrevIdRefA = id_ref_a;
@@ -1979,8 +1996,8 @@ static void ApplyCurrentReferenceVoltageFeedforward(
 		diq_ref_dt = ClampFloat(diq_ref_dt, -max_didt, max_didt);
 	}
 
-	vd_ff = (resistance_ohm * id_ref_a) + (inductance_h * did_ref_dt);
-	vq_ff = (resistance_ohm * iq_ref_a) + (inductance_h * diq_ref_dt);
+	vd_ff = ff_gain * ((resistance_ohm * id_ref_a) + (inductance_h * did_ref_dt));
+	vq_ff = ff_gain * ((resistance_ohm * iq_ref_a) + (inductance_h * diq_ref_dt));
 	gDebugCurrentVdFfV = vd_ff;
 	gDebugCurrentVqFfV = vq_ff;
 	*vd_command += vd_ff;
@@ -3252,6 +3269,17 @@ void UpdateDriverParameter(float *driver_parameter)
 	{
 		driver_parameter[DECELERATION_TIME] = 250.0f;
 	}
+	if (!isfinite(driver_parameter[CURRENT_VOLTAGE_FF_GAIN]))
+	{
+		driver_parameter[CURRENT_VOLTAGE_FF_GAIN] = CURRENT_VOLTAGE_FF_DEFAULT_GAIN;
+	}
+	else
+	{
+		driver_parameter[CURRENT_VOLTAGE_FF_GAIN] = ClampFloat(
+			driver_parameter[CURRENT_VOLTAGE_FF_GAIN],
+			0.0f,
+			CURRENT_VOLTAGE_FF_MAX_GAIN);
+	}
 
 	max_speed = driver_parameter[MAXIMUM_SPEED];
 
@@ -3389,6 +3417,7 @@ static void LoadDefaultParameters(void)
 	DriverParameter[MAXIMUM_SPEED] = DEFAULT_MOTOR_RATED_SPEED_RPM;
 	DriverParameter[SPEED_UNIT] = 0.0f;
 	DriverParameter[POSITION_TRACKING_MODE] = (float)POSITION_TRACKING_MODE_SINGLE_TURN;
+	DriverParameter[CURRENT_VOLTAGE_FF_GAIN] = CURRENT_VOLTAGE_FF_DEFAULT_GAIN;
 
 	MotorParameter[MOTOR_RATED_CURRENT_RMS] = DEFAULT_MOTOR_RATED_CURRENT_RMS;
 	MotorParameter[MOTOR_PEAK_CURRENT_RMS] =

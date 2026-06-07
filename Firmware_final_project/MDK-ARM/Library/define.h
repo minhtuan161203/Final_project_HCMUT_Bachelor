@@ -122,7 +122,7 @@
  * compensation is required across every motor/driver pairing.
  */
 #define DEFAULT_ELECTRICAL_ALIGNMENT_OFFSET_DEG	90.05f //Alex tunning so f**king tierd!!!
-#define DRIVER_PARAMETER_COUNT					17u
+#define DRIVER_PARAMETER_COUNT					18u
 #define MOTOR_PARAMETER_COUNT					33u
 #define POSITION_TRACKING_MODE_SINGLE_TURN	0u
 #define POSITION_TRACKING_MODE_MULTI_TURN	1u
@@ -145,6 +145,7 @@ typedef enum
 	SPEED_UNIT,															/*14:						32 bit*/
 	TORQUE_FILTER_FREQUENCY,								/*15:Hz:				32 bit*/
 	POSITION_TRACKING_MODE,								/*16:0=single,1=multi	32 bit*/
+	CURRENT_VOLTAGE_FF_GAIN,							/*17:scale for Rs*Iref + L*dIref/dt voltage FF*/
 //	SPEED_UNIT,															/*16:						32 bit*/
 }DRIVER_PARAMETER_ID;
 

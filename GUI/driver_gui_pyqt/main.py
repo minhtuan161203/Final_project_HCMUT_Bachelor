@@ -198,6 +198,7 @@ DEFAULT_DRIVER_PARAMETER_VALUES: dict[int, float] = {
     11: 250.0,
     12: DEFAULT_MOTOR_RATED_SPEED_RPM,
     16: float(POSITION_TRACKING_MODE_SINGLE_TURN),
+    17: 1.0,
 }
 
 DEFAULT_MOTOR_PARAMETER_VALUES: dict[int, float] = {
@@ -212,6 +213,7 @@ DEFAULT_MOTOR_PARAMETER_VALUES: dict[int, float] = {
 }
 
 PARAMETER_NAME_LABELS = {
+    "CURRENT_VOLTAGE_FF_GAIN": "CURRENT_VOLTAGE_FF_GAIN [x]",
     "MOTOR_RESISTANCE": "MOTOR_RESISTANCE [mOhm]",
     "MOTOR_INDUCTANCE": "MOTOR_INDUCTANCE [uH]",
     "MOTOR_BACK_EMF_CONSTANT": "MOTOR_BACK_EMF_CONSTANT [mV/(rad/s)]",
@@ -238,6 +240,9 @@ DRIVER_PARAMETER_GROUPS: dict[str, tuple[str, ...]] = {
         "SPEED_DETECTION_FILTER_FREQUENCY",
         "SPEED_MOVING_THRESHOLD",
         "SPEED_UNIT",
+    ),
+    "Current Loop": (
+        "CURRENT_VOLTAGE_FF_GAIN",
     ),
     "Limits & Ramps": (
         "ACCELERATION_TIME",
@@ -345,6 +350,7 @@ DRIVER_PARAM_ACCEL_TIME_MS = 10
 DRIVER_PARAM_DECEL_TIME_MS = 11
 DRIVER_PARAM_MAXIMUM_SPEED = 12
 DRIVER_PARAM_POSITION_TRACKING_MODE = 16
+DRIVER_PARAM_CURRENT_VOLTAGE_FF_GAIN = 17
 POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ = 50.0
 MOTOR_PARAM_RATED_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_RATED_CURRENT_RMS")
 MOTOR_PARAM_PEAK_CURRENT_RMS = MOTOR_PARAMETER_NAMES.index("MOTOR_PEAK_CURRENT_RMS")
@@ -5985,6 +5991,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_vff_filter_label.setVisible(False)
         self.foc_position_vff_filter_spin.setVisible(False)
 
+        self.foc_current_vff_gain_label = QtWidgets.QLabel("Current FF Gain")
+        self.foc_current_vff_gain_spin = QtWidgets.QDoubleSpinBox()
+        self.foc_current_vff_gain_spin.setRange(0.0, 5.0)
+        self.foc_current_vff_gain_spin.setDecimals(3)
+        self.foc_current_vff_gain_spin.setSingleStep(0.1)
+        self.foc_current_vff_gain_spin.setValue(1.0)
+        self.foc_current_vff_gain_spin.setToolTip(
+            "Scale for current-loop voltage feedforward: Vff = gain * (Rs*Iref + Ls*dIref/dt). 0 disables it; 1 uses the model directly."
+        )
+
         self.foc_speed_kp_spin = QtWidgets.QDoubleSpinBox()
         self.foc_speed_kp_spin.setRange(0.0, 1000.0)
         self.foc_speed_kp_spin.setDecimals(5)
@@ -6083,6 +6099,8 @@ class MainWindow(QtWidgets.QMainWindow):
         summary_layout.addWidget(self.foc_speed_ki_spin, 6, 3)
         summary_layout.addWidget(self.foc_debug_angle_label, 7, 0)
         summary_layout.addWidget(self.foc_debug_angle_value_label, 7, 1)
+        summary_layout.addWidget(self.foc_current_vff_gain_label, 7, 2)
+        summary_layout.addWidget(self.foc_current_vff_gain_spin, 7, 3)
         summary_layout.addWidget(QtWidgets.QLabel("Acceleration"), 8, 0)
         summary_layout.addWidget(self.foc_accel_spin, 8, 1)
         summary_layout.addWidget(QtWidgets.QLabel("Deceleration"), 8, 2)
@@ -8518,6 +8536,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._table_float_value(self.driver_table, DRIVER_PARAM_POSITION_FF_GAIN, 0.0)
         )
         self.foc_position_vff_filter_spin.setValue(POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ)
+        self.foc_current_vff_gain_spin.setValue(
+            self._table_float_value(self.driver_table, DRIVER_PARAM_CURRENT_VOLTAGE_FF_GAIN, 1.0)
+        )
         self.foc_speed_kp_spin.setValue(
             self._table_float_value(self.driver_table, DRIVER_PARAM_SPEED_P_GAIN, 0.02)
         )
@@ -8582,6 +8603,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.driver_table,
             DRIVER_PARAM_POSITION_FF_FILTER,
             POSITION_SETPOINT_VELOCITY_FILTER_DEFAULT_HZ,
+        )
+        self._set_table_float_value(
+            self.driver_table,
+            DRIVER_PARAM_CURRENT_VOLTAGE_FF_GAIN,
+            float(self.foc_current_vff_gain_spin.value()),
         )
         self._set_table_float_value(
             self.driver_table,
@@ -8690,13 +8716,14 @@ class MainWindow(QtWidgets.QMainWindow):
             accel_ms = SPEED_TEST_STEP_RAMP_BYPASS_SENTINEL_MS
             decel_ms = SPEED_TEST_STEP_RAMP_BYPASS_SENTINEL_MS
         payload = struct.pack(
-            "<6fBB",
+            "<7fBB",
             float(target_rpm),
             float(self.foc_speed_kp_spin.value()),
             float(self.foc_speed_ki_spin.value()),
             accel_ms,
             decel_ms,
             float(speed_limit_rpm),
+            float(self.foc_current_vff_gain_spin.value()),
             ID_SQUARE_ANGLE_TEST_NONE,
             0,
         )
@@ -8759,7 +8786,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tracking_mode: int,
     ) -> bytes:
         return struct.pack(
-            "<10fBBB",
+            "<11fBBB",
             float(target_counts),
             float(abs(self.foc_target_speed_spin.value())),
             float(self.foc_position_kp_spin.value()),
@@ -8770,6 +8797,7 @@ class MainWindow(QtWidgets.QMainWindow):
             float(self.foc_speed_ki_spin.value()),
             float(self.foc_accel_spin.value()),
             float(self.foc_decel_spin.value()),
+            float(self.foc_current_vff_gain_spin.value()),
             ID_SQUARE_ANGLE_TEST_NONE,
             0,
             int(tracking_mode),
@@ -10166,6 +10194,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.foc_position_ki_spin.setEnabled(position_mode)
         self.foc_position_vff_gain_label.setEnabled(True)
         self.foc_position_vff_gain_spin.setEnabled(True)
+        self.foc_current_vff_gain_label.setEnabled(True)
+        self.foc_current_vff_gain_spin.setEnabled(True)
         if position_mode:
             if tracking_mode == POSITION_TRACKING_MODE_MULTI_TURN:
                 self.foc_angle_slider_value_label.setText("Disabled in multi-turn")
@@ -10527,7 +10557,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 tracking_mode,
             )
             payload = struct.pack(
-                "<10fBBB",
+                "<11fBBB",
                 position_target,
                 float(self._foc_position_speed_limit_rpm),
                 float(self.foc_position_kp_spin.value()),
@@ -10538,6 +10568,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
+                float(self.foc_current_vff_gain_spin.value()),
                 ID_SQUARE_ANGLE_TEST_NONE,
                 0,
                 tracking_mode,
@@ -10548,6 +10579,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"limit={self._foc_position_speed_limit_rpm:.1f} rpm, "
                 f"pi=({self.foc_position_kp_spin.value():.3f}, {self.foc_position_ki_spin.value():.3f}), "
                 f"torque_ff={self.foc_position_vff_gain_spin.value():.3f}, "
+                f"current_ff={self.foc_current_vff_gain_spin.value():.3f}, "
                 f"tracking={self._position_tracking_mode_text(tracking_mode).lower()}, "
                 "frame=none)"
             )
@@ -10566,13 +10598,14 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             speed_limit_rpm = self._speed_mode_limit_rpm()
             payload = struct.pack(
-                "<6fBB",
+                "<7fBB",
                 float(self._foc_speed_target_rpm),
                 float(self.foc_speed_kp_spin.value()),
                 float(self.foc_speed_ki_spin.value()),
                 float(self.foc_accel_spin.value()),
                 float(self.foc_decel_spin.value()),
                 speed_limit_rpm,
+                float(self.foc_current_vff_gain_spin.value()),
                 ID_SQUARE_ANGLE_TEST_NONE,
                 0,
             )
@@ -10580,6 +10613,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Start FOC Speed Mode "
                 f"(target={self._foc_speed_target_rpm:.1f} rpm, "
                 f"max={speed_limit_rpm:.1f} rpm, "
+                f"current_ff={self.foc_current_vff_gain_spin.value():.3f}, "
                 "frame=none)"
             )
             command = Command.CMD_START_SPEEDCONTROL

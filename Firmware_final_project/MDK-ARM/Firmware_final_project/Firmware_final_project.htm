@@ -3,7 +3,7 @@
 <title>Static Call Graph - [Firmware_final_project\Firmware_final_project.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image Firmware_final_project\Firmware_final_project.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sat Jun 06 23:23:10 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sun Jun 07 11:41:16 2026
 <BR><P>
 <H3>Maximum Stack Usage =        832 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -2992,7 +2992,7 @@ Global Symbols
 <LI><a href="#[17a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;PCD_WriteEmptyTxFifo
 </UL>
 
-<P><STRONG><a name="[1bd]"></a>UpdateDriverParameter</STRONG> (Thumb, 414 bytes, Stack size 32 bytes, main.o(i.UpdateDriverParameter))
+<P><STRONG><a name="[1bd]"></a>UpdateDriverParameter</STRONG> (Thumb, 456 bytes, Stack size 32 bytes, main.o(i.UpdateDriverParameter))
 <BR><BR>[Stack]<UL><LI>Max Depth = 40<LI>Call Chain = UpdateDriverParameter &rArr; GetEffectiveSpeedLoopFrequency
 </UL>
 <BR>[Calls]<UL><LI><a href="#[f9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetEffectiveSpeedLoopFrequency
@@ -3414,8 +3414,8 @@ Local Symbols
 <LI><a href="#[1fd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunCurrentLoopForTheta
 </UL>
 
-<P><STRONG><a name="[101]"></a>ApplyCurrentReferenceVoltageFeedforward</STRONG> (Thumb, 336 bytes, Stack size 56 bytes, main.o(i.ApplyCurrentReferenceVoltageFeedforward))
-<BR><BR>[Stack]<UL><LI>Max Depth = 56<LI>Call Chain = ApplyCurrentReferenceVoltageFeedforward
+<P><STRONG><a name="[101]"></a>ApplyCurrentReferenceVoltageFeedforward</STRONG> (Thumb, 400 bytes, Stack size 64 bytes, main.o(i.ApplyCurrentReferenceVoltageFeedforward))
+<BR><BR>[Stack]<UL><LI>Max Depth = 64<LI>Call Chain = ApplyCurrentReferenceVoltageFeedforward
 </UL>
 <BR>[Calls]<UL><LI><a href="#[fa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetEffectiveCurrentLoopFrequency
 <LI><a href="#[fe]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GetConfiguredMotorInductanceHenry
@@ -3747,7 +3747,7 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[155]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RunMotorAutoTuneLoop
 </UL>
 
-<P><STRONG><a name="[1bb]"></a>LoadDefaultParameters</STRONG> (Thumb, 216 bytes, Stack size 8 bytes, main.o(i.LoadDefaultParameters))
+<P><STRONG><a name="[1bb]"></a>LoadDefaultParameters</STRONG> (Thumb, 220 bytes, Stack size 8 bytes, main.o(i.LoadDefaultParameters))
 <BR><BR>[Stack]<UL><LI>Max Depth = 80<LI>Call Chain = LoadDefaultParameters &rArr; UpdateMotorParameter &rArr; UpdateDriverParameter &rArr; GetEffectiveSpeedLoopFrequency
 </UL>
 <BR>[Calls]<UL><LI><a href="#[129]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_memclr4
@@ -4482,8 +4482,8 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[242]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
 
-<P><STRONG><a name="[246]"></a>USB_HandlePositionCommand</STRONG> (Thumb, 574 bytes, Stack size 112 bytes, usbcomunication.o(i.USB_HandlePositionCommand))
-<BR><BR>[Stack]<UL><LI>Max Depth = 264 + Unknown Stack Size
+<P><STRONG><a name="[246]"></a>USB_HandlePositionCommand</STRONG> (Thumb, 630 bytes, Stack size 120 bytes, usbcomunication.o(i.USB_HandlePositionCommand))
+<BR><BR>[Stack]<UL><LI>Max Depth = 272 + Unknown Stack Size
 <LI>Call Chain = USB_HandlePositionCommand &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1f9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_f2d
@@ -4505,8 +4505,8 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[242]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;USB_DispatchCommand
 </UL>
 
-<P><STRONG><a name="[245]"></a>USB_HandleSpeedCommand</STRONG> (Thumb, 464 bytes, Stack size 72 bytes, usbcomunication.o(i.USB_HandleSpeedCommand))
-<BR><BR>[Stack]<UL><LI>Max Depth = 224 + Unknown Stack Size
+<P><STRONG><a name="[245]"></a>USB_HandleSpeedCommand</STRONG> (Thumb, 502 bytes, Stack size 88 bytes, usbcomunication.o(i.USB_HandleSpeedCommand))
+<BR><BR>[Stack]<UL><LI>Max Depth = 240 + Unknown Stack Size
 <LI>Call Chain = USB_HandleSpeedCommand &rArr; USB_QueueFocDebugText &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[1f9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_f2d
