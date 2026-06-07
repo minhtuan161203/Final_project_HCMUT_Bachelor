@@ -2550,11 +2550,11 @@ class ScadaTrendView(QtWidgets.QWidget):
                 "cursor": QtGui.QColor("#666666"),
             }
         return {
-            "background": self.palette().base().color(),
-            "text": self.palette().text().color(),
-            "border": self.palette().mid().color(),
-            "grid": self.palette().midlight().color(),
-            "cursor": QtGui.QColor("#888888"),
+            "background": QtGui.QColor("#FFFFFF"),
+            "text": QtGui.QColor("#111111"),
+            "border": QtGui.QColor("#8C8C8C"),
+            "grid": QtGui.QColor("#D0D0D0"),
+            "cursor": QtGui.QColor("#666666"),
         }
 
     def _plot_geometry(
@@ -3582,11 +3582,11 @@ class ScopeCaptureView(QtWidgets.QWidget):
                 "cursor": QtGui.QColor("#666666"),
             }
         return {
-            "background": self.palette().base().color(),
-            "text": self.palette().text().color(),
-            "border": self.palette().mid().color(),
-            "grid": self.palette().midlight().color(),
-            "cursor": QtGui.QColor("#888888"),
+            "background": QtGui.QColor("#FFFFFF"),
+            "text": QtGui.QColor("#111111"),
+            "border": QtGui.QColor("#8C8C8C"),
+            "grid": QtGui.QColor("#D0D0D0"),
+            "cursor": QtGui.QColor("#666666"),
         }
 
     def _plot_geometry(self, rect: QtCore.QRectF) -> tuple[QtCore.QRectF, int, int]:
