@@ -213,6 +213,20 @@ static float MotorAutoTune_FundamentalPeakFromSums(
 		sqrtf((sin_sum * sin_sum) + (cos_sum * cos_sum));
 }
 
+static float MotorAutoTune_VectorFundamentalPeakFromSums(
+	float real_sum,
+	float imag_sum,
+	uint32_t sample_count)
+{
+	if (sample_count == 0u)
+	{
+		return 0.0f;
+	}
+
+	return sqrtf((real_sum * real_sum) + (imag_sum * imag_sum)) /
+		(float)sample_count;
+}
+
 static float MotorAutoTune_LpfAlpha(float cutoff_hz, float dt_s)
 {
 	float omega_dt;
@@ -1406,8 +1420,10 @@ static void MotorAutoTune_ProcessFlux(
 			{
 				handle->counter = 0u;
 				handle->substep = 2u;
-				handle->flux_voltage_sq_sum = 0.0f;
-				handle->flux_current_sq_sum = 0.0f;
+				handle->flux_voltage_real_sum = 0.0f;
+				handle->flux_voltage_imag_sum = 0.0f;
+				handle->flux_current_real_sum = 0.0f;
+				handle->flux_current_imag_sum = 0.0f;
 				handle->flux_speed_rpm_sum = 0.0f;
 				handle->flux_samples = 0u;
 			}
@@ -1426,29 +1442,45 @@ static void MotorAutoTune_ProcessFlux(
 
 		case 3u:
 		{
-			float phase_rms_sq;
-			float phase_current_rms_sq;
+			float elapsed_s;
+			float flux_omega_rad_s;
+			float sample_sin;
+			float sample_cos;
+			float voltage_alpha_v;
+			float voltage_beta_v;
+			float current_alpha_a;
+			float current_beta_a;
 			float average_rpm;
 			float electrical_omega_rad_s;
-			float phase_rms;
-			float phase_current_rms;
-			float resistive_drop_rms;
-			float compensated_phase_rms_sq;
+			float phase_peak_v;
+			float phase_current_peak_a;
+			float resistive_drop_peak_v;
+			float compensated_phase_peak_sq;
 
 			outputs->mode = MOTOR_AUTOTUNE_OUTPUT_OPEN_LOOP_VF;
 			outputs->vf_frequency_hz = handle->config.flux_frequency_hz;
 			outputs->vf_voltage_v = handle->config.flux_voltage_v;
 
-			phase_rms_sq = (
-				(inputs->phase_voltage_u_v * inputs->phase_voltage_u_v) +
-				(inputs->phase_voltage_v_v * inputs->phase_voltage_v_v) +
-				(inputs->phase_voltage_w_v * inputs->phase_voltage_w_v)) / 3.0f;
-			phase_current_rms_sq = (
-				(inputs->phase_u_a * inputs->phase_u_a) +
-				(inputs->phase_v_a * inputs->phase_v_a) +
-				(inputs->phase_w_a * inputs->phase_w_a)) / 3.0f;
-			handle->flux_voltage_sq_sum += phase_rms_sq;
-			handle->flux_current_sq_sum += phase_current_rms_sq;
+			elapsed_s = ((float)handle->counter) * handle->dt_s;
+			flux_omega_rad_s = 2.0f * PI * handle->config.flux_frequency_hz;
+			sample_sin = sinf(flux_omega_rad_s * elapsed_s);
+			sample_cos = cosf(flux_omega_rad_s * elapsed_s);
+
+			voltage_alpha_v = inputs->phase_voltage_u_v;
+			voltage_beta_v = (inputs->phase_voltage_v_v - inputs->phase_voltage_w_v) /
+				MOTOR_AUTOTUNE_SQRT_3_F;
+			current_alpha_a = inputs->phase_u_a;
+			current_beta_a = (inputs->phase_v_a - inputs->phase_w_a) /
+				MOTOR_AUTOTUNE_SQRT_3_F;
+
+			handle->flux_voltage_real_sum +=
+				(voltage_alpha_v * sample_cos) + (voltage_beta_v * sample_sin);
+			handle->flux_voltage_imag_sum +=
+				(voltage_beta_v * sample_cos) - (voltage_alpha_v * sample_sin);
+			handle->flux_current_real_sum +=
+				(current_alpha_a * sample_cos) + (current_beta_a * sample_sin);
+			handle->flux_current_imag_sum +=
+				(current_beta_a * sample_cos) - (current_alpha_a * sample_sin);
 			handle->flux_speed_rpm_sum += MotorAutoTune_Abs(inputs->mechanical_speed_rpm);
 			handle->flux_samples++;
 
@@ -1470,23 +1502,32 @@ static void MotorAutoTune_ProcessFlux(
 				return;
 			}
 
-			phase_rms = sqrtf(handle->flux_voltage_sq_sum / (float)handle->flux_samples);
-			phase_current_rms = sqrtf(handle->flux_current_sq_sum / (float)handle->flux_samples);
-			resistive_drop_rms = phase_current_rms * MotorAutoTune_Clamp(handle->measured_Rs, 0.0f, 1000.0f);
-			compensated_phase_rms_sq = (phase_rms * phase_rms) - (resistive_drop_rms * resistive_drop_rms);
+			phase_peak_v = MotorAutoTune_VectorFundamentalPeakFromSums(
+				handle->flux_voltage_real_sum,
+				handle->flux_voltage_imag_sum,
+				handle->flux_samples);
+			phase_current_peak_a = MotorAutoTune_VectorFundamentalPeakFromSums(
+				handle->flux_current_real_sum,
+				handle->flux_current_imag_sum,
+				handle->flux_samples);
+			resistive_drop_peak_v = phase_current_peak_a *
+				MotorAutoTune_Clamp(handle->measured_Rs, 0.0f, 1000.0f);
+			compensated_phase_peak_sq =
+				(phase_peak_v * phase_peak_v) -
+				(resistive_drop_peak_v * resistive_drop_peak_v);
 	
-			if (compensated_phase_rms_sq > (phase_rms * phase_rms * 0.05f))
+			if (compensated_phase_peak_sq > (phase_peak_v * phase_peak_v * 0.05f))
 			{
-				phase_rms = sqrtf(compensated_phase_rms_sq);
+				phase_peak_v = sqrtf(compensated_phase_peak_sq);
 			}
 			electrical_omega_rad_s = 2.0f * PI * average_rpm * handle->measured_PolePairs / 60.0f;
-			if (electrical_omega_rad_s <= 1.0e-6f)
+			if ((electrical_omega_rad_s <= 1.0e-6f) || (phase_peak_v <= 1.0e-6f))
 			{
 				MotorAutoTune_SetError(handle, MOTOR_AUTOTUNE_ERROR_SIGNAL);
 				return;
 			}
 
-			handle->measured_Flux = (phase_rms * 1.41421356f) / electrical_omega_rad_s;
+			handle->measured_Flux = phase_peak_v / electrical_omega_rad_s;
 			handle->measured_Ke = handle->measured_Flux;
 			handle->progress_percent = MOTOR_AUTOTUNE_FLUX_PROGRESS;
 			MotorAutoTune_AdvanceToStage(handle, MOTOR_AUTOTUNE_STATE_J);

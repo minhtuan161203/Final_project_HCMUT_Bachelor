@@ -170,8 +170,10 @@ typedef struct
 	float ls_voltage_fundamental_v;
 	float ls_current_fundamental_a;
 
-	float flux_voltage_sq_sum;
-	float flux_current_sq_sum;
+	float flux_voltage_real_sum;
+	float flux_voltage_imag_sum;
+	float flux_current_real_sum;
+	float flux_current_imag_sum;
 	float flux_speed_rpm_sum;
 	uint32_t flux_samples;
 
