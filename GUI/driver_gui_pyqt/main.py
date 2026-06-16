@@ -641,19 +641,19 @@ def _series_pen_spec(
     fallback_color: str,
 ) -> tuple[QtGui.QPen, str | None]:
     if not report_mode:
-        return QtGui.QPen(QtGui.QColor(fallback_color), 1.8), None
+        return QtGui.QPen(QtGui.QColor(fallback_color), 2.15), None
 
     role = _series_role_key(series_key, label, index)
     if role == "reference":
-        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.5)
+        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.8)
         pen.setStyle(QtCore.Qt.PenStyle.SolidLine)
         return pen, "square"
     if role == "feedback":
-        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.5)
+        pen = QtGui.QPen(QtGui.QColor("#000000"), 2.8)
         pen.setStyle(QtCore.Qt.PenStyle.DashLine)
         return pen, "circle"
 
-    pen = QtGui.QPen(QtGui.QColor("#000000"), 2.5)
+    pen = QtGui.QPen(QtGui.QColor("#000000"), 2.8)
     pen.setStyle(QtCore.Qt.PenStyle.DotLine)
     return pen, "diamond"
 
@@ -801,6 +801,127 @@ def _format_elapsed_time_label(seconds: float) -> str:
     if seconds < 10.0:
         return f"{seconds:.1f} s"
     return f"{seconds:.0f} s"
+
+
+def _format_scope_time_label(seconds: float) -> str:
+    if seconds < 1.0:
+        return f"{seconds * 1000.0:.1f} ms"
+    if seconds < 10.0:
+        return f"{seconds:.2f} s"
+    return f"{seconds:.1f} s"
+
+
+def _nice_time_step(seconds: float) -> float:
+    if seconds <= 0.0 or not math.isfinite(seconds):
+        return 1.0
+    exponent = math.floor(math.log10(seconds))
+    scale = 10.0**exponent
+    normalized = seconds / scale
+    for step in (1.0, 2.0, 2.5, 5.0, 10.0):
+        if normalized <= step:
+            return step * scale
+    return 10.0 * scale
+
+
+def _time_axis_tick_values(
+    total_seconds: float,
+    plot_width_px: float,
+    *,
+    min_label_spacing_px: float = 105.0,
+    max_major_ticks: int = 9,
+    minor_divisions: int = 5,
+) -> tuple[list[float], list[float]]:
+    if total_seconds <= 0.0 or not math.isfinite(total_seconds):
+        return [0.0], []
+
+    max_ticks_from_width = int(max(2.0, plot_width_px / max(min_label_spacing_px, 1.0))) + 1
+    max_ticks = max(2, min(max_major_ticks, max_ticks_from_width))
+    major_step_s = _nice_time_step(total_seconds / max(max_ticks - 1, 1))
+
+    major_values = [0.0]
+    value = major_step_s
+    while value < total_seconds:
+        if (total_seconds - value) < (major_step_s * 0.55):
+            break
+        major_values.append(value)
+        value += major_step_s
+    if abs(major_values[-1] - total_seconds) > (major_step_s * 0.05):
+        major_values.append(total_seconds)
+    else:
+        major_values[-1] = total_seconds
+
+    minor_values: list[float] = []
+    if minor_divisions > 1:
+        minor_step_s = major_step_s / float(minor_divisions)
+        value = minor_step_s
+        while value < total_seconds:
+            if all(abs(value - major) > (minor_step_s * 0.45) for major in major_values):
+                minor_values.append(value)
+            value += minor_step_s
+
+    return major_values, minor_values
+
+
+def _draw_time_axis(
+    painter: QtGui.QPainter,
+    plot_rect: QtCore.QRectF,
+    total_seconds: float,
+    scale: float,
+    colors: dict[str, QtGui.QColor],
+    *,
+    report_mode: bool,
+    label_formatter,
+    label_y_offset: float,
+) -> None:
+    major_values, minor_values = _time_axis_tick_values(
+        total_seconds,
+        plot_rect.width(),
+        max_major_ticks=8 if report_mode else 9,
+    )
+    if total_seconds <= 0.0:
+        return
+
+    painter.save()
+    minor_grid = QtGui.QColor(colors["grid"])
+    minor_grid.setAlpha(90 if report_mode else 70)
+    minor_pen = QtGui.QPen(minor_grid, 0.7)
+    minor_pen.setStyle(QtCore.Qt.PenStyle.DotLine)
+    painter.setPen(minor_pen)
+    for value in minor_values:
+        ratio = min(max(value / total_seconds, 0.0), 1.0)
+        x = plot_rect.left() + (plot_rect.width() * ratio)
+        painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
+
+    major_pen = QtGui.QPen(colors["grid"], 1.0)
+    major_pen.setStyle(QtCore.Qt.PenStyle.DotLine if report_mode else QtCore.Qt.PenStyle.DashLine)
+    painter.setPen(major_pen)
+    for value in major_values:
+        ratio = min(max(value / total_seconds, 0.0), 1.0)
+        if 0.0 < ratio < 1.0:
+            x = plot_rect.left() + (plot_rect.width() * ratio)
+            painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
+
+    painter.setPen(colors["text"])
+    label_width = 76.0 * scale
+    for value in major_values:
+        ratio = min(max(value / total_seconds, 0.0), 1.0)
+        x = plot_rect.left() + (plot_rect.width() * ratio)
+        painter.drawLine(
+            QtCore.QPointF(x, plot_rect.bottom()),
+            QtCore.QPointF(x, plot_rect.bottom() + (4 * scale)),
+        )
+        label_rect = QtCore.QRectF(
+            x - (label_width * 0.5),
+            plot_rect.bottom() + label_y_offset,
+            label_width,
+            18 * scale,
+        )
+        if ratio <= 0.0:
+            label_rect.moveLeft(plot_rect.left() + (2 * scale))
+        elif ratio >= 1.0:
+            label_rect.moveRight(plot_rect.right() - (4 * scale))
+        painter.drawText(label_rect, QtCore.Qt.AlignmentFlag.AlignCenter, label_formatter(value))
+    painter.restore()
 
 
 def _draw_report_legend_sample(
@@ -2738,6 +2859,16 @@ class ScadaTrendView(QtWidgets.QWidget):
             )
 
         painter.setFont(self._tick_font())
+        _draw_time_axis(
+            painter,
+            plot_rect,
+            self._time_window_s,
+            self._render_scale(),
+            colors,
+            report_mode=self._report_mode,
+            label_formatter=_format_elapsed_time_label,
+            label_y_offset=10 * self._render_scale(),
+        )
         value_text_rect = QtCore.QRectF(
             plot_rect.right() - (78 * self._render_scale()),
             plot_rect.top() + (6 * self._render_scale()),
@@ -2757,31 +2888,6 @@ class ScadaTrendView(QtWidgets.QWidget):
             QtCore.Qt.AlignmentFlag.AlignRight,
             _format_axis_value(y_min, unit=y_unit, decimals=2),
         )
-
-        time_labels = [0.0, self._time_window_s * 0.5, self._time_window_s]
-        for time_index, elapsed_s in enumerate(time_labels):
-            ratio = elapsed_s / self._time_window_s if self._time_window_s > 0 else 0.0
-            x = plot_rect.left() + (plot_rect.width() * ratio)
-            painter.drawLine(
-                QtCore.QPointF(x, plot_rect.bottom()),
-                QtCore.QPointF(x, plot_rect.bottom() + 4),
-            )
-            label = _format_elapsed_time_label(elapsed_s)
-            label_rect = QtCore.QRectF(
-                x - (34 * self._render_scale()),
-                plot_rect.bottom() + (10 * self._render_scale()),
-                68 * self._render_scale(),
-                18 * self._render_scale(),
-            )
-            if time_index == 0:
-                label_rect.moveLeft(plot_rect.left())
-            elif time_index == len(time_labels) - 1:
-                label_rect.moveRight(plot_rect.right() - (4 * self._render_scale()))
-            painter.drawText(
-                label_rect,
-                QtCore.Qt.AlignmentFlag.AlignCenter,
-                label,
-            )
 
         for series_index, key in enumerate(self._series_keys):
             series = self._render_values[key]
@@ -3969,25 +4075,16 @@ class ScopeCaptureView(QtWidgets.QWidget):
             )
         painter.setPen(colors["text"])
 
-        for marker_ratio in (0.0, 0.5, 1.0):
-            x = plot_rect.left() + plot_rect.width() * marker_ratio
-            marker_ms = total_ms * marker_ratio
-            painter.drawLine(QtCore.QPointF(x, plot_rect.bottom()), QtCore.QPointF(x, plot_rect.bottom() + 4))
-            label_rect = QtCore.QRectF(
-                x - (38 * scale),
-                plot_rect.bottom() + (14 * scale),
-                76 * scale,
-                16 * scale,
-            )
-            if marker_ratio <= 0.0:
-                label_rect.moveLeft(plot_rect.left() + (2 * scale))
-            elif marker_ratio >= 1.0:
-                label_rect.moveRight(plot_rect.right() - (14 * scale))
-            painter.drawText(
-                label_rect,
-                QtCore.Qt.AlignmentFlag.AlignCenter,
-                f"{marker_ms:.1f} ms",
-            )
+        _draw_time_axis(
+            painter,
+            plot_rect,
+            total_ms / 1000.0,
+            scale,
+            colors,
+            report_mode=self._report_mode,
+            label_formatter=_format_scope_time_label,
+            label_y_offset=14 * scale,
+        )
 
         for series_index, series in enumerate(self._series_data):
             if len(series) < 2:
@@ -4118,25 +4215,16 @@ class ScopeCaptureView(QtWidgets.QWidget):
             )
             painter.setPen(colors["text"])
 
-            for marker_ratio in (0.0, 0.5, 1.0):
-                x = plot_rect.left() + plot_rect.width() * marker_ratio
-                marker_ms = total_ms * marker_ratio
-                painter.drawLine(QtCore.QPointF(x, plot_rect.bottom()), QtCore.QPointF(x, plot_rect.bottom() + 4))
-                label_rect = QtCore.QRectF(
-                    x - (38 * scale),
-                    plot_rect.bottom() + (14 * scale),
-                    76 * scale,
-                    16 * scale,
-                )
-                if marker_ratio <= 0.0:
-                    label_rect.moveLeft(plot_rect.left() + (2 * scale))
-                elif marker_ratio >= 1.0:
-                    label_rect.moveRight(plot_rect.right() - (14 * scale))
-                painter.drawText(
-                    label_rect,
-                    QtCore.Qt.AlignmentFlag.AlignCenter,
-                    f"{marker_ms:.1f} ms",
-                )
+            _draw_time_axis(
+                painter,
+                plot_rect,
+                total_ms / 1000.0,
+                scale,
+                colors,
+                report_mode=self._report_mode,
+                label_formatter=_format_scope_time_label,
+                label_y_offset=14 * scale,
+            )
 
             for series_index in axis_group.get("indices", []):
                 if series_index >= len(self._series_data):
